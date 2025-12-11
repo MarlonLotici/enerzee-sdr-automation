@@ -1,0 +1,27 @@
+# Dependências (O dev baixa com npm install)
+node_modules/
+
+# Segurança (Nunca suba chaves de API)
+.env
+
+# Sessões do WhatsApp (Isso é pessoal e temporário)
+tokens/
+tokens_sdr/
+sessao-*/
+.wppconnect/
+
+# Arquivos de Sistema/Logs
+*.log
+.DS_Store
+Thumbs.db
+
+# Dados Reais (Não suba lista de clientes reais por privacidade/LGPD)
+*.xlsx
+*.csv
+historico_envios.txt
+memoria_blindada.json
+
+# Mantém apenas exemplos se existirem
+!*_exemplo.xlsx
+
+backup/

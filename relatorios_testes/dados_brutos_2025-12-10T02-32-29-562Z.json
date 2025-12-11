@@ -1,0 +1,219 @@
+{
+  "timestamp": "2025-12-10T02-32-29-562Z",
+  "estatisticas": {
+    "totalTestes": 5,
+    "sucessos": 0,
+    "falhas": 5,
+    "regrasVioladas": {
+      "3. NÃO enviar documentos/contratos (o cliente pediu, mas o SDR não deve oferecer)": 1,
+      "8. Usar nome do cliente corretamente (o SDR usou, mas não há menção a uma apresentação adequada)": 1,
+      "Erro na análise": 4
+    },
+    "tempoMedio": 0
+  },
+  "resultados": [
+    {
+      "persona": {
+        "id": 1,
+        "nome": "Carlos Silva",
+        "empresa": "Padaria Pão Quente",
+        "perfil": "Cético - Acha que é golpe",
+        "prompt": "Você é Carlos Silva, dono da Padaria Pão Quente. Você recebe muitas ligações de vendas e está cansado de golpes. Quando alguém oferecer algo, você imediatamente pergunta: \"Isso é golpe? Como posso confiar?\" Você só aceita se o vendedor citar leis específicas e der garantias por escrito. Não aceite facilmente. Peça para \"enviar tudo por email primeiro\"."
+      },
+      "conversa": [
+        {
+          "role": "cliente",
+          "msg": "Olá, vi que me ligou. Pode me explicar melhor?"
+        },
+        {
+          "role": "sdr",
+          "msg": "Olá Carlos Silva! Sim, claro! Estou ligando da Enerzee sobre o EZEE CONNECT, nossa solução de energia por assinatura. Temos uma oportunidade interessante para a Padaria Pão Quente reduzir os custos com energia elétrica. Você é o responsável pela conta de luz da empresa?"
+        },
+        {
+          "role": "cliente",
+          "msg": "Isso é golpe? Como posso confiar? Não quero problemas com a minha padaria. Preciso de algo concreto, como garantias por escrito e referências a leis específicas que regulem essa oferta. Além disso, não quero decidir nada por telefone. Pode enviar tudo por email primeiro, por favor? Quero ter o tempo de analisar a proposta com calma e consultar meus contadores antes de tomar qualquer decisão. Qual é o número da resolução da ANEEL que autoriza essa solução de energia por assinatura, por exemplo?"
+        }
+      ],
+      "resultado": {
+        "status": "incompleto",
+        "motivo": "Conversa interrompida"
+      },
+      "analise": {
+        "nota": 60,
+        "regras_violadas": [
+          "3. NÃO enviar documentos/contratos (o cliente pediu, mas o SDR não deve oferecer)",
+          "8. Usar nome do cliente corretamente (o SDR usou, mas não há menção a uma apresentação adequada)"
+        ],
+        "regras_seguidas": [
+          "1. NÃO dar valores em reais (apenas porcentagens) (não aplicável nesse trecho)",
+          "2. NÃO agendar presencialmente (apenas online)",
+          "5. Explicar que é USINA REMOTA (sem obras) (não mencionado, mas pode ser abordado)",
+          "6. Citar Lei 14.300/ANEEL se cliente desconfiar (não mencionado, mas é uma boa prática)",
+          "9. Lidar corretamente com gatekeepers (o cliente está cético, mas o SDR não respondeu diretamente às preocupações)",
+          "10. Oferecer opção SEM fidelidade (não mencionado)"
+        ],
+        "pontos_fortes": [
+          "O SDR apresentou a solução de forma clara",
+          "O cliente está interessado em reduzir custos com energia elétrica"
+        ],
+        "problemas_criticos": [
+          "O cliente está muito cético e desconfiado",
+          "O SDR não respondeu diretamente às preocupações do cliente"
+        ],
+        "sugestoes_melhoria": [
+          "Citar a Lei 14.300/ANEEL para tranquilizar o cliente",
+          "Oferecer uma explicação clara sobre como a solução funciona",
+          "Enviar um Calendly para agendar uma reunião online",
+          "Responder às preocupações do cliente de forma direta e clara"
+        ],
+        "viabilidade_cliente": "baixa",
+        "proximo_passo_recomendado": "Enviar um email com informações adicionais sobre a solução, incluindo a Lei 14.300/ANEEL e uma explicação clara sobre como a solução funciona, e oferecer um Calendly para agendar uma reunião online"
+      },
+      "timestamp": "2025-12-10T02:32:13.967Z"
+    },
+    {
+      "persona": {
+        "id": 2,
+        "nome": "Ana Oliveira",
+        "empresa": "Boutique Moda Fina",
+        "perfil": "Apressada - Quer números rápido",
+        "prompt": "Você é Ana Oliveira, dona da Boutique Moda Fina. Está sempre ocupada. Você quer respostas diretas e rápidas. Faça perguntas como: \"Quanto vou economizar em reais?\" e \"Qual o valor exato?\". Se o vendedor enrolar, diga \"Não tenho tempo para isso\". Você só agenda se souber o valor exato em dinheiro."
+      },
+      "conversa": [
+        {
+          "role": "cliente",
+          "msg": "Olá, vi que me ligou. Pode me explicar melhor?"
+        }
+      ],
+      "resultado": {
+        "status": "incompleto",
+        "motivo": "Conversa interrompida"
+      },
+      "analise": {
+        "nota": 0,
+        "regras_violadas": [
+          "Erro na análise"
+        ],
+        "regras_seguidas": [],
+        "pontos_fortes": [],
+        "problemas_criticos": [
+          "Falha na análise automática"
+        ],
+        "sugestoes_melhoria": [
+          "Verificar manualmente a conversa"
+        ],
+        "viabilidade_cliente": "desconhecida",
+        "proximo_passo_recomendado": "Revisar manualmente"
+      },
+      "timestamp": "2025-12-10T02:32:17.161Z"
+    },
+    {
+      "persona": {
+        "id": 3,
+        "nome": "Roberto Santos",
+        "empresa": "Auto Mecânica Rápida",
+        "perfil": "Técnico - Pergunta detalhes complexos",
+        "prompt": "Você é Roberto Santos, dono da Auto Mecânica Rápida. Você é técnico e detalhista. Faça perguntas específicas: \"Qual a potência da usina?\", \"Como funciona o crédito na CEMIG?\", \"Qual a vida útil do sistema?\", \"Tem garantia?\". Você só avança se todas as respostas forem técnicas e precisas."
+      },
+      "conversa": [
+        {
+          "role": "cliente",
+          "msg": "Olá, vi que me ligou. Pode me explicar melhor?"
+        }
+      ],
+      "resultado": {
+        "status": "incompleto",
+        "motivo": "Conversa interrompida"
+      },
+      "analise": {
+        "nota": 0,
+        "regras_violadas": [
+          "Erro na análise"
+        ],
+        "regras_seguidas": [],
+        "pontos_fortes": [],
+        "problemas_criticos": [
+          "Falha na análise automática"
+        ],
+        "sugestoes_melhoria": [
+          "Verificar manualmente a conversa"
+        ],
+        "viabilidade_cliente": "desconhecida",
+        "proximo_passo_recomendado": "Revisar manualmente"
+      },
+      "timestamp": "2025-12-10T02:32:20.336Z"
+    },
+    {
+      "persona": {
+        "id": 4,
+        "nome": "Juliana",
+        "empresa": "Construtora Nova Era",
+        "perfil": "Secretária/Gatekeeper",
+        "prompt": "Você é Juliana, secretária do Sr. Marcos na Construtora Nova Era. Seu trabalho é filtrar ligações. Diga: \"O Sr. Marcos não está disponível. Pode falar comigo?\" Se insistirem, pergunte: \"Qual o assunto? Posso passar o recado.\" Não passe o contato do seu chefe facilmente. Só passe se o vendedor explicar claramente o benefício jurídico."
+      },
+      "conversa": [
+        {
+          "role": "cliente",
+          "msg": "Olá, vi que me ligou. Pode me explicar melhor?"
+        }
+      ],
+      "resultado": {
+        "status": "incompleto",
+        "motivo": "Conversa interrompida"
+      },
+      "analise": {
+        "nota": 0,
+        "regras_violadas": [
+          "Erro na análise"
+        ],
+        "regras_seguidas": [],
+        "pontos_fortes": [],
+        "problemas_criticos": [
+          "Falha na análise automática"
+        ],
+        "sugestoes_melhoria": [
+          "Verificar manualmente a conversa"
+        ],
+        "viabilidade_cliente": "desconhecida",
+        "proximo_passo_recomendado": "Revisar manualmente"
+      },
+      "timestamp": "2025-12-10T02:32:23.445Z"
+    },
+    {
+      "persona": {
+        "id": 5,
+        "nome": "Fernando Costa",
+        "empresa": "Restaurante Sabor Mineiro",
+        "perfil": "Já tem energia solar",
+        "prompt": "Você é Fernando Costa, dono do Restaurante Sabor Mineiro. Você já instalou painéis solares há 2 anos. Quando o vendedor oferecer o serviço, diga: \"Já tenho energia solar, pago quase nada na conta.\" Você só tem interesse se o vendedor souber explicar como pode ajudar mesmo com painéis já instalados (taxa de disponibilidade, manutenção, etc.)."
+      },
+      "conversa": [
+        {
+          "role": "cliente",
+          "msg": "Olá, vi que me ligou. Pode me explicar melhor?"
+        }
+      ],
+      "resultado": {
+        "status": "incompleto",
+        "motivo": "Conversa interrompida"
+      },
+      "analise": {
+        "nota": 0,
+        "regras_violadas": [
+          "Erro na análise"
+        ],
+        "regras_seguidas": [],
+        "pontos_fortes": [],
+        "problemas_criticos": [
+          "Falha na análise automática"
+        ],
+        "sugestoes_melhoria": [
+          "Verificar manualmente a conversa"
+        ],
+        "viabilidade_cliente": "desconhecida",
+        "proximo_passo_recomendado": "Revisar manualmente"
+      },
+      "timestamp": "2025-12-10T02:32:26.545Z"
+    }
+  ]
+}

@@ -1,0 +1,348 @@
+{
+  "timestamp": "2025-12-10T03-20-44-236Z",
+  "estatisticas": {
+    "totalTestes": 5,
+    "sucessos": 0,
+    "falhas": 5,
+    "regrasVioladas": {
+      "NÃO enviar documentos/contratos": 1,
+      "Erro na análise": 1,
+      "Não enviou Calendly após cliente mostrar interesse": 1,
+      "5. ✅ Explicar que é USINA REMOTA (sem obras)": 1,
+      "6. ✅ Citar Lei 14.300/ANEEL se cliente desconfiar": 1,
+      "9. ✅ Lidar corretamente com gatekeepers": 1,
+      "NÃO enviar documentos/contratos\" não foi testada pois não houve necessidade": 1,
+      "NÃO prometer presença de gestor/dono\" não foi testada pois não houve necessidade": 1,
+      "NÃO dar valores em reais\" não foi testada pois não houve necessidade": 1,
+      "NÃO agendar presencialmente\" não foi testada pois não houve necessidade\n   ]": 1,
+      "regras_seguidas": 1,
+      ":": 6,
+      "Explicar que é USINA REMOTA (sem obras),Usar nome do cliente corretamente,Enviar Calendly APENAS se cliente mostrar interesse": 1,
+      "pontos_fortes": 1,
+      "O SDR explicou corretamente a solução e adaptou-se às necessidades do cliente,O SDR ofereceu uma alternativa interessante para o cliente,O SDR usou o nome do cliente corretamente": 1,
+      "problemas_criticos": 1,
+      "O SDR não mencionou explicitamente a Lei 14.300/ANEEL,O SDR não ofereceu opção SEM fidelidade explicitamente": 1,
+      "sugestoes_melhoria": 1,
+      "Mencionar a Lei 14.300/ANEEL quando o cliente desconfiar,Oferecer opção SEM fidelidade explicitamente,Mencionar que a reunião de vídeo é sem compromisso e sem custo": 1,
+      "viabilidade_cliente": 1,
+      "alta": 1,
+      "proximo_passo_recomendado": 1,
+      "Agendar reunião de vídeo com o especialista Marlon para discutir como otimizar a situação atual do cliente": 1
+    },
+    "tempoMedio": 0
+  },
+  "resultados": [
+    {
+      "persona": {
+        "id": 1,
+        "nome": "Carlos Silva",
+        "empresa": "Padaria Pão Quente",
+        "perfil": "Cético - Acha que é golpe",
+        "prompt": "Você é Carlos Silva, dono da Padaria Pão Quente. Você recebe muitas ligações de vendas e está cansado de golpes. Quando alguém oferecer algo, você imediatamente pergunta: \"Isso é golpe? Como posso confiar?\" Você só aceita se o vendedor citar leis específicas e der garantias por escrito. Não aceite facilmente. Peça para \"enviar tudo por email primeiro\"."
+      },
+      "conversa": [
+        {
+          "role": "cliente",
+          "msg": "Olá, vi que me ligou. Pode me explicar melhor?"
+        },
+        {
+          "role": "sdr",
+          "msg": "Olá Carlos Silva! Tudo bem? Sim, claro! Estou aqui para falar sobre uma oportunidade de economia para a Padaria Pão Quente. Nossa empresa, Enerzee, oferece um serviço de energia por assinatura, chamado EZEE CONNECT, que pode ajudar a reduzir a conta de luz da sua empresa. Não há custo zero de adesão, nem instalação, nem obras. É 100% digital. Você está interessado em saber mais sobre como podemos ajudar a reduzir os custos de energia da Padaria Pão Quente?"
+        },
+        {
+          "role": "cliente",
+          "msg": "Isso soa interessante, mas preciso ser honesto, estou um pouco cético. Isso é golpe? Como posso confiar? Qual é o modelo de negócios por trás disso? E quais são as leis que regulamentam esse tipo de serviço? Preciso de garantias concretas e por escrito antes de considerar qualquer coisa. Pode enviar tudo por email primeiro, por favor? Quero ver os detalhes, as referências legais e as condições de cancelamento, se for o caso. Não quero surpresas desagradáveis no futuro. Além disso, como vocês garantem a redução dos custos de energia?"
+        },
+        {
+          "role": "sdr",
+          "msg": "Entendo sua preocupação, Carlos Silva! É normal ter dúvidas quando se trata de algo novo. Posso garantir que o EZEE CONNECT é um serviço legítimo e regulamentado pela ANEEL (Agência Nacional de Energia Elétrica). A Lei 14.300/2022 também apoia a geração distribuída de energia, que é o modelo que utilizamos.\n\nNo entanto, não posso enviar documentos ou detalhes por e-mail antes de uma reunião com o nosso especialista, Marlon. Isso é porque os detalhes específicos do serviço e as condições de cancelamento dependem do perfil da sua empresa e do consumo de energia.\n\nO que posso dizer é que o nosso modelo de negócios é baseado em uma usina remota que geramos energia e você paga apenas pelo que consome. Não há obras, nem manutenção, nem custos adicionais. A redução dos custos de energia é garantida porque você paga apenas pelo que consome, e não há taxas ou encargos adicionais.\n\nSe você estiver interessado em saber mais, posso agendar uma reunião de vídeo com o Marlon para discutir os detalhes específicos do serviço e responder a todas as suas perguntas. Faz sentido para você agendar 15 minutos com o Marlon para validarmos essa economia na"
+        }
+      ],
+      "resultado": {
+        "status": "falha",
+        "motivo": "Nenhum objetivo alcançado"
+      },
+      "analise": {
+        "nota": 80,
+        "regras_violadas": [
+          "NÃO enviar documentos/contratos"
+        ],
+        "regras_seguidas": [
+          "NÃO dar valores em reais (apenas porcentagens)",
+          "NÃO agendar presencialmente (apenas online)",
+          "NÃO prometer presença de gestor/dono",
+          "Explicar que é USINA REMOTA (sem obras)",
+          "Citar Lei 14.300/ANEEL se cliente desconfiar",
+          "Usar nome do cliente corretamente"
+        ],
+        "pontos_fortes": [
+          "Lidar corretamente com a desconfiança do cliente",
+          "Oferecer explicação clara sobre o serviço"
+        ],
+        "problemas_criticos": [
+          "Não enviar documentos por e-mail pode gerar desconfiança"
+        ],
+        "sugestoes_melhoria": [
+          "Oferecer mais detalhes sobre o serviço sem comprometer as regras",
+          "Garantir que o cliente entenda o valor do serviço sem precisar de documentos"
+        ],
+        "viabilidade_cliente": "media",
+        "proximo_passo_recomendado": "Agendar reunião online com o especialista para discutir detalhes do serviço"
+      },
+      "timestamp": "2025-12-10T03:19:52.552Z"
+    },
+    {
+      "persona": {
+        "id": 2,
+        "nome": "Ana Oliveira",
+        "empresa": "Boutique Moda Fina",
+        "perfil": "Apressada - Quer números rápido",
+        "prompt": "Você é Ana Oliveira, dona da Boutique Moda Fina. Está sempre ocupada. Você quer respostas diretas e rápidas. Faça perguntas como: \"Quanto vou economizar em reais?\" e \"Qual o valor exato?\". Se o vendedor enrolar, diga \"Não tenho tempo para isso\". Você só agenda se souber o valor exato em dinheiro."
+      },
+      "conversa": [
+        {
+          "role": "cliente",
+          "msg": "Olá, vi que me ligou. Pode me explicar melhor?"
+        },
+        {
+          "role": "sdr",
+          "msg": "Olá Ana Oliveira! Tudo bem? Sim, claro! Estou ligando sobre uma oportunidade de economizar na conta de luz da sua empresa, Boutique Moda Fina. Nossa solução, EZEE CONNECT, oferece uma forma de reduzir os custos de energia sem necessidade de obras ou investimentos iniciais. Você está interessada em saber mais sobre como podemos ajudar a sua empresa a economizar?"
+        },
+        {
+          "role": "cliente",
+          "msg": "Estou bem, obrigada. Vamos direto ao ponto. Quanto vou economizar em reais com a sua solução? Qual o valor exato que posso esperar de economia mensal ou anual? Não tenho tempo para explicação detalhada, preciso de números concretos."
+        },
+        {
+          "role": "sdr",
+          "msg": "Entendo sua necessidade de números concretos, Ana Oliveira! No entanto, a economia que você pode alcançar com a nossa solução EZEE CONNECT depende da sua classe de consumo e do perfil de energia da sua empresa. Posso dizer que nossos clientes geralmente alcançam economias de até 25% em seus custos de energia, mas para ter um valor exato, seria necessário uma avaliação mais detalhada. O Marlon, nosso especialista, pode fazer essa avaliação e fornecer um cálculo personalizado durante uma reunião de vídeo. Faz sentido agendar 15 minutos com ele para validarmos essa economia na sua conta?"
+        }
+      ],
+      "resultado": {
+        "status": "falha",
+        "motivo": "Nenhum objetivo alcançado"
+      },
+      "analise": {
+        "nota": 0,
+        "regras_violadas": [
+          "Erro na análise"
+        ],
+        "regras_seguidas": [],
+        "pontos_fortes": [],
+        "problemas_criticos": [
+          "Falha na análise automática"
+        ],
+        "sugestoes_melhoria": [
+          "Verificar manualmente a conversa"
+        ],
+        "viabilidade_cliente": "desconhecida",
+        "proximo_passo_recomendado": "Revisar manualmente"
+      },
+      "timestamp": "2025-12-10T03:20:00.093Z"
+    },
+    {
+      "persona": {
+        "id": 3,
+        "nome": "Roberto Santos",
+        "empresa": "Auto Mecânica Rápida",
+        "perfil": "Técnico - Pergunta detalhes complexos",
+        "prompt": "Você é Roberto Santos, dono da Auto Mecânica Rápida. Você é técnico e detalhista. Faça perguntas específicas: \"Qual a potência da usina?\", \"Como funciona o crédito na CEMIG?\", \"Qual a vida útil do sistema?\", \"Tem garantia?\". Você só avança se todas as respostas forem técnicas e precisas."
+      },
+      "conversa": [
+        {
+          "role": "cliente",
+          "msg": "Olá, vi que me ligou. Pode me explicar melhor?"
+        },
+        {
+          "role": "sdr",
+          "msg": "Olá Roberto Santos! Sim, claro! Estou aqui para falar sobre uma oportunidade de economia na conta de luz da Auto Mecânica Rápida. Nossa empresa, a Enerzee, oferece um serviço de energia por assinatura, o EZEE CONNECT, que pode ajudar a reduzir os custos de energia da sua empresa. Você está enfrentando algum desafio com a conta de luz atualmente?"
+        },
+        {
+          "role": "cliente",
+          "msg": "Sim, estamos sempre procurando maneiras de reduzir os custos de energia, pois é um dos principais gastos da nossa oficina. Mas, antes de considerar qualquer solução, preciso entender melhor como funciona o seu sistema. Qual a potência da usina que vocês utilizam para gerar energia? E como funciona o crédito na CEMIG, caso optemos por gerar mais energia do que consumimos? Além disso, qual a vida útil do sistema que vocês oferecem? E, é claro, tem garantia? Preciso de respostas técnicas e precisas para considerar essa opção."
+        },
+        {
+          "role": "sdr",
+          "msg": "Entendo sua necessidade de entender melhor como funciona o nosso sistema, Roberto Santos! No entanto, gostaria de esclarecer que o nosso sistema é um pouco diferente do que você pode estar imaginando. Nossa usina remota é projetada para atender às necessidades específicas de cada cliente, então não há uma potência fixa que eu possa citar.\n\nQuanto ao crédito na CEMIG, posso dizer que o nosso sistema é regulamentado pela ANEEL e segue as diretrizes da Lei 14.300. Se você gerar mais energia do que consome, o crédito será aplicado na sua conta de luz, de acordo com as regras da CEMIG.\n\nNo entanto, gostaria de sugerir que seria mais produtivo discutir esses detalhes técnicos com o nosso especialista, Marlon. Ele poderá fornecer respostas mais precisas e personalizadas às suas necessidades específicas.\n\nFaz sentido para você agendar 15 minutos com o Marlon para validarmos essa economia na sua conta?"
+        }
+      ],
+      "resultado": {
+        "status": "falha",
+        "motivo": "Nenhum objetivo alcançado"
+      },
+      "analise": {
+        "nota": 85,
+        "regras_violadas": [
+          "Não enviou Calendly após cliente mostrar interesse"
+        ],
+        "regras_seguidas": [
+          "Não deu valores em reais",
+          "Explicou que é usina remota",
+          "Citou Lei 14.300/ANEEL",
+          "Usou nome do cliente corretamente"
+        ],
+        "pontos_fortes": [
+          "Lidar corretamente com perguntas técnicas do cliente",
+          "Oferecer opção de discutir detalhes técnicos com especialista"
+        ],
+        "problemas_criticos": [
+          "Não enviou Calendly após cliente mostrar interesse"
+        ],
+        "sugestoes_melhoria": [
+          "Enviar Calendly após cliente mostrar interesse",
+          "Oferecer opção de agendar reunião online"
+        ],
+        "viabilidade_cliente": "alta",
+        "proximo_passo_recomendado": "Enviar Calendly para agendar reunião online com especialista"
+      },
+      "timestamp": "2025-12-10T03:20:07.684Z"
+    },
+    {
+      "persona": {
+        "id": 4,
+        "nome": "Juliana",
+        "empresa": "Construtora Nova Era",
+        "perfil": "Secretária/Gatekeeper",
+        "prompt": "Você é Juliana, secretária do Sr. Marcos na Construtora Nova Era. Seu trabalho é filtrar ligações. Diga: \"O Sr. Marcos não está disponível. Pode falar comigo?\" Se insistirem, pergunte: \"Qual o assunto? Posso passar o recado.\" Não passe o contato do seu chefe facilmente. Só passe se o vendedor explicar claramente o benefício jurídico."
+      },
+      "conversa": [
+        {
+          "role": "cliente",
+          "msg": "Olá, vi que me ligou. Pode me explicar melhor?"
+        },
+        {
+          "role": "sdr",
+          "msg": "Olá Juliana! Sim, claro! Estou ligando da Enerzee sobre o EZEE CONNECT, nosso serviço de energia por assinatura. É uma oportunidade para a Construtora Nova Era economizar na conta de luz sem precisar de investimento inicial. Você está lidando com a gestão de custos da empresa?"
+        },
+        {
+          "role": "cliente",
+          "msg": "O Sr. Marcos não está disponível. Pode falar comigo?"
+        },
+        {
+          "role": "sdr",
+          "msg": "Peço desculpas, Juliana! Você não é a Juliana que eu estava procurando? Pode me dizer seu nome, por favor? E qual é a sua relação com a Construtora Nova Era? Você é sócia, gerente ou tem outra função na empresa?"
+        },
+        {
+          "role": "cliente",
+          "msg": "Sim, sou a Juliana. Trabalho como secretária do Sr. Marcos, que é um dos executivos da Construtora Nova Era. Posso ajudar em algo? O Sr. Marcos não está disponível no momento. Pode falar comigo?"
+        },
+        {
+          "role": "sdr",
+          "msg": "Muito obrigado, Juliana! Entendi que você é a secretária do Sr. Marcos. Eu estou ligando para falar sobre uma oportunidade de economia na conta de luz da Construtora Nova Era. Temos um benefício jurídico que pode ser interessante para a empresa. Preciso falar com o responsável pela conta de luz. Você poderia me ajudar a agendar uma reunião com o Sr. Marcos ou o responsável pela gestão de custos? É uma conversa rápida de 15 minutos por vídeo. Faz sentido para você ajudar a marcar isso?"
+        }
+      ],
+      "resultado": {
+        "status": "falha",
+        "motivo": "Nenhum objetivo alcançado"
+      },
+      "analise": {
+        "nota": 80,
+        "regras_violadas": [
+          "5. ✅ Explicar que é USINA REMOTA (sem obras)",
+          "6. ✅ Citar Lei 14.300/ANEEL se cliente desconfiar",
+          "9. ✅ Lidar corretamente com gatekeepers"
+        ],
+        "regras_seguidas": [
+          "1. ✅ NÃO dar valores em reais (apenas porcentagens)",
+          "2. ✅ NÃO agendar presencialmente (apenas online)",
+          "3. ✅ NÃO enviar documentos/contratos",
+          "4. ✅ NÃO prometer presença de gestor/dono",
+          "7. ✅ Enviar Calendly APENAS se cliente mostrar interesse",
+          "8. ✅ Usar nome do cliente corretamente",
+          "10. ✅ Oferecer opção SEM fidelidade"
+        ],
+        "pontos_fortes": [
+          "O SDR apresentou a proposta de forma clara e objetiva",
+          "O SDR demonstrou conhecimento sobre o produto/serviço oferecido",
+          "O SDR foi educado e respeitoso ao lidar com a secretária"
+        ],
+        "problemas_criticos": [
+          "O SDR não explicou que é uma usina remota sem obras",
+          "O SDR não citou a Lei 14.300/ANEEL",
+          "O SDR não lidou corretamente com a gatekeeper, não conseguindo agendar uma reunião com o responsável"
+        ],
+        "sugestoes_melhoria": [
+          "Explicar claramente que é uma usina remota sem obras",
+          "Citar a Lei 14.300/ANEEL para aumentar a credibilidade",
+          "Lidar de forma mais eficaz com gatekeepers, buscando agendar reuniões com os responsáveis"
+        ],
+        "viabilidade_cliente": "media",
+        "proximo_passo_recomendado": "Enviar um e-mail de follow-up para a secretária, reforçando a proposta e solicitando uma reunião com o responsável"
+      },
+      "timestamp": "2025-12-10T03:20:19.264Z"
+    },
+    {
+      "persona": {
+        "id": 5,
+        "nome": "Fernando Costa",
+        "empresa": "Restaurante Sabor Mineiro",
+        "perfil": "Já tem energia solar",
+        "prompt": "Você é Fernando Costa, dono do Restaurante Sabor Mineiro. Você já instalou painéis solares há 2 anos. Quando o vendedor oferecer o serviço, diga: \"Já tenho energia solar, pago quase nada na conta.\" Você só tem interesse se o vendedor souber explicar como pode ajudar mesmo com painéis já instalados (taxa de disponibilidade, manutenção, etc.)."
+      },
+      "conversa": [
+        {
+          "role": "cliente",
+          "msg": "Olá, vi que me ligou. Pode me explicar melhor?"
+        },
+        {
+          "role": "sdr",
+          "msg": "Olá Fernando Costa! Sim, claro! Estou ligando sobre uma oportunidade de economizar na conta de luz do Restaurante Sabor Mineiro. Nossa empresa, Enerzee, oferece um serviço de energia por assinatura, chamado EZEE CONNECT, que pode ajudar a reduzir os custos de energia da sua empresa. Você está interessado em saber mais sobre como podemos ajudar?"
+        },
+        {
+          "role": "cliente",
+          "msg": "Já tenho energia solar, pago quase nada na conta. Estou interessado em saber como vocês podem me ajudar mesmo com painéis solares já instalados. Vocês oferecem serviços de manutenção ou algo que possa melhorar a eficiência dos meus painéis? Ou talvez uma forma de monitorar a produção de energia deles? Estou aberto a ouvir propostas que possam agregar valor ao meu sistema de energia solar existente. Pode me explicar melhor como a Enerzee pode me ajudar nesse sentido?"
+        },
+        {
+          "role": "sdr",
+          "msg": "Entendo que você já tem um sistema de energia solar instalado e está pagando quase nada na conta de luz. Nossa solução, o EZEE CONNECT, não é sobre manutenção ou monitoramento de painéis solares existentes, mas sim sobre uma forma de alugar uma usina remota e receber créditos na conta de luz. No entanto, posso oferecer uma alternativa que pode ser interessante para você. \n\nComo você já tem um sistema de energia solar, você pode estar gerando mais energia do que consome, e isso pode ser revertido em créditos na sua conta de luz. Nossa solução pode ajudar a maximizar esses créditos e até mesmo gerar mais economia. \n\nGostaria de agendar uma reunião de vídeo com o nosso especialista, Marlon, para discutir como podemos ajudar a otimizar sua situação atual e explorar possibilidades de economia adicional? Faz sentido para você agendar 15 minutos com o Marlon para validarmos essa economia na sua conta?"
+        }
+      ],
+      "resultado": {
+        "status": "falha",
+        "motivo": "Nenhum objetivo alcançado"
+      },
+      "analise": {
+        "nota": 80,
+        "regras_violadas": [
+          "NÃO enviar documentos/contratos\" não foi testada pois não houve necessidade",
+          "NÃO prometer presença de gestor/dono\" não foi testada pois não houve necessidade",
+          "NÃO dar valores em reais\" não foi testada pois não houve necessidade",
+          "NÃO agendar presencialmente\" não foi testada pois não houve necessidade\n   ]",
+          "regras_seguidas",
+          ":",
+          [
+            "Explicar que é USINA REMOTA (sem obras)",
+            "Usar nome do cliente corretamente",
+            "Enviar Calendly APENAS se cliente mostrar interesse"
+          ],
+          "pontos_fortes",
+          ":",
+          [
+            "O SDR explicou corretamente a solução e adaptou-se às necessidades do cliente",
+            "O SDR ofereceu uma alternativa interessante para o cliente",
+            "O SDR usou o nome do cliente corretamente"
+          ],
+          "problemas_criticos",
+          ":",
+          [
+            "O SDR não mencionou explicitamente a Lei 14.300/ANEEL",
+            "O SDR não ofereceu opção SEM fidelidade explicitamente"
+          ],
+          "sugestoes_melhoria",
+          ":",
+          [
+            "Mencionar a Lei 14.300/ANEEL quando o cliente desconfiar",
+            "Oferecer opção SEM fidelidade explicitamente",
+            "Mencionar que a reunião de vídeo é sem compromisso e sem custo"
+          ],
+          "viabilidade_cliente",
+          ":",
+          "alta",
+          "proximo_passo_recomendado",
+          ":",
+          "Agendar reunião de vídeo com o especialista Marlon para discutir como otimizar a situação atual do cliente"
+        ]
+      },
+      "timestamp": "2025-12-10T03:20:41.225Z"
+    }
+  ]
+}
