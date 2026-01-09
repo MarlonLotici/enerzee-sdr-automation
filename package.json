@@ -1,34 +1,32 @@
 {
-  "name": "enerzee-sdr-automation",
+  "name": "motor-vendas-sdr-marlon",
   "version": "1.0.0",
-  "description": "Sistema autônomo de SDR e Scraping de Leads B2B utilizando IA Generativa (Llama 3) e automação de WhatsApp via WPPConnect.",
-  "main": "4_SDR_IA.js",
-  "private": true,
-  "engines": {
-    "node": ">=18.0.0"
-  },
+  "description": "Sistema de Prospecção Automática e SDR com IA",
+  "main": "main.js",
   "scripts": {
-    "start": "node 4_SDR_IA.js",
-    "scraper:bares": "node 3_scraper_turbo_bares.js",
-    "test:sdr": "node robo_testes.js",
-    "lint": "echo 'No linting configured yet'"
+    "start": "node main.js",
+    "sdr": "node 4_SDR_IA_ULTIMATE_V4.js"
   },
   "keywords": [
-    "automation",
     "sdr",
-    "ai",
-    "whatsapp-api",
-    "lead-generation",
-    "puppeteer"
+    "whatsapp",
+    "automation",
+    "solar"
   ],
-  "author": "Seu Nome <seu.email@enerzee.com.br>",
-  "license": "UNLICENSED",
+  "author": "Marlon Lotici",
+  "license": "ISC",
   "dependencies": {
-    "@wppconnect-team/wppconnect": "^1.35.0",
-    "colors": "^1.4.0",
-    "dotenv": "^16.4.5",
+    "@wppconnect-team/wppconnect": "^1.35.2",
+    "cors": "^2.8.5",
+    "dotenv": "^16.6.1",
     "exceljs": "^4.4.0",
+    "express": "^5.2.1",
     "groq-sdk": "^0.3.3",
-    "puppeteer": "^22.0.0"
+    "mongodb": "^7.0.0",
+    "mongoose": "^9.1.2",
+    "puppeteer": "^22.6.0",
+    "puppeteer-extra": "^3.3.6",
+    "puppeteer-extra-plugin-stealth": "^2.11.2",
+    "string-similarity": "^4.0.4"
   }
 }

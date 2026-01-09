@@ -1,199 +1,208 @@
-const puppeteer = require('puppeteer');
-const fs = require('fs');
+const puppeteer = require('puppeteer-extra');
+const StealthPlugin = require('puppeteer-extra-plugin-stealth');
+const connectDB = require('./src/config/database');
+const Lead = require('./src/models/Lead');
 
-// CONFIGURAÇÃO
-const NOME_ARQUIVO = 'leads_bh_massivo.csv';
-const CABECALHO = 'Cluster;Categoria;Nome;Telefone;Nota;Avaliacoes;Endereco;Link\n';
+puppeteer.use(StealthPlugin());
 
-(async () => {
-    // Cria arquivo se não existir
-    if (!fs.existsSync(NOME_ARQUIVO)) {
-        fs.writeFileSync(NOME_ARQUIVO, '\uFEFF' + CABECALHO);
-    }
+// --- INTELIGÊNCIA SEMÂNTICA: Dicionário de Expansão ---
+const SINONIMOS = {
+    'padaria': ['panificadora', 'confeitaria', 'fabricação de pães'],
+    'mercado': ['supermercado', 'mercearia', 'mini mercado', 'atacarejo'],
+    'farmacia': ['drogaria', 'farmácia de manipulação'],
+    'academia': ['crossfit', 'estúdio de pilates', 'centro de treinamento', 'fitness'],
+    'oficina': ['centro automotivo', 'mecânica', 'funilaria', 'auto center'],
+    'restaurante': ['bistro', 'churrascaria', 'pizzaria', 'hamburgueria'],
+    'escola': ['colégio', 'educação infantil', 'ensino médio'],
+    'igreja': ['paróquia', 'templo', 'assembleia', 'comunidade cristã'],
+    'industria': ['fábrica', 'confecção', 'metalúrgica', 'distribuidora']
+};
 
-    const browser = await puppeteer.launch({
-        headless: false,
-        defaultViewport: null,
-        args: ['--start-maximized', '--no-sandbox']
-    });
+// --- FUNÇÃO BATEDOR (MAPEAMENTO) ---
+async function descobrirBairros(page, cidade) {
+    console.log(`\n🕵️ [BATEDOR] Iniciando mapeamento tático em: ${cidade}...`);
+    // Usa termos genéricos de alta capilaridade para desenhar o mapa
+    const termoIsca = `Escolas e Igrejas em ${cidade}`;
+    
+    try {
+        await page.goto(`https://www.google.com.br/maps/search/${encodeURIComponent(termoIsca)}`, {
+            waitUntil: 'networkidle2', timeout: 45000
+        });
 
-    const page = await browser.newPage();
-    // Disfarce de Navegador Real
-    await page.setUserAgent('Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36');
-
-    // --- A LISTA MESTRA DE ALVOS (BH SETORIZADA) ---
-    const alvos = [
-        // --- 1. CLUSTER DA MODA E CONFECÇÃO (Consumo: Ferros Industriais/Máquinas) ---
-        // Barro Preto e Prado concentram a indústria da moda mineira
-        { termo: 'Confecção de Roupas no Barro Preto Belo Horizonte', cat: 'Ind. Moda - Barro Preto' },
-        { termo: 'Confecção de Roupas no Prado Belo Horizonte', cat: 'Ind. Moda - Prado' },
-        { termo: 'Estamparia em Belo Horizonte', cat: 'Ind. Estamparia - Geral' },
-
-        // --- 2. CLUSTER AUTOMOTIVO (Consumo: Compressores e Estufas) ---
-        // A Av. Pedro II (Carlos Prates/Caiçara) é o maior polo automotivo
-        { termo: 'Centro Automotivo na Pedro II Belo Horizonte', cat: 'Auto - Pedro II' },
-        { termo: 'Lanternagem e Pintura em Belo Horizonte', cat: 'Auto - Pintura' },
-        { termo: 'Retífica de Motores em Belo Horizonte', cat: 'Auto - Retifica' },
-
-        // --- 3. PEQUENAS INDÚSTRIAS E LOGÍSTICA ---
-        // Olhos d'Água e São Francisco são bairros mistos/industriais
-        { termo: 'Indústria no Bairro Olhos d\'Água Belo Horizonte', cat: 'Indústria - Olhos dAgua' },
-        { termo: 'Distribuidora no Bairro São Francisco Belo Horizonte', cat: 'Logistica - Sao Francisco' },
-        { termo: 'Marmoraria em Belo Horizonte', cat: 'Ind. Marmoraria' },
-        { termo: 'Vidraçaria em Belo Horizonte', cat: 'Ind. Vidros' },
-
-        // --- 4. CLUSTER GASTRONÔMICO NOBRE (Consumo: Ar Condicionado + Fornos) ---
-        // Savassi, Lourdes e Funcionários
-        { termo: 'Restaurante na Savassi Belo Horizonte', cat: 'Gastro - Savassi' },
-        { termo: 'Padaria no Lourdes Belo Horizonte', cat: 'Padaria - Lourdes' },
-        { termo: 'Restaurante no Funcionários Belo Horizonte', cat: 'Gastro - Funcionarios' },
-        { termo: 'Cervejaria Artesanal em Belo Horizonte', cat: 'Ind. Cervejaria' }, // Nicho em alta
-
-        // --- 5. CLUSTER COMÉRCIO POPULAR (Volume Massivo) ---
-        // Barreiro e Venda Nova são "cidades" dentro de BH
-        { termo: 'Supermercado no Barreiro Belo Horizonte', cat: 'Mercado - Barreiro' },
-        { termo: 'Açougue no Barreiro Belo Horizonte', cat: 'Acougue - Barreiro' },
-        { termo: 'Padaria em Venda Nova Belo Horizonte', cat: 'Padaria - Venda Nova' },
-        { termo: 'Sorveteria em Venda Nova Belo Horizonte', cat: 'Sorveteria - Venda Nova' },
-        
-        // --- 6. PAMPULHA E VETOR NORTE (Misto) ---
-        // Castelo e Ouro Preto têm comércio de rua fortíssimo
-        { termo: 'Academia no Bairro Castelo Belo Horizonte', cat: 'Academia - Castelo' },
-        { termo: 'Padaria no Bairro Ouro Preto Belo Horizonte', cat: 'Padaria - Ouro Preto' },
-        { termo: 'Restaurante na Pampulha Belo Horizonte', cat: 'Gastro - Pampulha' },
-
-        // --- 7. BAIRROS "CORINGA" (Alta densidade comercial) ---
-        // Buritis, Sagrada Família, Cidade Nova
-        { termo: 'Padaria no Buritis Belo Horizonte', cat: 'Padaria - Buritis' },
-        { termo: 'Mercado na Sagrada Família Belo Horizonte', cat: 'Mercado - Sagrada Familia' },
-        { termo: 'Clínica na Cidade Nova Belo Horizonte', cat: 'Clinica - Cidade Nova' },
-        { termo: 'Padaria no Padre Eustáquio Belo Horizonte', cat: 'Padaria - Padre Eustaquio' }
-    ];
-
-    console.log(`🔥 INICIANDO MEGA OPERAÇÃO BH: ${alvos.length} NICHOS MAPEADOS...\n`);
-
-    for (const alvo of alvos) {
-        console.log(`🔎 [${alvo.cat}] Buscando: "${alvo.termo}"`);
+        // Espera visual para garantir carregamento
+        await new Promise(r => setTimeout(r, 2000));
 
         try {
-            // URL montada dinamicamente
-            const url = `https://www.google.com/maps/search/${alvo.termo.split(' ').join('+')}`;
-            
-            await page.goto(url, { waitUntil: 'networkidle2', timeout: 90000 }); // 90s timeout
+            await page.waitForSelector('div[role="feed"]', { timeout: 10000 });
+            await autoScroll(page, 3000); // Scroll curto de 3s para amostragem
 
-            // Verifica se carregou
-            try {
-                await page.waitForSelector('div[role="feed"]', { timeout: 15000 });
-            } catch (e) {
-                console.log(`⚠️  Lista vazia ou bloqueada para "${alvo.termo}". Pulando...`);
-                continue;
-            }
-
-            console.log('⬇️  Rolando a lista...');
-            await autoScroll(page);
-
-            // EXTRAÇÃO INTELIGENTE
-            const leads = await page.evaluate((clusterName) => {
-                const data = [];
+            const bairros = await page.evaluate((cidadeRef) => {
                 const items = document.querySelectorAll('div[role="article"]');
-
+                const lista = new Set();
+                
                 items.forEach(item => {
-                    const text = item.innerText;
-                    
-                    // Regex seguro para telefone
-                    const telMatch = text.match(/(\(?\d{2}\)?\s)?\d{4,5}-?\d{4}/);
-                    if (!telMatch) return; // Sem telefone = lixo
-
-                    const linkEl = item.querySelector('a[href*="/maps/place/"]');
-                    if (!linkEl) return;
-
-                    const nome = linkEl.getAttribute('aria-label') || text.split('\n')[0];
-                    
-                    // Pega Nota e Avaliações (ex: "4.5 (100)")
-                    let nota = '0', reviews = '0';
-                    const ratingMatch = text.match(/(\d[\.,]\d)\s?\(([\d\.]+)\)/);
-                    if (ratingMatch) {
-                        nota = ratingMatch[1];
-                        reviews = ratingMatch[2].replace('.', '');
-                    }
-
-                    // Tenta achar endereço na "massaroca" de texto
-                    const linhas = text.split('\n');
-                    let endereco = 'BH - Geral';
-                    for (let l of linhas) {
-                        if (l.match(/(Rua|Av\.|Alameda|Rodovia|Bairro)/i)) {
-                            endereco = l;
-                            break;
+                    const texto = item.innerText;
+                    // Tenta capturar padrão: "Rua X, Bairro - Cidade"
+                    const partes = texto.split(',');
+                    partes.forEach(p => {
+                        const parteLimpa = p.replace('-', '').trim();
+                        // Filtros heurísticos para eliminar lixo
+                        if (parteLimpa.length > 3 && 
+                            !parteLimpa.match(/^\d+/) && 
+                            !parteLimpa.includes(cidadeRef) && 
+                            !parteLimpa.includes('CEP') &&
+                            !parteLimpa.includes('Brasil')) {
+                            lista.add(parteLimpa);
                         }
-                    }
-
-                    data.push({
-                        cluster: clusterName,
-                        nome: nome.replace(/;/g, ','),
-                        telefone: telMatch[0],
-                        nota,
-                        reviews,
-                        endereco: endereco.replace(/;/g, ','),
-                        link: linkEl.href
                     });
                 });
-                return data;
-            }, alvo.cat);
+                return Array.from(lista);
+            }, cidade);
 
-            // FILTRO DE QUALIDADE ANTES DE SALVAR
-            // Só salva quem tem mais de 10 avaliações (evita lugar fantasma/fechado)
-            const leadsQualificados = leads.filter(l => parseInt(l.reviews) > 10);
+            // Filtro de Qualidade
+            const bairrosValidos = bairros.filter(b => b.length < 25); // Remove frases longas
+            
+            if (bairrosValidos.length < 2) throw new Error("Poucos bairros");
 
-            if (leadsQualificados.length > 0) {
-                const csvData = leadsQualificados.map(l => 
-                    `${l.cluster};${l.categoria};${l.nome};${l.telefone};${l.nota};${l.reviews};${l.endereco};${l.link}`
-                ).join('\n') + '\n';
+            console.log(`✅ [BATEDOR] ${bairrosValidos.length} bairros identificados.`);
+            return bairrosValidos;
 
-                fs.appendFileSync(NOME_ARQUIVO, csvData);
-                console.log(`✅ ${leadsQualificados.length} leads salvos (Filtrados de ${leads.length} originais)`);
-            } else {
-                console.log(`⚠️  Encontrei lojas, mas poucas avaliações (Provavelmente irrelevantes).`);
-            }
-
-        } catch (error) {
-            console.log(`❌ Erro em ${alvo.termo}: ${error.message}`);
+        } catch (e) {
+            throw new Error("Falha na extração visual");
         }
-
-        // Delay Humano (4 a 8 segundos) - Essencial para lista grande
-        const delay = Math.floor(Math.random() * 4000) + 4000;
-        await new Promise(r => setTimeout(r, delay));
+    } catch (e) {
+        console.log("⚠️ [BATEDOR] Falha no mapeamento automático. Ativando Protocolo de Zonas.");
+        return ['Centro', 'Zona Norte', 'Zona Sul', 'Zona Leste', 'Zona Oeste', 'Distrito Industrial'];
     }
+}
 
-    console.log(`\n🏁 FIM DA EXTRAÇÃO! Arquivo: ${NOME_ARQUIVO}`);
-    await browser.close();
-})();
-
-// SCROLL INFINITO OTIMIZADO
-async function autoScroll(page) {
-    await page.evaluate(async () => {
+// --- FUNÇÃO SCROLL ROBUSTA ---
+async function autoScroll(page, maxTime = 0) {
+    await page.evaluate(async (maxTime) => {
         const wrapper = document.querySelector('div[role="feed"]');
         if (!wrapper) return;
         await new Promise((resolve) => {
             var totalHeight = 0;
-            var distance = 3000; // Scroll mais rápido
-            var tentativas = 0;
+            var distance = 800; // Scroll mais suave
+            const startTime = Date.now();
             var timer = setInterval(() => {
                 var scrollHeight = wrapper.scrollHeight;
                 wrapper.scrollBy(0, distance);
                 totalHeight += distance;
-
-                if (totalHeight >= scrollHeight) {
-                    totalHeight = scrollHeight;
-                    tentativas++;
-                } else {
-                    tentativas = 0;
-                }
-                // Para se tentar 8 vezes sem sucesso ou passar de 400 itens (limite do Google)
-                if (tentativas >= 8 || scrollHeight > 500000) {
+                if (totalHeight >= scrollHeight || (maxTime > 0 && Date.now() - startTime > maxTime)) {
                     clearInterval(timer);
                     resolve();
                 }
-            }, 600);
+            }, 800); // Intervalo maior para dar tempo de renderizar
         });
-    });
+    }, maxTime);
 }
+
+// --- MOTOR PRINCIPAL ---
+async function iniciarVarredura(cidadeAlvo, nichosEntrada) {
+    // 1. Configuração Inicial
+    console.log(`\n🚀 MOTOR EZEE CONNECT: ${cidadeAlvo}`);
+    await connectDB();
+
+    // 2. Normalização e Expansão de Nichos
+    let termosDeBusca = [];
+    nichosEntrada.forEach(nicho => {
+        const base = nicho.toLowerCase().trim();
+        termosDeBusca.push(base);
+        if (SINONIMOS[base]) {
+            termosDeBusca.push(...SINONIMOS[base]);
+        }
+    });
+    // Remove duplicatas
+    termosDeBusca = [...new Set(termosDeBusca)];
+
+    console.log(`📋 Estratégia de Busca Expandida: [${termosDeBusca.join(', ')}]`);
+
+    // 3. Lançamento do Browser
+    const browser = await puppeteer.launch({
+        headless: false, // Mantenha false para ver o mapa rodando (Visual)
+        args: ['--start-maximized', '--no-sandbox']
+    });
+
+    const page = await browser.newPage();
+    const leadsSessao = [];
+
+    try {
+        // Fase 1: Batedor
+        let bairrosAlvo = await descobrirBairros(page, cidadeAlvo);
+        if (!bairrosAlvo.includes('Centro')) bairrosAlvo.unshift('Centro');
+
+        // Fase 2: Mineração Profunda
+        for (const termo of termosDeBusca) {
+            console.log(`\n🔨 MINERANDO NICHO: "${termo.toUpperCase()}"`);
+            
+            for (const bairro of bairrosAlvo) {
+                const buscaGoogle = `${termo} em ${bairro}, ${cidadeAlvo}`;
+                console.log(`   > Radar em: ${bairro}...`);
+
+                try {
+                    await page.goto(`https://www.google.com.br/maps/search/${encodeURIComponent(buscaGoogle)}`, {
+                        waitUntil: 'networkidle2', timeout: 20000
+                    });
+
+                    // Verifica resultados
+                    try {
+                        await page.waitForSelector('div[role="feed"]', { timeout: 4000 });
+                    } catch {
+                        continue; // Pula se não tiver nada
+                    }
+
+                    await autoScroll(page);
+
+                    // Extração de Dados
+                    const leadsRaw = await page.evaluate((cat, cid, bairroRef) => {
+                        const items = document.querySelectorAll('div[role="article"]');
+                        const results = [];
+                        
+                        items.forEach(item => {
+                            const linkEl = item.querySelector('a[href*="/maps/place/"]');
+                            if (!linkEl) return;
+
+                            const rawText = item.innerText;
+                            const nome = linkEl.getAttribute('aria-label') || rawText.split('\n')[0];
+                            
+                            // Regex melhorada para telefone (pega com e sem DDD)
+                            const telMatch = rawText.match(/(\(?\d{2}\)?\s?)?(9?\d{4}[-\s]?\d{4})/);
+                            const telefone = telMatch ? telMatch[0] : "Não informado";
+
+                            results.push({
+                                nome: nome,
+                                categoria: cat,
+                                telefone: telefone,
+                                link: linkEl.href,
+                                bairro_detectado: bairroRef
+                            });
+                        });
+                        return results;
+                    }, termo, cidadeAlvo, bairro);
+
+                    // Salvamento no Banco
+                    for (const l of leadsRaw) {
+                        const payload = { ...l, cidade: cidadeAlvo };
+                        // Upsert para não duplicar
+                        await Lead.findOneAndUpdate({ link_maps: l.link }, payload, { upsert: true });
+                        leadsSessao.push(payload);
+                    }
+                    
+                    if (leadsRaw.length > 0) console.log(`     + ${leadsRaw.length} leads capturados.`);
+
+                } catch (err) {
+                    console.log(`     x Erro técnico em ${bairro}`);
+                }
+            }
+        }
+
+    } catch (e) {
+        console.error("Erro Crítico do Motor:", e);
+    } finally {
+        await browser.close();
+        return leadsSessao;
+    }
+}
+
+module.exports = { iniciarVarredura };

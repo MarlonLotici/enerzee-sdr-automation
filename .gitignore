@@ -25,3 +25,21 @@ memoria_blindada.json
 !*_exemplo.xlsx
 
 backup/
+# Dependências gigantes (não subir nunca)
+node_modules/
+frontend/node_modules/
+
+# Arquivos de sistema e Logs
+.DS_Store
+*.log
+npm-debug.log*
+
+# Segurança (CRÍTICO: Não suba suas senhas)
+.env
+src/config/.env
+
+# Build de produção do React
+frontend/dist/
+
+# Arquivos temporários do Puppeteer
+.local-chromium/
