@@ -2,6 +2,7 @@ const puppeteer = require('puppeteer-extra');
 const StealthPlugin = require('puppeteer-extra-plugin-stealth');
 const connectDB = require('./src/config/database');
 const Lead = require('./src/models/Lead');
+const fs = require('fs'); // Adicionado para gerar CSV
 
 puppeteer.use(StealthPlugin());
 
@@ -200,6 +201,26 @@ async function iniciarVarredura(cidadeAlvo, nichosEntrada) {
     } catch (e) {
         console.error("Erro Crítico do Motor:", e);
     } finally {
+        // --- GERAÇÃO DE CSV PARA LIMPEZA ---
+        if (leadsSessao.length > 0) {
+            const csvHeader = "Cluster;Categoria;Nome;Telefone;Nota;Reviews;Endereço;Link\n";
+            const csvRows = leadsSessao.map(l => {
+                const cluster = l.bairro_detectado || "Geral";
+                const cat = l.categoria || "Diversos";
+                const nome = (l.nome || "").replace(/;/g, ",");
+                const tel = (l.telefone || "").replace(/;/g, " ");
+                const nota = "5.0"; // Default
+                const rev = "10";   // Default
+                const end = `${l.bairro_detectado || ""}, ${l.cidade || ""}`.replace(/;/g, ",");
+                const link = l.link || "";
+                return `${cluster};${cat};${nome};${tel};${nota};${rev};${end};${link}`;
+            }).join("\n");
+
+            const NOME_ARQUIVO_EXPORT = 'leads_para_limpeza.csv';
+            fs.writeFileSync(NOME_ARQUIVO_EXPORT, csvHeader + csvRows);
+            console.log(`\n💾 CSV gerado com sucesso: ${NOME_ARQUIVO_EXPORT} (${leadsSessao.length} linhas)`);
+        }
+
         await browser.close();
         return leadsSessao;
     }

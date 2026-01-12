@@ -8,8 +8,8 @@ const stringSimilarity = require('string-similarity');
 puppeteer.use(StealthPlugin());
 
 // CONFIGURAÇÃO
-const ARQUIVO_ENTRADA = 'leads_prontos_para_enrich.xlsx'; 
-const ARQUIVO_SAIDA = 'LEADS_PREMIUM_FINAL.xlsx';
+const ARQUIVO_ENTRADA = 'leads_limpos.xlsx'; 
+const ARQUIVO_SAIDA = 'leads_enriquecidos.xlsx';
 
 const delay = ms => new Promise(resolve => setTimeout(resolve, ms));
 

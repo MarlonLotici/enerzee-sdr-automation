@@ -43,3 +43,11 @@ frontend/dist/
 
 # Arquivos temporários do Puppeteer
 .local-chromium/
+
+# WhatsApp Web.js específico (O que está causando o problema)
+.wwebjs_auth/
+.wwebjs_cache/
+
+# Banco de dados local (Segurança e Performance)
+*.db
+leads.db

@@ -4,10 +4,10 @@ const ExcelJS = require('exceljs');
 
 // --- ⚙️ CONFIGURAÇÃO ---
 // ATENÇÃO: O nome abaixo deve ser IDÊNTICO ao gerado no 1_scraper.js
-const ARQUIVO_ENTRADA = 'leads_cuiaba_TOTAL_EXCLUSIVO.csv'; 
+const ARQUIVO_ENTRADA = 'leads_para_limpeza.csv'; 
 
 // Este nome é o que o 3_enrich.js espera receber. Não mude.
-const ARQUIVO_SAIDA = 'leads_prontos_para_enrich.xlsx'; 
+const ARQUIVO_SAIDA = 'leads_limpos.xlsx'; 
 
 // CRITÉRIOS DE QUALIDADE
 const MINIMO_AVALIACOES = 5; // Filtro leve para captar PMEs em crescimento

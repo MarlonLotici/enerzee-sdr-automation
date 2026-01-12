@@ -22,3 +22,19 @@ dist-ssr
 *.njsproj
 *.sln
 *.sw?
+
+# Segredos e Configurações
+.env
+.env.local
+.env.*.local
+
+# WhatsApp Web.js (Sessões e Cache)
+.wwebjs_auth/
+.wwebjs_cache/
+session.json
+
+# Logs
+logs
+*.log
+node_modules/
+dist/
