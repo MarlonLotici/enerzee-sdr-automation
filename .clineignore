@@ -1,0 +1,29 @@
+# Dependências (O maior vilão de consumo)
+node_modules/
+package-lock.json
+yarn.lock
+
+# Banco de Dados e Dados Brutos (O Cline não precisa ler o binário do banco)
+*.db
+*.db-journal
+backups/
+*.xlsx
+*.csv
+
+# Build e Cache
+dist/
+build/
+.cache/
+.next/
+
+# Logs e Segredos
+*.log
+.env
+.env.*
+
+# Git
+.git/
+
+# Puppeteer/Browser
+.local-chromium/
+.puppeteer-data/

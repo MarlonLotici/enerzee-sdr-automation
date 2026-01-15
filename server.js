@@ -1,123 +1,130 @@
-// 1. CARREGAMENTO DE CONFIGURAÇÕES (PROFISSIONAL)
-require('dotenv').config();
 const express = require('express');
-const http = require('http'); 
-const { Server } = require("socket.io");
+const http = require('http');
+const { Server } = require('socket.io');
 const cors = require('cors');
-const helmet = require('helmet'); // Segurança de headers
-const { Client, LocalAuth } = require('whatsapp-web.js');
-const { spawn } = require('child_process');
-const qrcode = require('qrcode-terminal'); 
-const { iniciarVarredura } = require('./1_scraper'); 
-const db = require('./database'); 
+
+// --- IMPORTAÇÃO DOS MÓDULOS DA ARQUITETURA MASTER ---
+const { iniciarVarredura } = require('./1_scraper');
+const { processarLimpeza } = require('./2_clean');
+const { enriquecerLeadIndividual } = require('./3_enrich');
+const { iniciarSDR, processarLeadEntrada } = require('./4_sdr');
 
 const app = express();
-const server = http.createServer(app); 
+app.use(cors());
 
-// 2. SEGURANÇA E MIDDLEWARES
-app.use(helmet()); // Protege contra vulnerabilidades web comuns
-app.use(cors({
-    origin: process.env.ALLOWED_ORIGINS || "*", // Em produção, limite ao seu domínio
-    methods: ["GET", "POST"]
-}));
-app.use(express.json());
-
-// 3. CONFIGURAÇÃO DO SOCKET.IO
-const io = new Server(server, { 
-    cors: { 
-        origin: process.env.ALLOWED_ORIGINS || "*",
+const server = http.createServer(app);
+const io = new Server(server, {
+    cors: {
+        origin: "*", // Permite conexão do React (qualquer porta)
         methods: ["GET", "POST"]
-    } 
-});
-
-const PORT = process.env.PORT || 3001; 
-
-// 4. INICIALIZAÇÃO RESILIENTE DO BANCO
-(async () => {
-    try {
-        await db.initDb();
-        console.log("💾 Banco de dados pronto.");
-    } catch (e) {
-        console.error("❌ Erro fatal ao iniciar Banco:", e.message);
-        // Em produção, você pode querer encerrar o processo aqui
-    }
-})();
-
-// 5. CLIENTE WHATSAPP COM TRATAMENTO DE ERROS
-const client = new Client({
-    authStrategy: new LocalAuth(),
-    puppeteer: {
-        args: ['--no-sandbox', '--disable-setuid-sandbox', '--disable-dev-shm-usage'],
-        headless: true 
     }
 });
 
-// Eventos do WhatsApp com logs profissionais
-client.on('qr', (qr) => {
-    console.log('📲 QR Code gerado em:', new Date().toISOString());
-    qrcode.generate(qr, { small: true });
-    io.emit('qr_code', qr); 
-});
+// Variável de controle global para interrupção imediata
+let shouldStop = false;
 
-client.on('ready', async () => {
-    console.log('✅ WhatsApp Conectado com sucesso!');
-    io.emit('whatsapp_status', 'CONNECTED');
-});
-
-// RECONEXÃO AUTOMÁTICA (ESTABILIDADE)
-client.on('disconnected', (reason) => {
-    console.log('❌ WhatsApp Desconectado:', reason);
-    io.emit('whatsapp_status', 'DISCONNECTED');
-    // Tenta reinicializar após 5 segundos
-    setTimeout(() => client.initialize(), 5000);
-});
-
-client.initialize().catch(err => console.error("Erro ao iniciar WPP:", err));
-
-// 6. GERENCIAMENTO DE LOGS E EVENTOS (SOCKET.IO)
+// --- ORQUESTRAÇÃO DE EVENTOS ---
 io.on('connection', (socket) => {
-    console.log(`⚡ Cliente conectado: ${socket.id}`);
+    console.log(`🔌 Nova conexão estabelecida: ${socket.id}`);
 
-    // LOGICA DE VARREDURA COM TRY/CATCH GLOBAL
-    socket.on('start_scraping', async (data) => {
-        try {
-            const cidade = data.city || "Localização Padrão";
-            const nichos = Array.isArray(data.niche) ? data.niche : [data.niche];
+    // 1. Inicializa o Módulo SDR (WhatsApp) assim que o frontend conecta
+    // Isso garante que o QR Code seja gerado e enviado ao frontend imediatamente
+    iniciarSDR(socket);
+
+    // 2. Evento: Iniciar Varredura (O Pipeline Completo)
+    socket.on('start_scraping', async (params) => {
+        console.log('🏁 Pipeline Master Iniciado. Parâmetros:', params);
+        shouldStop = false;
+        let leadsProcessados = 0;
+
+        // Notifica início no terminal do frontend
+        socket.emit('notification', `🚀 Iniciando motor em modo: ${params.mode === 'map' ? 'GEO-PRECISÃO' : 'TEXTUAL'}`);
+
+        // --- FASE 1: SCRAPING (1_scraper.js) ---
+        // O scraper roda e emite eventos 'lead' para cada item encontrado
+        await iniciarVarredura(params, async (evento) => {
+            // Verifica bandeira de parada a cada iteração para abortar rápido
+            if (shouldStop) return;
+
+            // Feedback de Status (Log Hacker no Terminal do Frontend)
+            if (evento.type === 'status') {
+                socket.emit('notification', evento.message);
+            } 
             
-            const resultados = await iniciarVarredura(cidade, nichos); 
+            // Lead Encontrado -> Inicia Processamento em Cascata
+            else if (evento.type === 'lead') {
+                try {
+                    const leadBruto = evento.data;
 
-            for (const lead of resultados) {
-                const leadData = {
-                    nome: lead.nome || lead.titulo || 'Sem Nome',
-                    telefone: lead.telefone || lead.phone || '',
-                    categoria: lead.categoria || nichos[0],
-                    link: lead.link || lead.link_maps || ''
-                };
+                    // --- FASE 2: LIMPEZA (2_clean.js) ---
+                    // Sanitiza telefones e nomes. Retorna array (pegamos o 1º pois o fluxo é unitário)
+                    const leadsLimpos = processarLimpeza([leadBruto]);
+                    
+                    if (leadsLimpos.length > 0) {
+                        let leadFinal = leadsLimpos[0];
 
-                // Salva no banco de forma assíncrona sem travar o loop
-                db.salvarLead(leadData, "Mapa", nichos[0])
-                  .catch(e => console.error("Erro DB Lead:", e.message));
-                
-                socket.emit('new_lead', leadData);
-                await new Promise(r => setTimeout(r, 150));
+                        // Filtro de Qualidade: Só avança se o lead for minimamente válido
+                        if (leadFinal.clean_status === 'valid') {
+                            
+                            // --- FASE 3: ENRIQUECIMENTO (3_enrich.js) ---
+                            // Busca CNPJ, Sócio e Capital Social.
+                            // Estratégia: Enriquecer apenas Celulares (leads acionáveis) ou Scores Altos para economizar recursos
+                            if (leadFinal.type === 'mobile' || leadFinal.quality_score > 60) {
+                                socket.emit('notification', `💎 Analisando dados corporativos: ${leadFinal.name}...`);
+                                leadFinal = await enriquecerLeadIndividual(leadFinal);
+                            }
+
+                            // --- FASE 4: SDR / WHATSAPP (4_sdr.js) ---
+                            // Envia para o "Cérebro" decidir a abordagem e colocar na fila de disparo
+                            if (leadFinal.type === 'mobile') {
+                                processarLeadEntrada(leadFinal, socket);
+                            }
+
+                            // --- FASE 5: ENTREGA AO FRONTEND ---
+                            // Envia o lead pronto (rico e limpo) para aparecer no Kanban/CRM
+                            socket.emit('new_lead', leadFinal);
+                            
+                            leadsProcessados++;
+                            // Atualiza logs de progresso
+                            socket.emit('progress_update', { message: `Processado: ${leadFinal.name} (${leadFinal.niche})` });
+                        }
+                    }
+                } catch (err) {
+                    console.error("Erro no pipeline individual:", err);
+                }
             }
+        });
+
+        // Finalização do Processo
+        if (!shouldStop) {
             socket.emit('bot_finished');
-        } catch (error) {
-            console.error("🚨 Erro no Scraping:", error);
-            socket.emit('notification', "Erro na varredura. Tente novamente.");
-            socket.emit('bot_finished');
+            socket.emit('notification', `✅ Varredura completa. ${leadsProcessados} leads processados com sucesso.`);
         }
     });
 
-    // Outros eventos...
+    // 3. Evento: Parar Varredura
+    socket.on('stop_scraping', () => {
+        console.log('🛑 Solicitação de parada recebida.');
+        shouldStop = true;
+        socket.emit('notification', '🛑 Interrompendo motor de busca...');
+    });
+
+    // 4. Evento: Mensagem Manual (Opcional - Chat Híbrido)
+    socket.on('send_message', (data) => {
+        // A lógica real de envio manual pode ser implementada aqui se expusermos o client do SDR
+        // Por enquanto, logamos a intenção
+        console.log(`💬 [MANUAL] Enviar para ${data.chatId}: ${data.text}`);
+    });
 });
 
-// 7. TRATAMENTO DE EXCEÇÕES NÃO ESPERADAS (CRÍTICO)
-process.on('uncaughtException', (err) => {
-    console.error('❌ Erro não tratado:', err);
-    // Aqui você enviaria um log para um serviço externo
-});
-
+// --- INICIALIZAÇÃO DO SERVIDOR ---
+const PORT = process.env.PORT || 3001;
 server.listen(PORT, () => {
-    console.log(`🚀 SERVIDOR PROFISSIONAL RODANDO NA PORTA ${PORT}`);
+    console.log(`
+    ▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄
+    █ 🚀 SERVER MASTER v5.0 - ORCHESTRATOR ONLINE    █
+    █ 📡 PORTA: ${PORT}                                 █
+    █ 🧠 MÓDULOS CARREGADOS: SCRAPER, CLEAN, ENRICH, SDR █
+    ▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀
+    `);
 });

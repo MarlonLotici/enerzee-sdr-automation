@@ -1,177 +1,203 @@
+/**
+ * 3_enrich.js - MÓDULO DE INTELIGÊNCIA CORPORATIVA V5 (MASTER ARCHITECTURE)
+ * Focado em: Discovery de CNPJ, Validação de Identidade e Extração de Decisores.
+ */
+
 const puppeteer = require('puppeteer-extra');
 const StealthPlugin = require('puppeteer-extra-plugin-stealth');
-const ExcelJS = require('exceljs');
-const fs = require('fs');
 const https = require('https');
 const stringSimilarity = require('string-similarity');
 
 puppeteer.use(StealthPlugin());
 
-// CONFIGURAÇÃO
-const ARQUIVO_ENTRADA = 'leads_limpos.xlsx'; 
-const ARQUIVO_SAIDA = 'leads_enriquecidos.xlsx';
+// Rotação de User-Agents para evitar Fingerprinting
+const USER_AGENTS = [
+    'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
+    'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/17.2 Safari/605.1.15',
+    'Mozilla/5.0 (Windows NT 10.0; Win64; x64; rv:121.0) Gecko/20100101 Firefox/121.0'
+];
 
-const delay = ms => new Promise(resolve => setTimeout(resolve, ms));
-
-// Função de API (BrasilAPI)
-async function consultarBrasilAPI(cnpj) {
+/**
+ * Consulta API Pública do Governo (BrasilAPI)
+ * Retorna dados fiscais oficiais.
+ */
+async function consultarDadosOficiais(cnpj) {
     return new Promise((resolve) => {
-        const req = https.get(`https://brasilapi.com.br/api/cnpj/v1/${cnpj}`, (res) => {
+        const req = https.get(`https://brasilapi.com.br/api/cnpj/v1/${cnpj}`, {
+            headers: { 'User-Agent': 'SDR-Master-Bot/5.0' },
+            timeout: 10000
+        }, (res) => {
             let data = '';
-            res.on('data', c => data += c);
+            res.on('data', chunk => data += chunk);
             res.on('end', () => {
                 if (res.statusCode === 200) {
                     try { resolve(JSON.parse(data)); } catch { resolve(null); }
-                } else resolve(null);
+                } else {
+                    resolve(null);
+                }
             });
         });
+        
         req.on('error', () => resolve(null));
-        req.setTimeout(5000, () => { req.destroy(); resolve(null); });
+        req.on('timeout', () => { req.destroy(); resolve(null); });
     });
 }
 
-(async () => {
-    console.log(`💎 INICIANDO ENRIQUECIMENTO DE ELITE (FIM DO UNDEFINED)...`);
+/**
+ * Formata strings para "Title Case"
+ */
+function titleCase(str) {
+    if (!str) return null;
+    return str.toLowerCase().replace(/(?:^|\s)\S/g, a => a.toUpperCase());
+}
 
-    const workbookEntrada = new ExcelJS.Workbook();
+/**
+ * MOTOR DE ENRIQUECIMENTO
+ * Recebe um lead limpo e retorna um lead enriquecido com inteligência fiscal.
+ */
+async function enriquecerLeadIndividual(lead) {
+    // 1. Setup de Segurança e Performance
+    const browser = await puppeteer.launch({ 
+        headless: "new", 
+        args: ['--no-sandbox', '--disable-setuid-sandbox', '--disable-dev-shm-usage', '--single-process'] 
+    });
     
-    try {
-        await workbookEntrada.xlsx.readFile(ARQUIVO_ENTRADA);
-    } catch (e) {
-        console.log(`❌ Erro ao abrir ${ARQUIVO_ENTRADA}. Verifique se ele existe e não está aberto.`);
-        process.exit(1);
-    }
-    
-    const sheetEntrada = workbookEntrada.getWorksheet(1);
-    const workbookSaida = new ExcelJS.Workbook();
-    const sheetSaida = workbookSaida.addWorksheet('Leads Premium');
-    
-    // Cabeçalhos (Fidelizados ao seu Excel de Saída)
-    sheetSaida.columns = [
-        { header: 'Empresa (Maps)', key: 'nome_maps', width: 30 },
-        { header: 'Empresa (Receita)', key: 'nome_receita', width: 30 },
-        { header: 'Match %', key: 'match', width: 10 },
-        { header: 'Dono', key: 'dono', width: 30 },
-        { header: 'Celular Sócio', key: 'celular_socio', width: 18 },
-        { header: 'Telefone Maps', key: 'tel_maps', width: 15 },
-        { header: 'CNPJ', key: 'cnpj', width: 18 },
-        { header: 'Endereço', key: 'end', width: 30 }
-    ];
-
-    const browser = await puppeteer.launch({ headless: true, args: ['--no-sandbox'] });
     const page = await browser.newPage();
+    
+    // Bloqueio Agressivo de Recursos (Economia de Banda e CPU para SaaS)
+    await page.setRequestInterception(true);
+    page.on('request', (req) => {
+        const type = req.resourceType();
+        if (['image', 'font', 'stylesheet', 'media', 'other'].includes(type)) req.abort();
+        else req.continue();
+    });
 
-    const rows = [];
-    sheetEntrada.eachRow((row, number) => { if (number > 1) rows.push(row); });
+    // Objeto de Retorno Padrão (Merge Safe)
+    let enrichment = {
+        cnpj: null,
+        razao_social: null,
+        nome_fantasia: null,
+        dono: null,           // O "Alvo" (Decisor)
+        celular_fiscal: null, // Telefone registrado na Receita
+        capital_social: 0,
+        atividade_principal: null,
+        data_abertura: null,
+        status_receita: null,
+        match_confidence: 0,  // 0 a 100
+        enriched: false,
+        enrich_source: null
+    };
 
-    console.log(`📊 Processando ${rows.length} empresas...`);
+    try {
+        await page.setUserAgent(USER_AGENTS[Math.floor(Math.random() * USER_AGENTS.length)]);
 
-    for (let i = 0; i < rows.length; i++) {
-        const row = rows[i];
-        const nomeMaps = row.getCell(3).text; 
-        const telefoneMaps = row.getCell(4).text;
-        const enderecoCompleto = row.getCell(7).text;
+        // 2. BUSCA DE CNPJ (OSINT - Open Source Intelligence)
+        // Usamos Bing pois o Google bloqueia IPs de datacenter muito rápido.
+        // Query otimizada: Nome + Cidade + CNPJ
+        const termoBusca = `"${lead.name.replace(/[^\w\s]/gi, '')}" ${lead.cidade || ""} CNPJ`;
         
-        process.stdout.write(`🔍 [${i+1}/${rows.length}] ${nomeMaps.substring(0, 15)}... `);
-
-        let dados = { 
-            nome_receita: "N/A", match: 0, dono: "Responsável", 
-            cnpj: "", celular_socio: "", capital: "" 
-        };
-
-        try {
-            // --- ESTRATÉGIA DE BUSCA INTELIGENTE (ENDEREÇO) ---
-            const partesEnd = enderecoCompleto.split(/[,-]/);
-            const rua = partesEnd[0] ? partesEnd[0].trim() : "Cuiabá";
-            const numeroMatch = enderecoCompleto.match(/,\s*(\d+)/);
-            const numero = numeroMatch ? numeroMatch[1] : "";
-
-            // Query: Nome + Rua + CNPJ
-            let query = `"${nomeMaps}" ${rua} ${numero} CNPJ`;
-
-            // Navega no Bing
-            await page.goto(`https://www.bing.com/search?q=${encodeURIComponent(query)}`, { waitUntil: 'domcontentloaded' });
-            let content = await page.evaluate(() => document.body.innerText);
-            let cnpjMatch = content.match(/\d{2}\.\d{3}\.\d{3}\/\d{4}-\d{2}/);
-
-            if (!cnpjMatch) {
-                // Fallback: Nome limpo + Cuiabá
-                const nomeLimpo = nomeMaps.replace(/LTDA|S\.A\.|ME\s|EPP/gi, '').trim();
-                const queryBackup = `${nomeLimpo} Cuiabá CNPJ`;
-                await page.goto(`https://www.bing.com/search?q=${encodeURIComponent(queryBackup)}`, { waitUntil: 'domcontentloaded' });
-                content = await page.evaluate(() => document.body.innerText);
-                cnpjMatch = content.match(/\d{2}\.\d{3}\.\d{3}\/\d{4}-\d{2}/);
-            }
-
-            if (cnpjMatch) {
-                const cnpjLimpo = cnpjMatch[0].replace(/\D/g, '');
-                const apiData = await consultarBrasilAPI(cnpjLimpo);
-
-                if (apiData) {
-                    const razao = apiData.razao_social || "";
-                    const fantasia = apiData.nome_fantasia || "";
-                    
-                    const scoreRazao = stringSimilarity.compareTwoStrings(nomeMaps.toUpperCase(), razao.toUpperCase());
-                    const scoreFantasia = stringSimilarity.compareTwoStrings(nomeMaps.toUpperCase(), fantasia.toUpperCase());
-                    const melhorMatch = Math.max(scoreRazao, scoreFantasia);
-                    
-                    dados.match = (melhorMatch * 100).toFixed(0);
-                    dados.nome_receita = fantasia || razao;
-                    dados.cnpj = cnpjMatch[0];
-
-                    // Extração de Sócio
-                    if (apiData.qsa && apiData.qsa.length > 0) {
-                        const socioAdm = apiData.qsa.find(s => s.qualificacao_socio_administrador) || apiData.qsa[0];
-                        dados.dono = socioAdm.nome_socio || socioAdm.nome;
-                        dados.dono = dados.dono.toLowerCase().replace(/(^\w|\s\w)/g, m => m.toUpperCase());
-                    }
-
-                    // 🔥 CORREÇÃO CRÍTICA DO UNDEFINED 🔥
-                    const ddd1 = apiData.ddd_telefone_1;
-                    const tel1 = apiData.telefone_1;
-                    const ddd2 = apiData.ddd_telefone_2;
-                    const tel2 = apiData.telefone_2;
-
-                    // Função para validar se é celular (começa com 9)
-                    const formatarCel = (ddd, num) => {
-                        if (!ddd || !num) return null;
-                        if (num.length === 9 || (num.length === 8 && num.startsWith('9'))) {
-                            return `${ddd}${num}`;
-                        }
-                        // Se for fixo, também serve, mas preferimos celular
-                        return `${ddd}${num}`; 
-                    };
-
-                    const celularEncontrado = formatarCel(ddd1, tel1) || formatarCel(ddd2, tel2);
-                    
-                    if (celularEncontrado) {
-                        dados.celular_socio = celularEncontrado;
-                    }
-
-                    console.log(`✅ Achou! (${dados.match}%) | ${dados.dono} | Cel: ${dados.celular_socio}`);
-                }
-            } else {
-                console.log(`💨 CNPJ não achado.`);
-            }
-
-        } catch (e) { console.log(`❌ Erro busca.`); }
-
-        sheetSaida.addRow({
-            nome_maps: nomeMaps,
-            nome_receita: dados.nome_receita,
-            match: dados.match + '%',
-            dono: dados.dono,
-            celular_socio: dados.celular_socio,
-            tel_maps: telefoneMaps,
-            cnpj: dados.cnpj,
-            end: enderecoCompleto
+        await page.goto(`https://www.bing.com/search?q=${encodeURIComponent(termoBusca)}`, { 
+            waitUntil: 'domcontentloaded', 
+            timeout: 15000 
         });
 
-        if (i % 10 === 0) await workbookSaida.xlsx.writeFile(ARQUIVO_SAIDA);
-        await delay(300); 
+        // Extração de Texto do corpo da busca
+        const bodyText = await page.evaluate(() => document.body.innerText);
+        
+        // Regex de CNPJ Estrito
+        const cnpjMatch = bodyText.match(/\d{2}\.\d{3}\.\d{3}\/\d{4}-\d{2}/);
+
+        if (cnpjMatch) {
+            const cnpjLimpo = cnpjMatch[0].replace(/\D/g, '');
+            
+            // 3. VALIDAÇÃO OFICIAL (Cross-Check)
+            const dadosFiscais = await consultarDadosOficiais(cnpjLimpo);
+
+            if (dadosFiscais) {
+                // --- A. ALGORITMO DE MATCH DE IDENTIDADE ---
+                // Compara o nome que o Scraper achou no Maps com a Razão Social/Fantasia da Receita.
+                // Isso evita ligar para a empresa errada.
+                const nomeMaps = lead.name.toUpperCase();
+                const razao = (dadosFiscais.razao_social || "").toUpperCase();
+                const fantasia = (dadosFiscais.nome_fantasia || "").toUpperCase();
+
+                const scoreRazao = stringSimilarity.compareTwoStrings(nomeMaps, razao);
+                const scoreFantasia = stringSimilarity.compareTwoStrings(nomeMaps, fantasia);
+                
+                // Define a confiança baseada no melhor match
+                enrichment.match_confidence = Math.max(scoreRazao, scoreFantasia) * 100;
+
+                // Regra de Corte: Só aceita se tiver > 40% de similaridade OU se a cidade bater exatamente
+                const cidadeBate = lead.cidade && dadosFiscais.municipio && 
+                                   lead.cidade.toLowerCase().includes(dadosFiscais.municipio.toLowerCase());
+
+                if (enrichment.match_confidence > 40 || (enrichment.match_confidence > 25 && cidadeBate)) {
+                    
+                    enrichment.cnpj = cnpjMatch[0];
+                    enrichment.razao_social = titleCase(dadosFiscais.razao_social);
+                    enrichment.nome_fantasia = titleCase(dadosFiscais.nome_fantasia);
+                    enrichment.status_receita = dadosFiscais.descricao_situacao_cadastral;
+                    enrichment.data_abertura = dadosFiscais.data_inicio_atividade;
+                    enrichment.capital_social = parseFloat(dadosFiscais.capital_social || 0);
+                    enrichment.atividade_principal = dadosFiscais.cnae_fiscal_descricao;
+                    enrichment.enrich_source = 'BrasilAPI_Verified';
+                    enrichment.enriched = true;
+
+                    // --- B. EXTRAÇÃO DO SÓCIO ADMINISTRADOR (DECISOR) ---
+                    if (dadosFiscais.qsa && Array.isArray(dadosFiscais.qsa)) {
+                        // Prioridade 1: Sócio-Administrador (Cód 49)
+                        // Prioridade 2: Titular Pessoa Física (Cód 65 - MEIs/Individuais)
+                        // Prioridade 3: Qualquer sócio listado
+                        const socioAdmin = dadosFiscais.qsa.find(s => 
+                            s.qualificacao_socio_administrador?.code == 49 || 
+                            s.qualificacao_socio_administrador?.code == 65
+                        ) || dadosFiscais.qsa[0];
+
+                        if (socioAdmin) {
+                            let nomeSocio = socioAdmin.nome_socio || socioAdmin.nome;
+                            enrichment.dono = titleCase(nomeSocio);
+                        }
+                    }
+
+                    // --- C. EXTRAÇÃO DE CONTATO FISCAL ---
+                    if (dadosFiscais.ddd_telefone_1 && dadosFiscais.telefone_1) {
+                        enrichment.celular_fiscal = `(${dadosFiscais.ddd_telefone_1}) ${dadosFiscais.telefone_1}`;
+                    }
+                }
+            }
+        }
+
+    } catch (erro) {
+        // Log silencioso para não poluir o terminal principal, erros aqui não devem parar o fluxo
+        // console.error(`[ENRICH WARN] Falha ao enriquecer ${lead.name}: ${erro.message}`);
+    } finally {
+        await browser.close();
     }
 
-    await workbookSaida.xlsx.writeFile(ARQUIVO_SAIDA);
-    await browser.close();
-    console.log(`🏁 FIM!`);
-})();
+    // --- CÁLCULO DE SCORE FINAL (Quality Score V2) ---
+    // Atualiza o score do lead baseado nos dados financeiros descobertos
+    let finalScore = lead.quality_score || 50;
+
+    if (enrichment.enriched) {
+        // Empresa Ativa ganha pontos
+        if (enrichment.status_receita === 'ATIVA') finalScore += 10;
+        
+        // Capital Social alto indica poder de compra
+        if (enrichment.capital_social > 100000) finalScore += 20;
+        else if (enrichment.capital_social > 20000) finalScore += 10;
+
+        // Decisor identificado é ouro
+        if (enrichment.dono) finalScore += 15;
+
+        // Penalidade se o CNPJ não estiver ativo
+        if (enrichment.status_receita && enrichment.status_receita !== 'ATIVA') finalScore -= 100;
+    }
+
+    return { 
+        ...lead, 
+        ...enrichment, 
+        quality_score: Math.min(Math.max(finalScore, 0), 100) // Clamp entre 0 e 100
+    };
+}
+
+module.exports = { enriquecerLeadIndividual };

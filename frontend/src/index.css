@@ -2,25 +2,58 @@
 @tailwind components;
 @tailwind utilities;
 
-/* FORÇA BRUTA: Reseta tudo para ocupar a tela toda */
+/* CONFIGURAÇÃO DE TELA CHEIA */
 html, body, #root {
-  height: 100vh !important;
-  width: 100vw !important;
-  margin: 0 !important;
-  padding: 0 !important;
-  overflow: hidden !important;
+  height: 100vh;
+  width: 100vw;
+  overflow: hidden; /* Trava a rolagem da janela, usamos scroll interno */
   background-color: #020617;
+  color: #f8fafc;
+  margin: 0;
+  padding: 0;
 }
 
-#root {
-  display: flex !important;
-  flex-direction: column !important;
-  justify-content: flex-start !important; /* Cola no topo */
-  text-align: left !important;
+/* --- CORREÇÃO DO SLIDER (RANGE) --- */
+input[type=range] {
+  -webkit-appearance: none; 
+  @apply h-2 bg-slate-700 rounded-lg cursor-pointer w-full;
+}
+input[type=range]::-webkit-slider-thumb {
+  -webkit-appearance: none;
+  @apply w-4 h-4 bg-blue-500 rounded-full shadow transition-transform hover:scale-110;
+  margin-top: -4px;
+}
+input[type=range]::-webkit-slider-runnable-track {
+  @apply w-full h-2 bg-slate-700 rounded-lg;
 }
 
-.leaflet-container {
-  width: 100%;
-  height: 100%;
-  z-index: 1;
+/* --- CORREÇÃO LISTAS E DROPDOWNS (Fundo Sólido) --- */
+[role="listbox"], 
+[role="dialog"], 
+[role="menu"], 
+.popover-content, 
+datalist,
+select {
+  background-color: #0f172a !important; /* Azul escuro sólido */
+  border: 1px solid #334155 !important;
+  color: white !important;
+  z-index: 9999 !important;
 }
+
+/* Itens da lista */
+option, [role="option"] {
+  background-color: #0f172a !important;
+  color: white !important;
+  padding: 8px;
+}
+option:hover, [role="option"]:hover {
+  background-color: #1e293b !important;
+}
+
+/* --- SCROLLBAR FINA --- */
+.custom-scrollbar::-webkit-scrollbar { width: 6px; height: 6px; }
+.custom-scrollbar::-webkit-scrollbar-track { background: #020617; }
+.custom-scrollbar::-webkit-scrollbar-thumb { background: #334155; border-radius: 3px; }
+.custom-scrollbar::-webkit-scrollbar-thumb:hover { background: #475569; }
+
+.leaflet-container { width: 100%; height: 100%; z-index: 1; }
