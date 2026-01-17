@@ -1,3 +1,2 @@
-2026/01/15-00:12:38.310 658 Reusing MANIFEST C:\Users\marlo\enerzee-sdr-automation\wpp_session\session\Default\Service Worker\Database/MANIFEST-000001
-2026/01/15-00:12:38.313 658 Recovering log #3
-2026/01/15-00:12:38.320 658 Reusing old log C:\Users\marlo\enerzee-sdr-automation\wpp_session\session\Default\Service Worker\Database/000003.log 
+2026/01/15-01:05:29.732 5c38 Creating DB C:\Users\marlo\enerzee-sdr-automation\wpp_session\session\Default\Service Worker\Database since it was missing.
+2026/01/15-01:05:29.740 5c38 Reusing MANIFEST C:\Users\marlo\enerzee-sdr-automation\wpp_session\session\Default\Service Worker\Database/MANIFEST-000001

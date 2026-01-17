@@ -144,7 +144,8 @@ function processarLimpeza(leadsBrutos) {
             // Dados de Identificação
             name: nomeLimpo,
             original_name: raw.name,
-            
+            valido: true, // <--- ADICIONE ESTA LINHA AQUI
+            city: raw.city,
             // Dados de Contato
             phone: foneInfo.visual,
             whatsappId: foneInfo.whatsappId,

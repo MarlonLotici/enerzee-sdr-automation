@@ -331,7 +331,8 @@ export default function App() {
 
   // --- RENDERIZAÇÃO ---
   return (
-    <div className="bg-[#020617] text-slate-100 font-sans relative flex flex-col h-screen overflow-hidden">
+ <div className="bg-[#020617] text-slate-100 font-sans relative min-h-screen w-full flex flex-col">
+    {/* O fundo azul agora irá até o final da página, não importa o tamanho */}
       
       {/* HEADER */}
       <header className="border-b border-slate-800 bg-slate-900/95 px-6 py-4 shrink-0 z-50">
@@ -378,16 +379,16 @@ export default function App() {
       )}
 
       {/* BODY */}
-      <main className="flex-1 w-full flex flex-col overflow-hidden relative bg-[#020617]">
-        <Tabs value={activeTab} onValueChange={setActiveTab} className="flex flex-col h-full">
-          <TabsList className="bg-slate-900 border-b border-slate-800 p-0 w-full h-12 justify-start px-4">
+    <main className="w-full relative bg-[#020617]">
+        <Tabs value={activeTab} onValueChange={setActiveTab} className="w-full">
+          <TabsList className="bg-slate-900 border-b border-slate-800 p-0 w-full h-12 justify-start px-4 sticky top-0 z-40 shadow-md">
             <TabsTrigger value="search" className="data-[state=active]:text-blue-400 px-6"><MapPin className="mr-2 h-4 w-4"/> Radar</TabsTrigger>
             <TabsTrigger value="crm" className="data-[state=active]:text-blue-400 px-6"><LayoutDashboard className="mr-2 h-4 w-4"/> CRM</TabsTrigger>
             <TabsTrigger value="connections" className="data-[state=active]:text-blue-400 px-6"><MessageSquare className="mr-2 h-4 w-4"/> WhatsApp</TabsTrigger>
           </TabsList>
 
           {/* ABA RADAR */}
-          <TabsContent value="search" className="flex-1 flex flex-col lg:flex-row gap-0 h-full overflow-hidden data-[state=inactive]:hidden">
+          <TabsContent value="search" className="h-[calc(100vh-112px)] flex flex-col lg:flex-row gap-0 overflow-hidden data-[state=inactive]:hidden">
               <div className="w-full lg:w-[320px] bg-slate-900 border-r border-slate-800 p-4 space-y-4 overflow-y-auto z-20 shadow-xl">
                  <div className="space-y-2">
                     <Label>1. Nicho</Label>
@@ -456,7 +457,7 @@ export default function App() {
           </TabsContent>
 
           {/* ABA CRM */}
-          <TabsContent value="crm" className="flex-1 flex flex-col h-full overflow-hidden data-[state=inactive]:hidden">
+         <TabsContent value="crm" className="w-full data-[state=inactive]:hidden">
              <div className="p-4 border-b border-slate-800 flex justify-between">
                 <Input placeholder="Filtrar..." className="w-64 bg-slate-900 border-slate-700" value={filterText} onChange={e => setFilterText(e.target.value)}/>
                 <div className="flex gap-2">
@@ -498,7 +499,7 @@ export default function App() {
           </TabsContent>
 
           {/* ABA WHATSAPP */}
-          <TabsContent value="connections" className="flex-1 flex flex-col h-full overflow-hidden data-[state=inactive]:hidden">
+          <TabsContent value="connections" className="h-[calc(100vh-112px)] flex flex-col overflow-hidden data-[state=inactive]:hidden">
                 <div className="bg-slate-800 border-b border-slate-700 p-4 flex items-center justify-between shrink-0">
                   <div className="flex items-center gap-4">
                       <div className="flex items-center gap-2">
@@ -582,25 +583,87 @@ export default function App() {
       </Dialog>
 
       {/* MODAL EDITAR */}
-      <Dialog open={!!editingLead} onOpenChange={() => setEditingLead(null)}>
-        <DialogContent className="bg-slate-900 border-slate-700 text-white">
-            <DialogHeader><DialogTitle>Editar</DialogTitle></DialogHeader>
-            <div className="space-y-4">
-                <div><Label>Nome</Label><Input value={editingLead?.name} onChange={e => setEditingLead({...editingLead, name: e.target.value})} className="bg-slate-800"/></div>
-                <div>
-                    <Label>Status</Label>
-                    <select 
-                        value={editingLead?.status} 
-                        onChange={e => setEditingLead({...editingLead, status: e.target.value})}
-                        className="w-full bg-slate-800 border border-slate-700 rounded p-2"
-                    >
-                        <option value="new">Novo</option>
-                        <option value="contact">Em Contato</option>
-                        <option value="closed">Fechado</option>
-                    </select>
-                </div>
+ {/* MODAL DETALHES - EXIBIÇÃO DE DADOS COMPLETOS */}
+{/* MODAL DETALHES - EXIBIÇÃO DE DADOS COMPLETOS (ATUALIZADO V11) */}
+      <Dialog open={!!selectedLead} onOpenChange={() => setSelectedLead(null)}>
+        <DialogContent className="bg-slate-900 border-slate-700 text-white max-w-2xl">
+          <DialogHeader>
+            <div className="flex items-center gap-3">
+                <DialogTitle className="text-blue-400 text-xl">{selectedLead?.name}</DialogTitle>
+                {/* NOVA BADGE DE PORTE DA EMPRESA */}
+                {selectedLead?.porte && (
+                    <Badge variant="outline" className="border-blue-500 text-blue-400 text-[10px] h-5">
+                        {selectedLead.porte}
+                    </Badge>
+                )}
             </div>
-            <DialogFooter><Button onClick={handleSaveEdit}>Salvar</Button></DialogFooter>
+            {/* NOVA DESCRIÇÃO COM ATIVIDADE PRINCIPAL */}
+            <DialogDescription className="text-slate-400">
+                {selectedLead?.atividade_principal 
+                    ? selectedLead.atividade_principal 
+                    : "Dados detalhados do decisor e empresa"}
+            </DialogDescription>
+          </DialogHeader>
+
+          <div className="grid grid-cols-2 gap-4 py-4">
+            {/* Contato e Sócio */}
+            <div className="bg-slate-800 p-3 rounded border border-slate-700">
+              <Label className="text-xs text-slate-500">Sócio Proprietário</Label>
+              <div className="text-md font-bold text-yellow-500">{selectedLead?.dono || "Não identificado"}</div>
+            </div>
+            <div className="bg-slate-800 p-3 rounded border border-slate-700">
+              <Label className="text-xs text-slate-500">Telefone</Label>
+              <div className="text-md flex items-center gap-2">
+                  {selectedLead?.celular_fiscal || selectedLead?.phone || selectedLead?.telefone}
+                  {selectedLead?.celular_fiscal && <Badge className="bg-green-900 text-green-200 text-[9px] px-1">Fiscal</Badge>}
+              </div>
+            </div>
+
+            {/* Localização INTELIGENTE */}
+            <div className="col-span-2 bg-slate-800 p-3 rounded border border-slate-700">
+              <div className="flex justify-between items-center mb-1">
+                  <Label className="text-xs text-slate-500">📍 Endereço Completo</Label>
+                  {/* Selo de verificação se veio da Receita Federal */}
+                  {selectedLead?.endereco_fiscal && (
+                      <span className="text-[10px] text-green-400 flex items-center gap-1">
+                          <CheckSquare className="h-3 w-3"/> Validado na Receita
+                      </span>
+                  )}
+              </div>
+              
+              {/* AQUI ESTÁ A CORREÇÃO PRINCIPAL: */}
+              <div className="text-sm">
+                  {selectedLead?.endereco_fiscal || selectedLead?.address || "Verificar no Maps"}
+              </div>
+              
+              {/* Mostra Bairro e CEP se disponíveis */}
+              {(selectedLead?.bairro || selectedLead?.cep) && (
+                  <div className="text-xs text-slate-500 mt-1">
+                      {selectedLead.bairro && `Bairro: ${selectedLead.bairro}`} 
+                      {selectedLead.cep && ` • CEP: ${selectedLead.cep}`}
+                  </div>
+              )}
+            </div>
+
+            {/* Inteligência Fiscal */}
+            <div className="bg-slate-800 p-3 rounded border border-slate-700">
+              <Label className="text-xs text-slate-500">CNPJ</Label>
+              <div className="text-sm font-mono">{selectedLead?.cnpj || "N/A"}</div>
+            </div>
+            <div className="bg-slate-800 p-3 rounded border border-slate-700">
+              <Label className="text-xs text-slate-500">Capital Social</Label>
+              <div className="text-sm text-green-400">
+                  {selectedLead?.capital_social ? `R$ ${selectedLead.capital_social.toLocaleString('pt-BR')}` : "N/A"}
+              </div>
+            </div>
+          </div>
+
+          <DialogFooter>
+            <Button onClick={() => handleOpenChatFromLead(selectedLead)} className="bg-green-600 w-full font-bold py-6 hover:bg-green-500">
+              <MessageSquare className="mr-2 h-5 w-5"/> 
+              {selectedLead?.dono ? `Chamar ${selectedLead.dono.split(' ')[0]}` : "Falar com Responsável"}
+            </Button>
+          </DialogFooter>
         </DialogContent>
       </Dialog>
 
@@ -611,12 +674,14 @@ export default function App() {
 // --- COMPONENTES AUXILIARES ---
 function KanbanColumn({ title, count, color, children }) {
     return (
-        <div className="min-w-[300px] bg-slate-800/30 border border-slate-700 rounded-xl flex flex-col h-full">
-            <div className="p-3 border-b border-slate-700 flex justify-between items-center bg-slate-900/95">
+        <div className="min-w-[320px] bg-slate-800/30 border border-slate-700 rounded-xl flex flex-col h-[650px] mb-10 overflow-hidden">
+            <div className="p-3 border-b border-slate-700 flex justify-between items-center bg-slate-900/95 rounded-t-xl shrink-0 sticky top-0 z-10">
                 <span className="font-bold text-sm">{title}</span>
                 <Badge variant="secondary">{count}</Badge>
             </div>
-            <div className="p-3 space-y-3 overflow-y-auto flex-1 custom-scrollbar">{children}</div>
+            <div className="p-3 space-y-3 flex-1 overflow-y-auto custom-scrollbar bg-slate-900/20">
+                {children}
+            </div>
         </div>
     )
 }
@@ -624,18 +689,52 @@ function KanbanColumn({ title, count, color, children }) {
 function LeadCard({ lead, isSelected, onSelect, onView, onEdit }) {
     return (
         <div 
-            className={`bg-slate-800 p-4 rounded-lg border shadow-sm cursor-pointer relative group ${isSelected ? 'border-blue-500' : 'border-slate-700 hover:border-slate-500'}`}
+            className={`bg-slate-800 p-4 rounded-lg border shadow-sm cursor-pointer relative group transition-all ${isSelected ? 'border-blue-500 bg-slate-800/90' : 'border-slate-700 hover:border-slate-500'}`}
             onClick={onView}
         >
             <div className="flex justify-between items-start mb-2">
                 <div onClick={(e) => { e.stopPropagation(); onSelect(); }}>
                     {isSelected ? <CheckSquare className="h-5 w-5 text-blue-500"/> : <Square className="h-5 w-5 text-slate-500"/>}
                 </div>
-                <button onClick={(e) => { e.stopPropagation(); onEdit(); }} className="text-slate-600 hover:text-white"><Edit2 className="h-4 w-4"/></button>
+                <div className="flex gap-2">
+                    {/* Badge de Porte direto no Card */}
+                    {lead.porte && (
+                        <span className="text-[9px] bg-blue-900/50 text-blue-300 px-1.5 py-0.5 rounded border border-blue-800">
+                            {lead.porte}
+                        </span>
+                    )}
+                    <button onClick={(e) => { e.stopPropagation(); onEdit(); }} className="text-slate-600 hover:text-white">
+                        <Edit2 className="h-3.5 w-3.5"/>
+                    </button>
+                </div>
             </div>
-            <div className="font-bold text-white mb-1 truncate">{lead.name}</div>
-            <div className="text-xs text-slate-400 flex items-center gap-1"><Phone className="h-3 w-3"/> {lead.phone}</div>
-            <div className="mt-2 text-[10px] bg-slate-900 p-1 rounded inline-block text-slate-300 border border-slate-700">{lead.niche}</div>
+
+            <div className="font-bold text-white mb-1 truncate text-sm flex items-center gap-1">
+                {lead.name}
+                {lead.cnpj && <div className="w-1.5 h-1.5 rounded-full bg-green-500" title="CNPJ Identificado"></div>}
+            </div>
+            
+            <div className="text-[11px] text-slate-400 flex items-center gap-1 mb-1">
+                <Phone className="h-3 w-3 text-slate-500"/> {lead.phone || "Sem telefone"}
+            </div>
+
+            {/* Mostra o Bairro se o endereço fiscal existir */}
+            {lead.bairro && (
+                <div className="text-[10px] text-slate-500 flex items-center gap-1 italic">
+                    <MapPin className="h-3 w-3"/> {lead.bairro}
+                </div>
+            )}
+
+            <div className="mt-3 flex justify-between items-center">
+                <div className="text-[9px] bg-slate-900 px-2 py-0.5 rounded text-slate-400 border border-slate-700 uppercase tracking-wider">
+                    {lead.niche}
+                </div>
+                {lead.dono && (
+                    <span className="text-[10px] text-yellow-500/80 font-medium">
+                        👤 {lead.dono.split(' ')[0]}
+                    </span>
+                )}
+            </div>
         </div>
     )
 }

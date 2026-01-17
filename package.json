@@ -16,6 +16,7 @@
   "author": "Marlon Lotici",
   "license": "ISC",
   "dependencies": {
+    "@supabase/supabase-js": "^2.90.1",
     "@wppconnect-team/wppconnect": "^1.35.2",
     "bull": "^4.16.5",
     "cors": "^2.8.5",

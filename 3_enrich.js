@@ -1,6 +1,6 @@
 /**
- * 3_enrich.js - MÓDULO DE INTELIGÊNCIA CORPORATIVA V5 (MASTER ARCHITECTURE)
- * Focado em: Discovery de CNPJ, Validação de Identidade e Extração de Decisores.
+ * 3_enrich.js - MÓDULO V11 (DATA PLUS)
+ * Lógica V10 (DuckDuckGo Open) + Extração Avançada de Endereço e CNAEs.
  */
 
 const puppeteer = require('puppeteer-extra');
@@ -10,17 +10,11 @@ const stringSimilarity = require('string-similarity');
 
 puppeteer.use(StealthPlugin());
 
-// Rotação de User-Agents para evitar Fingerprinting
 const USER_AGENTS = [
-    'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
-    'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/17.2 Safari/605.1.15',
-    'Mozilla/5.0 (Windows NT 10.0; Win64; x64; rv:121.0) Gecko/20100101 Firefox/121.0'
+    'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/121.0.0.0 Safari/537.36',
+    'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36'
 ];
 
-/**
- * Consulta API Pública do Governo (BrasilAPI)
- * Retorna dados fiscais oficiais.
- */
 async function consultarDadosOficiais(cnpj) {
     return new Promise((resolve) => {
         const req = https.get(`https://brasilapi.com.br/api/cnpj/v1/${cnpj}`, {
@@ -32,107 +26,112 @@ async function consultarDadosOficiais(cnpj) {
             res.on('end', () => {
                 if (res.statusCode === 200) {
                     try { resolve(JSON.parse(data)); } catch { resolve(null); }
-                } else {
-                    resolve(null);
-                }
+                } else { resolve(null); }
             });
         });
-        
         req.on('error', () => resolve(null));
         req.on('timeout', () => { req.destroy(); resolve(null); });
     });
 }
 
-/**
- * Formata strings para "Title Case"
- */
 function titleCase(str) {
     if (!str) return null;
     return str.toLowerCase().replace(/(?:^|\s)\S/g, a => a.toUpperCase());
 }
 
-/**
- * MOTOR DE ENRIQUECIMENTO
- * Recebe um lead limpo e retorna um lead enriquecido com inteligência fiscal.
- */
 async function enriquecerLeadIndividual(lead) {
-    // 1. Setup de Segurança e Performance
+    console.log(`[DIAGNÓSTICO] Recebendo lead: ${lead.name} | Cidade: ${lead.city}`);
+    
+    // MODO VISUAL LIGADO
     const browser = await puppeteer.launch({ 
-        headless: "new", 
-        args: ['--no-sandbox', '--disable-setuid-sandbox', '--disable-dev-shm-usage', '--single-process'] 
+        headless: false, 
+        defaultViewport: null,
+        args: ['--start-maximized', '--no-sandbox', '--disable-setuid-sandbox'] 
     });
     
     const page = await browser.newPage();
+    page.setDefaultNavigationTimeout(45000);
     
-    // Bloqueio Agressivo de Recursos (Economia de Banda e CPU para SaaS)
     await page.setRequestInterception(true);
     page.on('request', (req) => {
-        const type = req.resourceType();
-        if (['image', 'font', 'stylesheet', 'media', 'other'].includes(type)) req.abort();
+        if (['image', 'media', 'font'].includes(req.resourceType())) req.abort();
         else req.continue();
     });
 
-    // Objeto de Retorno Padrão (Merge Safe)
+    // Objeto expandido com novos campos
     let enrichment = {
-        cnpj: null,
-        razao_social: null,
+        cnpj: null, 
+        razao_social: null, 
         nome_fantasia: null,
-        dono: null,           // O "Alvo" (Decisor)
-        celular_fiscal: null, // Telefone registrado na Receita
+        dono: null, 
+        celular_fiscal: null, 
         capital_social: 0,
-        atividade_principal: null,
+        atividade_principal: null, 
+        atividades_secundarias: [], // NOVO
         data_abertura: null,
-        status_receita: null,
-        match_confidence: 0,  // 0 a 100
-        enriched: false,
-        enrich_source: null
+        status_receita: null, 
+        porte: null, // NOVO
+        endereco_fiscal: null, // NOVO (Endereço perfeito)
+        bairro: null, // NOVO
+        cep: null, // NOVO
+        match_confidence: 0, 
+        enriched: false
     };
 
-    try {
-        await page.setUserAgent(USER_AGENTS[Math.floor(Math.random() * USER_AGENTS.length)]);
+    await new Promise(r => setTimeout(r, 2000));
 
-        // 2. BUSCA DE CNPJ (OSINT - Open Source Intelligence)
-        // Usamos Bing pois o Google bloqueia IPs de datacenter muito rápido.
-        // Query otimizada: Nome + Cidade + CNPJ
-        const termoBusca = `"${lead.name.replace(/[^\w\s]/gi, '')}" ${lead.cidade || ""} CNPJ`;
+    try {
+        await page.setUserAgent(USER_AGENTS[0]);
+
+        // --- LÓGICA DE BUSCA V10 (MANTIDA) ---
+        let termoBusca = "";
+        const localidade = lead.city || lead.cidade || "";
+        let nomeLimpo = lead.name.replace(/["-]/g, ' ').trim(); 
+
+        if (nomeLimpo.includes("Supermercado")) {
+             // Lógica para focar na marca se necessário
+        }
+
+        if (localidade.length > 2) {
+            termoBusca = `${nomeLimpo} ${localidade} CNPJ`;
+        } else {
+            termoBusca = `${nomeLimpo} CNPJ`;
+        }
+
+        console.log(`[ENRICH] 🦆 Buscando no DuckDuckGo (Data Plus): ${termoBusca}`);
         
-        await page.goto(`https://www.bing.com/search?q=${encodeURIComponent(termoBusca)}`, { 
-            waitUntil: 'domcontentloaded', 
-            timeout: 15000 
+        await page.goto(`https://duckduckgo.com/?q=${encodeURIComponent(termoBusca)}&t=h_&ia=web`, { 
+            waitUntil: 'domcontentloaded' 
         });
 
-        // Extração de Texto do corpo da busca
+        try { await page.waitForSelector('#react-layout', { timeout: 8000 }); } catch (e) {}
+        await new Promise(r => setTimeout(r, 1500));
+
         const bodyText = await page.evaluate(() => document.body.innerText);
-        
-        // Regex de CNPJ Estrito
-        const cnpjMatch = bodyText.match(/\d{2}\.\d{3}\.\d{3}\/\d{4}-\d{2}/);
+        const cnpjMatch = bodyText.match(/\d{2}\.?\d{3}\.?\d{3}\/?\d{4}-?\d{2}/);
 
         if (cnpjMatch) {
+            console.log(`[ENRICH] ✅ CNPJ Localizado: ${cnpjMatch[0]}`);
             const cnpjLimpo = cnpjMatch[0].replace(/\D/g, '');
-            
-            // 3. VALIDAÇÃO OFICIAL (Cross-Check)
             const dadosFiscais = await consultarDadosOficiais(cnpjLimpo);
 
             if (dadosFiscais) {
-                // --- A. ALGORITMO DE MATCH DE IDENTIDADE ---
-                // Compara o nome que o Scraper achou no Maps com a Razão Social/Fantasia da Receita.
-                // Isso evita ligar para a empresa errada.
+                console.log(`[ENRICH] 🏛️ Dados Oficiais: ${dadosFiscais.razao_social}`);
+                
                 const nomeMaps = lead.name.toUpperCase();
                 const razao = (dadosFiscais.razao_social || "").toUpperCase();
                 const fantasia = (dadosFiscais.nome_fantasia || "").toUpperCase();
-
+                
                 const scoreRazao = stringSimilarity.compareTwoStrings(nomeMaps, razao);
                 const scoreFantasia = stringSimilarity.compareTwoStrings(nomeMaps, fantasia);
-                
-                // Define a confiança baseada no melhor match
                 enrichment.match_confidence = Math.max(scoreRazao, scoreFantasia) * 100;
 
-                // Regra de Corte: Só aceita se tiver > 40% de similaridade OU se a cidade bater exatamente
-                const cidadeBate = lead.cidade && dadosFiscais.municipio && 
-                                   lead.cidade.toLowerCase().includes(dadosFiscais.municipio.toLowerCase());
+                const cidadeBate = lead.address && dadosFiscais.municipio && 
+                                   lead.address.toLowerCase().includes(dadosFiscais.municipio.toLowerCase());
 
-                if (enrichment.match_confidence > 40 || (enrichment.match_confidence > 25 && cidadeBate)) {
+                if (enrichment.match_confidence > 20 || cidadeBate || (localidade && localidade.toUpperCase() === dadosFiscais.municipio)) {
                     
+                    // --- CAPTURA DE DADOS EXPANDIDA (V11) ---
                     enrichment.cnpj = cnpjMatch[0];
                     enrichment.razao_social = titleCase(dadosFiscais.razao_social);
                     enrichment.nome_fantasia = titleCase(dadosFiscais.nome_fantasia);
@@ -140,64 +139,67 @@ async function enriquecerLeadIndividual(lead) {
                     enrichment.data_abertura = dadosFiscais.data_inicio_atividade;
                     enrichment.capital_social = parseFloat(dadosFiscais.capital_social || 0);
                     enrichment.atividade_principal = dadosFiscais.cnae_fiscal_descricao;
-                    enrichment.enrich_source = 'BrasilAPI_Verified';
+                    enrichment.porte = dadosFiscais.porte; // ME, EPP, etc.
+
+                    // Captura de Atividades Secundárias (Top 3)
+                    if (dadosFiscais.cnaes_secundarios && dadosFiscais.cnaes_secundarios.length > 0) {
+                        enrichment.atividades_secundarias = dadosFiscais.cnaes_secundarios
+                            .slice(0, 3)
+                            .map(c => c.descricao);
+                    }
+
+                    // --- MELHORIA DE ENDEREÇO (AQUI ESTÁ O SEGREDO) ---
+                    // Montamos o endereço oficial vindo da Receita Federal
+                    const logradouro = titleCase(dadosFiscais.logradouro) || "";
+                    const numero = dadosFiscais.numero || "S/N";
+                    const complemento = dadosFiscais.complemento ? ` - ${dadosFiscais.complemento}` : "";
+                    const bairro = titleCase(dadosFiscais.bairro) || "";
+                    const cep = dadosFiscais.cep || "";
+                    const uf = dadosFiscais.uf || "";
+
+                    enrichment.bairro = bairro;
+                    enrichment.cep = cep;
+                    
+                    // Cria uma string de endereço linda e completa
+                    enrichment.endereco_fiscal = `${logradouro}, ${numero}${complemento} - ${bairro}, ${cep} (${uf})`;
+                    console.log(`[ENRICH] 📍 Endereço Fiscal: ${enrichment.endereco_fiscal}`);
+
                     enrichment.enriched = true;
 
-                    // --- B. EXTRAÇÃO DO SÓCIO ADMINISTRADOR (DECISOR) ---
+                    // Sócios
                     if (dadosFiscais.qsa && Array.isArray(dadosFiscais.qsa)) {
-                        // Prioridade 1: Sócio-Administrador (Cód 49)
-                        // Prioridade 2: Titular Pessoa Física (Cód 65 - MEIs/Individuais)
-                        // Prioridade 3: Qualquer sócio listado
                         const socioAdmin = dadosFiscais.qsa.find(s => 
                             s.qualificacao_socio_administrador?.code == 49 || 
                             s.qualificacao_socio_administrador?.code == 65
                         ) || dadosFiscais.qsa[0];
 
                         if (socioAdmin) {
-                            let nomeSocio = socioAdmin.nome_socio || socioAdmin.nome;
-                            enrichment.dono = titleCase(nomeSocio);
+                            enrichment.dono = titleCase(socioAdmin.nome_socio || socioAdmin.nome);
+                            console.log(`[ENRICH] 👤 Sócio: ${enrichment.dono}`);
                         }
                     }
-
-                    // --- C. EXTRAÇÃO DE CONTATO FISCAL ---
+                    // Telefone Fiscal
                     if (dadosFiscais.ddd_telefone_1 && dadosFiscais.telefone_1) {
                         enrichment.celular_fiscal = `(${dadosFiscais.ddd_telefone_1}) ${dadosFiscais.telefone_1}`;
                     }
                 }
             }
+        } else {
+            console.log(`[ENRICH] ❌ Nenhum CNPJ achado.`);
+            try { await page.screenshot({ path: `erro_${lead.name.replace(/[^a-z0-9]/gi, '')}.png` }); } catch(e){}
         }
 
     } catch (erro) {
-        // Log silencioso para não poluir o terminal principal, erros aqui não devem parar o fluxo
-        // console.error(`[ENRICH WARN] Falha ao enriquecer ${lead.name}: ${erro.message}`);
+        console.error(`[ENRICH ERROR] ${erro.message}`);
     } finally {
-        await browser.close();
+        try { if (browser) await browser.close(); } catch (e) {}
     }
 
-    // --- CÁLCULO DE SCORE FINAL (Quality Score V2) ---
-    // Atualiza o score do lead baseado nos dados financeiros descobertos
     let finalScore = lead.quality_score || 50;
+    if (enrichment.enriched) finalScore += 40;
 
-    if (enrichment.enriched) {
-        // Empresa Ativa ganha pontos
-        if (enrichment.status_receita === 'ATIVA') finalScore += 10;
-        
-        // Capital Social alto indica poder de compra
-        if (enrichment.capital_social > 100000) finalScore += 20;
-        else if (enrichment.capital_social > 20000) finalScore += 10;
-
-        // Decisor identificado é ouro
-        if (enrichment.dono) finalScore += 15;
-
-        // Penalidade se o CNPJ não estiver ativo
-        if (enrichment.status_receita && enrichment.status_receita !== 'ATIVA') finalScore -= 100;
-    }
-
-    return { 
-        ...lead, 
-        ...enrichment, 
-        quality_score: Math.min(Math.max(finalScore, 0), 100) // Clamp entre 0 e 100
-    };
+    // Retorna tudo misturado. O Frontend pode escolher mostrar 'lead.address' (Maps) ou 'lead.endereco_fiscal' (CNPJ)
+    return { ...lead, ...enrichment, quality_score: Math.min(Math.max(finalScore, 0), 100) };
 }
 
 module.exports = { enriquecerLeadIndividual };

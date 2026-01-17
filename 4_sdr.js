@@ -1,57 +1,37 @@
 /**
- * 4_sdr.js - MÓDULO DE VENDAS NEURAL V5 (MASTER ARCHITECTURE)
- * Focado em: Abordagem Sniper, Gestão de Estado e Negociação Autônoma via LLM.
+ * 4_sdr.js - MÓDULO DE VENDAS NEURAL V10 (VERSÃO FINAL CORRIGIDA)
  */
 
 const { Client, LocalAuth } = require('whatsapp-web.js');
-const qrcode = require('qrcode-terminal'); // Para dev local (terminal)
+const qrcode = require('qrcode-terminal');
 const Groq = require('groq-sdk');
-const fs = require('fs');
 require('dotenv').config();
+
+// --- IMPORTAÇÃO DO BANCO (SUPABASE) ---
+const db = require('./database'); 
+const { createClient } = require('@supabase/supabase-js');
+const supabase = createClient(process.env.SUPABASE_URL, process.env.SUPABASE_KEY);
 
 // --- CONFIGURAÇÃO DE INTELIGÊNCIA ---
 const groq = new Groq({ apiKey: process.env.GROQ_API_KEY });
-const MODELO_CEREBRO = "llama-3.3-70b-versatile"; // O melhor custo-benefício atual
-
-// --- BANCO DE DADOS EM MEMÓRIA (Persistência Leve) ---
-// Em produção SaaS, isso seria substituído por chamadas SQL/Redis
-const DB_FILE = 'sdr_db.json';
-let db = {
-    leads: {},          // Dados ricos dos leads (by ID)
-    conversations: {},  // Histórico de mensagens
-    blacklist: [],      // Números bloqueados
-    queue: [],          // Fila de disparo
-    stats: { sent: 0, replied: 0, converted: 0 }
-};
-
-// Carrega DB se existir
-if (fs.existsSync(DB_FILE)) {
-    try { db = JSON.parse(fs.readFileSync(DB_FILE)); } catch(e) {}
-}
-const saveDB = () => fs.writeFileSync(DB_FILE, JSON.stringify(db, null, 2));
+const MODELO_CEREBRO = "llama-3.3-70b-versatile"; 
 
 // --- CLIENTE WHATSAPP ---
 const client = new Client({
-    authStrategy: new LocalAuth({ dataPath: './wpp_session' }), // Salva sessão
+    authStrategy: new LocalAuth({ dataPath: './wpp_session' }),
     puppeteer: {
-        headless: true, // "new"
+        headless: true,
         args: ['--no-sandbox', '--disable-setuid-sandbox']
     }
 });
 
-// --- VARIÁVEIS DE CONTROLE ---
 let isReady = false;
-let socketRef = null; // Referência para comunicar com o Frontend
-const PROCESS_INTERVAL = 45000; // 45s a 90s entre disparos (Humanizado)
+let socketRef = null;
 
 // ============================================================================
 // 🧠 NÚCLEO DE INTELIGÊNCIA ARTIFICIAL
 // ============================================================================
 
-/**
- * O JUIZ: Analisa a intenção do cliente sem responder.
- * Classifica em: INTERESSE, DUVIDA, NEGATIVO, ROBO, HUMANO_REQ
- */
 async function analisarIntencao(historico) {
     const prompt = `
     Analise a conversa abaixo. Você é um classificador de leads para energia solar.
@@ -77,46 +57,65 @@ async function analisarIntencao(historico) {
         });
         return chatCompletion.choices[0].message.content.trim();
     } catch (e) {
-        return "[HUMANO]"; // Fallback seguro
+        return "[HUMANO]";
     }
 }
 
 /**
- * O CLOSER: Gera a resposta de negociação.
+ * O CLOSER V11: Inteligência Regional Enerzee + Lead Scoring
+ * Substitua toda a sua função gerarResposta por esta:
  */
 async function gerarResposta(historico, contextoLead) {
     const nomeLead = contextoLead.dono || contextoLead.name || "Gestor";
     const nomeEmpresa = contextoLead.name || "sua empresa";
+    const bairroLead = contextoLead.bairro || "sua região";
     
-    const systemPrompt = `
-    Você é o Assistente Comercial Sênior da Enerzee. Seu objetivo é agendar uma reunião de consultoria energética.
-    Seu tom é: Profissional, breve e direto. Sem "gírias de bot", sem "Prezado". Aja como um executivo ocupado.
-    
-    DADOS DO LEAD:
-    Nome: ${nomeLead}
-    Empresa: ${nomeEmpresa}
-    Contexto: Empresa com provável alto consumo de energia.
+    // 1. Identifica se é VIP (Baseado no priority_level que criamos no Supabase)
+    const isVIP = contextoLead.priority_level === 2;
+    const tomVoz = isVIP ? "Executivo/Consultivo (foco em eficiência fiscal e ROI)" : "Parceiro/Direto (foco em economia no boleto)";
 
-    REGRAS:
-    1. Responda em no máximo 2 frases curtas.
-    2. Se o cliente mostrar interesse, o objetivo é enviar este link: https://calendly.com/seu-link
-    3. Se perguntarem preço: "Depende da média de consumo, preciso simular. Posso te mandar o link da agenda?"
-    4. Se disserem que já têm: "Show! O sistema atende 100% ou ainda paga algo pra concessionária?" (Tente cavar expansão).
+    // 2. Conhecimento Regional Extraído da Relação de Atendimento 2026 
+    const infoRegional = `
+    - PE, BA, CE, MT, GO, MG, SP: Ofereça 2 meses de 25% de desconto e depois fixo em 15%.
+    - PR: Mencione 16% de desconto.
+    - RS e SC: Ofereça entre 10% e 15% de economia real.
+    - MS, PA, RN, TO: Desconto a partir de 10%.
     `;
+
+    const systemPrompt = `
+# PERSONA: ESTRATEGISTA COMERCIAL NEURAL ENERZEE
+Você é o Especialista Comercial Sênior da Enerzee, a maior integradora 5 estrelas da WEG no Brasil[cite: 103, 175, 178].
+TOM DE VOZ: ${tomVoz}.
+
+# CONTEXTO DO ECOSSISTEMA
+1. EZEE CONNECT: Portabilidade por assinatura. Sem investimento, obras ou taxas[cite: 330, 332]. Desconto via Lei 14.300/2022[cite: 335].
+2. EZEE SOLAR (REVO): Sistema fotovoltaico com INVESTIMENTO ZERO. O sistema se paga com a economia[cite: 379, 388, 485].
+3. MOBILIDADE (WEMOB): Linha completa de carregadores WEG[cite: 310, 1130, 1139].
+4. ARMAZENAMENTO (BESS): Baterias industriais para redução de custos e backup[cite: 553, 568].
+
+# DIRETRIZES REGIONAIS (RELAÇÃO 2026)
+${infoRegional}
+
+# PROTOCOLO SNIPER
+- IDENTIFICAÇÃO: Use o bairro ${bairroLead} para gerar autoridade local.
+- TRIAGEM: Lead alugado -> Ezee Connect[cite: 337]. Telhado grande/agro -> Ezee Solar/Baterias[cite: 237, 261].
+- COLETA DA FATURA (GUIA DUDA): Peça a foto da conta: "Nítida, por inteiro e paralela ao papel"[cite: 1924, 1934].
+
+# REGRAS RÍGIDAS
+1. Máximo 2 frases curtas. 
+2. Sem termos robóticos.
+3. Sempre termine com uma pergunta curta.`;
 
     try {
         const chatCompletion = await groq.chat.completions.create({
-            messages: [
-                { role: 'system', content: systemPrompt },
-                ...historico
-            ],
+            messages: [{ role: 'system', content: systemPrompt }, ...historico],
             model: MODELO_CEREBRO,
-            temperature: 0.3, // Leve criatividade
+            temperature: 0.3,
             max_tokens: 150
         });
         return chatCompletion.choices[0].message.content;
     } catch (e) {
-        return "Desculpe, estou em trânsito agora. Pode me chamar em 10min?"; // Disfarce
+        return "Consegue me enviar uma foto da sua última fatura? Assim consigo calcular seu desconto exato aqui pela Enerzee.";
     }
 }
 
@@ -124,85 +123,115 @@ async function gerarResposta(historico, contextoLead) {
 // 🎮 MOTOR DE FLUXO (WORKFLOW)
 // ============================================================================
 
-/**
- * Recebe um lead do pipeline (Scraper -> Clean -> Enrich -> SDR)
- */
-function processarLeadEntrada(lead, socket) {
-    if (!socketRef && socket) socketRef = socket; // Guarda ref do socket
+// ============================================================================
+// 🎮 MOTOR DE FLUXO (LOOP DE DISPARO COM RÉGUA DE 3 DIAS)
+// ============================================================================
 
-    // 1. Validação de Elegibilidade
-    if (lead.type !== 'mobile') {
-        if(socketRef) socketRef.emit('notification', `⏩ Lead ${lead.name} pulado (Fixo).`);
-        return;
+async function loopDisparos() {
+    if (!isReady) return;
+
+    const agora = new Date();
+    // Define o tempo de corte: 24 horas atrás
+    const dataCorte = new Date(agora.getTime() - 24 * 60 * 60 * 1000).toISOString();
+
+    // 1. PRIORIDADE MÁXIMA: FOLLOW-UP (Recuperar leads que não responderam)
+    // Busca leads em 'contact', com menos de 3 tentativas e parados há mais de 24h
+    const { data: leadsParaFollow } = await supabase
+        .from('leads')
+        .select('*')
+        .eq('status', 'contact')
+        .lt('last_contact_at', dataCorte)
+        .lt('followup_step', 3)
+        .limit(1);
+
+    if (leadsParaFollow?.length > 0) {
+        return executarReguaFollowUp(leadsParaFollow[0]);
     }
-    
-    if (db.blacklist.includes(lead.whatsappId)) return;
-    if (db.leads[lead.whatsappId]) return; // Já existe/processado
 
-    // 2. Salva no DB
-    db.leads[lead.whatsappId] = lead;
-    db.queue.push(lead.whatsappId);
-    saveDB();
+    // 2. SEGUNDA PRIORIDADE: NOVOS LEADS
+    const { data: leadsNovos } = await supabase
+        .from('leads')
+        .select('*')
+        .eq('status', 'new')
+        .limit(1);
 
-    if(socketRef) socketRef.emit('notification', `📥 Lead ${lead.name} na fila de disparo.`);
+    if (leadsNovos?.length > 0) {
+        // Trava o lead para 'contact' imediatamente para evitar disparos duplicados
+        const lead = leadsNovos[0];
+        await supabase.from('leads')
+            .update({ status: 'contact', last_contact_at: new Date().toISOString() })
+            .eq('whatsapp_id', lead.whatsapp_id);
+            
+        return executarAbordagemInicial(lead);
+    }
+
+    // 3. SE FILA VAZIA, TENTA NOVAMENTE EM 1 MINUTO
+    console.log("[SDR] 📭 Aguardando novos leads ou tempo de follow-up...");
+    setTimeout(loopDisparos, 60000);
 }
 
 /**
- * Loop de Disparo (Cronjob interno)
+ * RÉGUA DE FOLLOW-UP: Value Stacking Enerzee
  */
-async function loopDisparos() {
-    if (!isReady || db.queue.length === 0) return;
+async function executarReguaFollowUp(lead) {
+    const proximoPasso = (lead.followup_step || 0) + 1;
+    let msg = "";
 
-    // Pega o próximo
-    const zapId = db.queue.shift();
-    const lead = db.leads[zapId];
+    // Conteúdo estratégico baseado nos manuais Enerzee/WEG
+    switch (proximoPasso) {
+        case 1:
+            // Foco: Autoridade WEG e Confiança
+            msg = `Oi ${lead.dono?.split(' ')[0] || 'tudo bem'}? Passando para reforçar que a Enerzee é parceira 5 estrelas da WEG[cite: 103, 175]. Tecnologia nacional com garantia total para a *${lead.name}*. Conseguiu ver minha mensagem anterior?`;
+            break;
+        case 2:
+            // Foco: Lei 14.300 e Sem Investimento (Ezee Connect)
+            msg = `Sabia que a Lei 14.300 garante sua economia sem você gastar um real em obras[cite: 335]? No Ezee Connect é só portabilidade[cite: 330]. Quer que eu simule quanto sua conta de luz cai hoje?`;
+            break;
+        case 3:
+            // Foco: Escassez e Despedida
+            msg = `Vou precisar encerrar seu chamado por aqui para liberar a vaga de desconto do bairro ${lead.bairro || 'daí'}. Se ainda tiver interesse em reduzir custos fixos, me manda um "OI" agora!`;
+            break;
+    }
 
-    if (!lead) return;
+    if (msg) {
+        await enviarComSimulacao(lead.whatsapp_id, msg);
+        
+        // Atualiza o passo e o timestamp no banco
+        await supabase.from('leads')
+            .update({ 
+                followup_step: proximoPasso, 
+                last_contact_at: new Date().toISOString() 
+            })
+            .eq('whatsapp_id', lead.whatsapp_id);
 
+        await db.saveMessage(lead.whatsapp_id, 'assistant', msg);
+        console.log(`[SDR] 🔄 Follow-up #${proximoPasso} enviado para ${lead.name}`);
+    }
+
+    // Agenda o próximo ciclo com delay humano
+    setTimeout(loopDisparos, Math.random() * 20000 + 40000);
+}
+
+async function executarAbordagemInicial(lead) {
+    const msgInicial = lead.dono 
+        ? `Olá ${lead.dono.split(' ')[0]}, tudo bem? Sou da Enerzee.\n\nVi que a *${lead.name}* está no bairro ${lead.bairro || 'daí'}. Nossa missão é trocar seu boleto caro da concessionária por um até 25% mais barato via Ezee Connect[cite: 335, 1843]. Vocês já geram a própria energia?`
+        : `Olá, bom dia. Gostaria de falar com o responsável pela *${lead.name}* sobre a redução de custos via Lei 14.300. É por aqui?`;
+
+    await enviarComSimulacao(lead.whatsapp_id, msgInicial);
+    await db.saveMessage(lead.whatsapp_id, 'assistant', msgInicial);
+    console.log(`[SDR] 🚀 Abordagem inicial enviada para ${lead.name}`);
+    
+    setTimeout(loopDisparos, Math.random() * 20000 + 40000);
+}
+
+// Helper de simulação humana
+async function enviarComSimulacao(zapId, msg) {
     try {
-        // --- ESTRATÉGIA SNIPER (ABORDAGEM) ---
-        // Se temos o nome do sócio (Enrichment), usamos. Se não, usamos genérico.
-        let msgInicial = "";
-        
-        if (lead.dono) {
-            // Abordagem Hiper-Personalizada
-            const primeiroNome = lead.dono.split(' ')[0];
-            msgInicial = `Olá ${primeiroNome}, tudo bem? Sou da Enerzee.\n\nEncontrei a *${lead.name}* aqui nos nossos registros de potencial energético. Vocês já geram a própria energia aí?`;
-        } else {
-            // Abordagem Genérica (mas educada)
-            msgInicial = `Olá, bom dia. Gostaria de falar com o responsável pela *${lead.name}*.\n\nÉ sobre a redução de custos fixos da unidade via Lei 14.300. É por aqui?`;
-        }
-
-        console.log(`⚡ Enviando para ${lead.name} (${zapId})...`);
-        
-        // Simula digitação
         const chat = await client.getChatById(zapId);
         await chat.sendStateTyping();
-        await new Promise(r => setTimeout(r, 3000)); // 3s digitando
-
-        await client.sendMessage(zapId, msgInicial);
-        
-        // Registra histórico
-        db.conversations[zapId] = [
-            { role: 'assistant', content: msgInicial }
-        ];
-        db.stats.sent++;
-        saveDB();
-
-        if(socketRef) socketRef.emit('notification', `🚀 Mensagem enviada para: ${lead.name}`);
-
-    } catch (e) {
-        console.error(`Erro ao enviar para ${zapId}:`, e.message);
-        // Se erro de número inválido, joga na blacklist
-        if (e.message.includes('inválido') || e.message.includes('wid')) {
-            db.blacklist.push(zapId);
-        }
-    } finally {
-        saveDB();
-        // Agenda o próximo loop com tempo aleatório para evitar ban
-        const randomDelay = Math.floor(Math.random() * (90000 - 30000) + 30000); // 30s a 90s
-        setTimeout(loopDisparos, randomDelay);
-    }
+        await new Promise(r => setTimeout(r, 4000));
+        await client.sendMessage(zapId, msg);
+    } catch (e) { console.error("Erro envio:", e.message); }
 }
 
 // ============================================================================
@@ -210,17 +239,13 @@ async function loopDisparos() {
 // ============================================================================
 
 client.on('qr', (qr) => {
-    console.log('QR Code recebido!');
-    // Se tiver socket, manda pro front. Se não, mostra no terminal.
     if (socketRef) socketRef.emit('qr_code', qr);
     else qrcode.generate(qr, { small: true });
 });
 
 client.on('ready', () => {
-    console.log('✅ WhatsApp Conectado e Pronto!');
     isReady = true;
     if (socketRef) socketRef.emit('whatsapp_status', 'CONNECTED');
-    // Inicia o loop de disparos
     loopDisparos();
 });
 
@@ -228,61 +253,62 @@ client.on('message', async (msg) => {
     if (msg.fromMe || msg.isGroupMsg) return;
 
     const zapId = msg.from;
-    const lead = db.leads[zapId];
+    const { data: leadData } = await supabase.from('leads').select('*').eq('whatsapp_id', zapId).single();
 
-    // Só responde se for um lead conhecido (evita responder mãe/amigos se usar zap pessoal)
-    if (!lead) return; 
+    if (!leadData) return; 
 
-    console.log(`📩 Resposta de ${lead.name}: ${msg.body}`);
-    if(socketRef) socketRef.emit('message_received', { chatId: zapId, body: msg.body, name: lead.name });
+    if (socketRef) socketRef.emit('message_received', { chatId: zapId, body: msg.body, name: leadData.name });
 
-    // Adiciona ao histórico
-    if (!db.conversations[zapId]) db.conversations[zapId] = [];
-    db.conversations[zapId].push({ role: 'user', content: msg.body });
+    // 1. DETECÇÃO DE FATURA (IMAGEM/DOCUMENTO)
+    if (msg.hasMedia && (msg.type === 'image' || msg.type === 'document')) {
+        console.log(`[SDR] 📸 Fatura recebida de ${leadData.name}`);
+        
+        if (socketRef) socketRef.emit('notification', `🚨 FATURA RECEBIDA: ${leadData.name}`);
 
-    // 1. Analisa Intenção
-    const intencao = await analisarIntencao(db.conversations[zapId].map(m => `${m.role}: ${m.content}`).join('\n'));
-    console.log(`⚖️ Intenção: ${intencao}`);
+        // Atualiza status para 'waiting_analysis' para o vendedor humano assumir
+        await supabase.from('leads').update({ 
+            status: 'waiting_analysis',
+            followup_step: 0 // Reseta a régua pois ele interagiu
+        }).eq('whatsapp_id', zapId);
+
+        await db.saveMessage(zapId, 'user', "[ARQUIVO DE IMAGEM/FATURA]");
+
+        const confirmacaoMsg = `Recebi sua fatura aqui, ${leadData.dono?.split(' ')[0] || 'perfeito'}! 🙌\n\nJá encaminhei para nosso time de engenharia calcular seu desconto exato via Lei 14.300. Em breve te mando o estudo de economia da Enerzee.`;
+        
+        await msg.reply(confirmacaoMsg);
+        await db.saveMessage(zapId, 'assistant', confirmacaoMsg);
+        return; // Interrompe aqui para não rodar a IA de texto
+    }
+
+    // 2. LOG DE MENSAGEM DE TEXTO (MANTIDO)
+    await db.saveMessage(zapId, 'user', msg.body);
+
+    const historicoRaw = await supabase.from('messages').select('role, content').eq('whatsapp_id', zapId).order('created_at', { ascending: true });
+    const historico = historicoRaw.data.map(m => ({ role: m.role, content: m.content }));
+
+    const intencao = await analisarIntencao(historico.map(m => `${m.role}: ${m.content}`).join('\n'));
 
     if (intencao.includes('NEGATIVO') || intencao.includes('ROBO')) {
-        db.blacklist.push(zapId); // Para de falar
-        saveDB();
+        await supabase.from('leads').update({ status: 'blacklisted' }).eq('whatsapp_id', zapId);
         return;
     }
 
-    if (intencao.includes('HUMANO')) {
-        if(socketRef) socketRef.emit('notification', `⚠️ INTERVENÇÃO HUMANA: ${lead.name}`);
-        return; // Deixa para você responder manual
-    }
-
-    // 2. Gera Resposta (Se for Interesse ou Duvida)
     const chat = await msg.getChat();
     await chat.sendStateTyping();
-    
-    // Delay de "pensamento" (5s a 10s)
-    await new Promise(r => setTimeout(r, Math.random() * 5000 + 5000));
+    await new Promise(r => setTimeout(r, 5000));
 
-    const resposta = await gerarResposta(db.conversations[zapId], lead);
+    const resposta = await gerarResposta(historico, leadData);
     
     if (resposta) {
         await client.sendMessage(zapId, resposta);
-        db.conversations[zapId].push({ role: 'assistant', content: resposta });
-        saveDB();
+        await db.saveMessage(zapId, 'assistant', resposta);
     }
 });
 
-// ============================================================================
-// 🔌 EXPORTAÇÃO E INICIALIZAÇÃO
-// ============================================================================
-
 function iniciarSDR(socket) {
     socketRef = socket;
-    if (!isReady) {
-        console.log('Iniciando Cliente WPP...');
-        client.initialize().catch(err => console.error("Erro init WPP:", err));
-    } else {
-        socket.emit('whatsapp_status', 'CONNECTED');
-    }
+    if (!isReady) client.initialize().catch(err => console.error("Erro init WPP:", err));
+    else socket.emit('whatsapp_status', 'CONNECTED');
 }
 
-module.exports = { iniciarSDR, processarLeadEntrada };
+module.exports = { iniciarSDR, processarLeadEntrada: () => {} };

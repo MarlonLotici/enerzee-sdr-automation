@@ -1,3 +1,2 @@
-2026/01/15-00:12:38.906 1c90 Reusing MANIFEST C:\Users\marlo\enerzee-sdr-automation\wpp_session\session\Default\Session Storage/MANIFEST-000001
-2026/01/15-00:12:38.908 1c90 Recovering log #3
-2026/01/15-00:12:38.917 1c90 Reusing old log C:\Users\marlo\enerzee-sdr-automation\wpp_session\session\Default\Session Storage/000003.log 
+2026/01/15-01:05:28.812 6a60 Creating DB C:\Users\marlo\enerzee-sdr-automation\wpp_session\session\Default\Session Storage since it was missing.
+2026/01/15-01:05:28.888 6a60 Reusing MANIFEST C:\Users\marlo\enerzee-sdr-automation\wpp_session\session\Default\Session Storage/MANIFEST-000001
