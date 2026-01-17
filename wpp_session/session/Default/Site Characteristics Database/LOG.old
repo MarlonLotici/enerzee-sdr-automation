@@ -1,5 +1,0 @@
-2026/01/15-01:05:27.766 531c Log #3: 1 ops saved to Table #4 OK
-2026/01/15-01:05:27.774 531c Archiving C:\Users\marlo\enerzee-sdr-automation\wpp_session\session\Default\Site Characteristics Database/000003.log: OK
-2026/01/15-01:05:27.775 531c Table #4: 1 entries OK
-2026/01/15-01:05:27.776 531c Archiving C:\Users\marlo\enerzee-sdr-automation\wpp_session\session\Default\Site Characteristics Database/MANIFEST-000001: OK
-2026/01/15-01:05:27.784 531c **** Repaired leveldb C:\Users\marlo\enerzee-sdr-automation\wpp_session\session\Default\Site Characteristics Database; recovered 1 files; 130 bytes. Some data may have been lost. ****

@@ -51,3 +51,8 @@ frontend/dist/
 # Banco de dados local (Segurança e Performance)
 *.db
 leads.db
+
+wpp_session/
+sdr_db.json
+node_modules/
+.env
