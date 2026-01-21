@@ -22,12 +22,16 @@ let shouldStop = false;
 
 io.on('connection', (socket) => {
     console.log(`🔌 Conexão ativa: ${socket.id}`);
+    
+    // Conecta o módulo de WhatsApp automaticamente ao abrir o navegador
+    iniciarSDR(socket); 
 
-    // --- WHATSAPP: APENAS POR COMANDO MANUAL ---
     socket.on('conectar_whatsapp', () => {
-        console.log("📲 Iniciando conexão manual com WhatsApp...");
+        console.log("📲 Reconexão manual solicitada...");
         iniciarSDR(socket);
     });
+
+    // ... restante dos seus socket.on (start_scraping, etc)
 
     // --- MOTOR DE BUSCA (SCRAPING) ---
     socket.on('start_scraping', async (params) => {

@@ -1,22 +1,18 @@
 /**
  * 4_sdr.js - MÓDULO DE VENDAS NEURAL V10 (VERSÃO FINAL CORRIGIDA)
  */
-
 const { Client, LocalAuth } = require('whatsapp-web.js');
 const qrcode = require('qrcode-terminal');
 const Groq = require('groq-sdk');
 require('dotenv').config();
-
-// --- IMPORTAÇÃO DO BANCO (SUPABASE) ---
+const pdf = require('pdf-parse');
 const db = require('./database'); 
 const { createClient } = require('@supabase/supabase-js');
 const supabase = createClient(process.env.SUPABASE_URL, process.env.SUPABASE_KEY);
 
-// --- CONFIGURAÇÃO DE INTELIGÊNCIA ---
 const groq = new Groq({ apiKey: process.env.GROQ_API_KEY });
 const MODELO_CEREBRO = "llama-3.3-70b-versatile"; 
 
-// --- CLIENTE WHATSAPP ---
 const client = new Client({
     authStrategy: new LocalAuth({ dataPath: './wpp_session' }),
     puppeteer: {
@@ -26,7 +22,9 @@ const client = new Client({
 });
 
 let isReady = false;
-let socketRef = null;
+let socketRef = null; // Mantenha apenas esta variável solta
+
+// ... abaixo segue a função analisarIntencao ... 
 
 // ============================================================================
 // 🧠 NÚCLEO DE INTELIGÊNCIA ARTIFICIAL
@@ -239,8 +237,13 @@ async function enviarComSimulacao(zapId, msg) {
 // ============================================================================
 
 client.on('qr', (qr) => {
-    if (socketRef) socketRef.emit('qr_code', qr);
-    else qrcode.generate(qr, { small: true });
+    // Esta linha envia o código para o seu frontend React
+    if (socketRef) {
+        socketRef.emit('qr_code', qr); 
+        console.log("🚀 QR Code enviado para o Frontend");
+    }
+    // Mantém o backup no terminal
+    qrcode.generate(qr, { small: true });
 });
 
 client.on('ready', () => {
@@ -249,54 +252,65 @@ client.on('ready', () => {
     loopDisparos();
 });
 
+// --- HELPER DE ATRASO HUMANO (Novo) ---
+const delayHumano = (min = 10, max = 35) => {
+    const ms = Math.floor(Math.random() * (max - min + 1) + min) * 1000;
+    return new Promise(resolve => setTimeout(resolve, ms));
+};
+
+// --- MOTOR DE MENSAGENS COM TRAVA DE PAUSA (Substituto) ---
 client.on('message', async (msg) => {
-    if (msg.fromMe || msg.isGroupMsg) return;
-
+    if (msg.isGroupMsg) return;
     const zapId = msg.from;
-    const { data: leadData } = await supabase.from('leads').select('*').eq('whatsapp_id', zapId).single();
 
-    if (!leadData) return; 
-
-    if (socketRef) socketRef.emit('message_received', { chatId: zapId, body: msg.body, name: leadData.name });
-
-    // 1. DETECÇÃO DE FATURA (IMAGEM/DOCUMENTO)
-    if (msg.hasMedia && (msg.type === 'image' || msg.type === 'document')) {
-        console.log(`[SDR] 📸 Fatura recebida de ${leadData.name}`);
-        
-        if (socketRef) socketRef.emit('notification', `🚨 FATURA RECEBIDA: ${leadData.name}`);
-
-        // Atualiza status para 'waiting_analysis' para o vendedor humano assumir
-        await supabase.from('leads').update({ 
-            status: 'waiting_analysis',
-            followup_step: 0 // Reseta a régua pois ele interagiu
-        }).eq('whatsapp_id', zapId);
-
-        await db.saveMessage(zapId, 'user', "[ARQUIVO DE IMAGEM/FATURA]");
-
-        const confirmacaoMsg = `Recebi sua fatura aqui, ${leadData.dono?.split(' ')[0] || 'perfeito'}! 🙌\n\nJá encaminhei para nosso time de engenharia calcular seu desconto exato via Lei 14.300. Em breve te mando o estudo de economia da Enerzee.`;
-        
-        await msg.reply(confirmacaoMsg);
-        await db.saveMessage(zapId, 'assistant', confirmacaoMsg);
-        return; // Interrompe aqui para não rodar a IA de texto
-    }
-
-    // 2. LOG DE MENSAGEM DE TEXTO (MANTIDO)
-    await db.saveMessage(zapId, 'user', msg.body);
-
-    const historicoRaw = await supabase.from('messages').select('role, content').eq('whatsapp_id', zapId).order('created_at', { ascending: true });
-    const historico = historicoRaw.data.map(m => ({ role: m.role, content: m.content }));
-
-    const intencao = await analisarIntencao(historico.map(m => `${m.role}: ${m.content}`).join('\n'));
-
-    if (intencao.includes('NEGATIVO') || intencao.includes('ROBO')) {
-        await supabase.from('leads').update({ status: 'blacklisted' }).eq('whatsapp_id', zapId);
+    // 1. DETECÇÃO DE INTERVENÇÃO MANUAL: Se você mandar msg pelo celular, a IA pausa este lead
+    if (msg.fromMe) {
+        console.log(`[HUMANO] 👤 Intervenção manual detectada para ${zapId}. IA pausada.`);
+        await supabase.from('leads').update({ is_paused: true }).eq('whatsapp_id', zapId);
         return;
     }
 
-    const chat = await msg.getChat();
-    await chat.sendStateTyping();
-    await new Promise(r => setTimeout(r, 5000));
+    // 2. COMANDOS DE REATIVAÇÃO
+    if (msg.body === '#play') {
+        await supabase.from('leads').update({ is_paused: false }).eq('whatsapp_id', zapId);
+        return await msg.reply("🚀 IA Reativada. Voltarei a responder este lead.");
+    }
 
+    // 3. VERIFICA SE O LEAD ESTÁ EM PAUSA
+    const { data: leadStatus } = await supabase.from('leads').select('is_paused').eq('whatsapp_id', zapId).single();
+    if (leadStatus?.is_paused) return;
+
+    // 4. LOG DE MENSAGEM RECEBIDA
+    const { data: leadData } = await supabase.from('leads').select('*').eq('whatsapp_id', zapId).single();
+    if (!leadData) return;
+
+    // 5. DETECÇÃO DE FATURA (IA Vision / PDF)
+    if (msg.hasMedia) {
+        const media = await msg.downloadMedia();
+        if (msg.type === 'image') {
+            const analise = await executarLeituraIA(media.data);
+            if (analise) return await finalizarFluxoComercial(analise, msg, leadData);
+        }
+        if (msg.type === 'document' && media.mimetype === 'application/pdf') {
+            const buffer = Buffer.from(media.data, 'base64');
+            const pdfData = await pdf(buffer);
+            const analise = await executarLeituraTextoIA(pdfData.text);
+            if (analise) return await finalizarFluxoComercial(analise, msg, leadData);
+        }
+    }
+
+    // 6. PROCESSAMENTO DE RESPOSTA TEXTUAL COM ATRASO HUMANO
+    await db.saveMessage(zapId, 'user', msg.body);
+    const chat = await msg.getChat();
+    
+    // Simula tempo de leitura
+    await delayHumano(5, 12); 
+    await chat.sendStateTyping();
+    // Simula tempo de digitação
+    await delayHumano(10, 20); 
+
+    const historicoRaw = await supabase.from('messages').select('role, content').eq('whatsapp_id', zapId).order('created_at', { ascending: true });
+    const historico = historicoRaw.data.map(m => ({ role: m.role, content: m.content }));
     const resposta = await gerarResposta(historico, leadData);
     
     if (resposta) {
@@ -306,9 +320,91 @@ client.on('message', async (msg) => {
 });
 
 function iniciarSDR(socket) {
-    socketRef = socket;
-    if (!isReady) client.initialize().catch(err => console.error("Erro init WPP:", err));
-    else socket.emit('whatsapp_status', 'CONNECTED');
+    socketRef = socket; // Garante que o robô use o canal de comunicação correto
+    if (!isReady) {
+        client.initialize().catch(err => console.error("Erro init WPP:", err));
+    } else {
+        socket.emit('whatsapp_status', 'CONNECTED');
+    }
 }
+
+async function executarLeituraIA(base64Image) {
+    try {
+        const completion = await groq.chat.completions.create({
+            messages: [
+                {
+                    role: "user",
+                    content: [
+                        { type: "text", text: "Extraia desta fatura de energia brasileira em JSON: {concessionaria, valor_total, consumo_kwh, estado}. Responda apenas o JSON puro." },
+                        { type: "image_url", image_url: { url: `data:image/jpeg;base64,${base64Image}` } }
+                    ],
+                },
+            ],
+            model: "llama-3.2-11b-vision-preview",
+            temperature: 0,
+        });
+        return JSON.parse(completion.choices[0].message.content);
+    } catch (e) { return null; }
+}
+
+function calcularEconomiaRegional(analise, lead) {
+    const estadosTop = ['PE', 'BA', 'CE', 'MT', 'GO', 'MG', 'SP'];
+    let percDesconto = 0.15; // Padrão 15% (Lei 14.300)
+
+    if (estadosTop.includes(analise.estado)) percDesconto = 0.25; // 25% conforme Relação 2026
+    if (analise.estado === 'PR') percDesconto = 0.16;
+
+    const descontoReais = (analise.valor_total * percDesconto).toFixed(2);
+    const valorFinal = (analise.valor_total - descontoReais).toFixed(2);
+    return { descontoReais, valorFinal };
+}
+
+/**
+ * EXTRAÇÃO DE DADOS DO TEXTO DO PDF (LLAMA 3.3)
+ */
+async function executarLeituraTextoIA(texto) {
+    try {
+        const completion = await groq.chat.completions.create({
+            messages: [{
+                role: "user",
+                content: `Extraia os dados técnicos desta fatura e responda APENAS o JSON: {concessionaria, valor_total, consumo_kwh, estado}. \n\nTexto: ${texto.substring(0, 3000)}`
+            }],
+            model: "llama-3.3-70b-versatile",
+            temperature: 0,
+        });
+        const raw = completion.choices[0].message.content;
+        const jsonMatch = raw.match(/\{[\s\S]*\}/);
+        return jsonMatch ? JSON.parse(jsonMatch[0]) : null;
+    } catch (e) { return null; }
+}
+
+
+/**
+ * FINALIZAÇÃO COMERCIAL: ESTUDO DE VIABILIDADE EZEE CONNECT
+ */
+async function finalizarFluxoComercial(analise, msg, leadData) {
+    const economia = calcularEconomiaRegional(analise, leadData);
+    const chat = await msg.getChat();
+
+    console.log(`[SDR] 🧠 Elaborando estudo para ${leadData.name}...`);
+    
+    // Simula o tempo de análise técnica (elaboração do estudo)
+    await chat.sendStateTyping();
+    await delayHumano(45, 80); 
+
+    const estudoMsg = `📊 *ESTUDO DE VIABILIDADE ENERZEE* ⚡\n` +
+                      `-------------------------------------------\n` +
+                      `🏢 *Unidade:* ${leadData.name}\n` +
+                      `📉 *Redução Estimada:* R$ ${economia.descontoReais}/mês\n` +
+                      `✅ *Investimento:* ZERO (Modalidade Assinatura)\n\n` +
+                      `Esse benefício é possível graças à *Lei 14.300 (Marco Legal da Energia)*. Ela é fundamental pois garante o direito de você compensar créditos de nossas usinas parceiras diretamente na sua conta, reduzindo seu custo sem precisar de obras ou telhado próprio.\n\n` +
+                      `*${leadData.dono?.split(' ')[0] || 'Gestor'}*, para eu te mostrar como garantir sua cota e travar esse desconto antes que a grade regional complete, podemos fazer uma breve call de vídeo amanhã?`;
+
+    await msg.reply(estudoMsg);
+    await db.saveMessage(msg.from, 'assistant', estudoMsg);
+    await supabase.from('leads').update({ status: 'waiting_analysis' }).eq('whatsapp_id', msg.from);
+}
+
+
 
 module.exports = { iniciarSDR, processarLeadEntrada: () => {} };

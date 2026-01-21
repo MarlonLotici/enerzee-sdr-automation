@@ -2,58 +2,52 @@
 @tailwind components;
 @tailwind utilities;
 
-/* CONFIGURAÇÃO DE TELA (index.css) */
-html, body, #root {
-  min-height: 100vh; /* Permite que a página cresça além da tela */
-  width: 100vw;
-  overflow-x: hidden; /* Proíbe apenas a rolagem para os lados */
-  background-color: #020617;
-  color: #f8fafc;
-  margin: 0;
-  padding: 0;
+:root {
+  --deep-bg: #020617;
 }
 
-/* --- CORREÇÃO DO SLIDER (RANGE) --- */
-input[type=range] {
-  -webkit-appearance: none; 
-  @apply h-2 bg-slate-700 rounded-lg cursor-pointer w-full;
-}
-input[type=range]::-webkit-slider-thumb {
-  -webkit-appearance: none;
-  @apply w-4 h-4 bg-blue-500 rounded-full shadow transition-transform hover:scale-110;
-  margin-top: -4px;
-}
-input[type=range]::-webkit-slider-runnable-track {
-  @apply w-full h-2 bg-slate-700 rounded-lg;
+body {
+  @apply bg-[#020617] text-slate-100 font-sans;
+  background: 
+    radial-gradient(circle at 15% 50%, rgba(59, 130, 246, 0.15), transparent 40%),
+    radial-gradient(circle at 85% 30%, rgba(139, 92, 246, 0.15), transparent 40%),
+    linear-gradient(to bottom, #0f172a, #020617);
+  min-height: 100vh;
+  overflow-x: hidden; /* Evita rolagem lateral da página inteira */
 }
 
-/* --- CORREÇÃO LISTAS E DROPDOWNS (Fundo Sólido) --- */
-[role="listbox"], 
-[role="dialog"], 
-[role="menu"], 
-.popover-content, 
-datalist,
-select {
-  background-color: #0f172a !important; /* Azul escuro sólido */
-  border: 1px solid #334155 !important;
-  color: white !important;
-  z-index: 9999 !important;
+/* Painéis de Vidro */
+.glass-panel {
+    @apply bg-slate-900/70 border border-white/10 shadow-2xl;
+    backdrop-filter: blur(20px);
 }
 
-/* Itens da lista */
-option, [role="option"] {
-  background-color: #0f172a !important;
-  color: white !important;
-  padding: 8px;
-}
-option:hover, [role="option"]:hover {
-  background-color: #1e293b !important;
+.glass-card {
+    @apply bg-slate-800/40 border border-white/5 shadow-lg transition-all duration-300;
+    backdrop-filter: blur(12px);
 }
 
-/* --- SCROLLBAR FINA --- */
-.custom-scrollbar::-webkit-scrollbar { width: 6px; height: 6px; }
-.custom-scrollbar::-webkit-scrollbar-track { background: #020617; }
-.custom-scrollbar::-webkit-scrollbar-thumb { background: #334155; border-radius: 3px; }
-.custom-scrollbar::-webkit-scrollbar-thumb:hover { background: #475569; }
+.glass-card:hover {
+    @apply border-blue-500/40 bg-slate-800/60 shadow-[0_0_30px_rgba(59,130,246,0.15)] -translate-y-1;
+}
 
-.leaflet-container { width: 100%; height: 100%; z-index: 1; }
+.glass-card-selected {
+    @apply bg-blue-900/30 border-blue-500/60 shadow-[0_0_20px_rgba(59,130,246,0.3)];
+}
+
+/* Scrollbar Neon */
+.custom-scrollbar::-webkit-scrollbar { width: 8px; height: 8px; }
+.custom-scrollbar::-webkit-scrollbar-track { background: rgba(15, 23, 42, 0.5); border-radius: 4px; }
+.custom-scrollbar::-webkit-scrollbar-thumb {
+  background: linear-gradient(to bottom, #3b82f6, #06b6d4);
+  border-radius: 4px;
+}
+
+/* Animações */
+.neon-text { text-shadow: 0 0 10px rgba(59, 130, 246, 0.8); }
+.animate-spin-slow { animation: spin 3s linear infinite; }
+@keyframes radar-ping {
+    0% { box-shadow: 0 0 0 0px rgba(59, 130, 246, 0.4); opacity: 1; }
+    100% { box-shadow: 0 0 0 50px rgba(59, 130, 246, 0); opacity: 0; }
+}
+.radar-active { animation: radar-ping 2s infinite cubic-bezier(0, 0, 0.2, 1); }
