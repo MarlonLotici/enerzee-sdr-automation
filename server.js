@@ -1,133 +1,129 @@
+/**
+ * SERVER.JS - ORQUESTRADOR MESTRE MULTI-TENANCY 2026
+ * Versão Final: Scraper + Clean + Enrich + SDR + Estabilidade
+ */
 const express = require('express');
 const http = require('http');
 const { Server } = require('socket.io');
 const cors = require('cors');
 
-// --- IMPORTAÇÃO DOS MÓDULOS ---
 const { iniciarVarredura } = require('./1_scraper');
 const { processarLimpeza } = require('./2_clean');
 const { enriquecerLeadIndividual } = require('./3_enrich');
-const { iniciarSDR, processarLeadEntrada } = require('./4_sdr');
-const db = require('./database'); // <--- NOVO: Importação do Banco de Dados
+const { initMultiTenancy, criarNovaInstancia } = require('./4_sdr');
+const db = require('./database');
 
 const app = express();
 app.use(cors());
-
 const server = http.createServer(app);
-const io = new Server(server, {
-    cors: { origin: "*", methods: ["GET", "POST"] }
-});
+const io = new Server(server, { cors: { origin: "*" } });
 
+// Variável global para controle de interrupção
 let shouldStop = false;
 
-io.on('connection', (socket) => {
-    console.log(`🔌 Conexão ativa: ${socket.id}`);
-    
-    // Conecta o módulo de WhatsApp automaticamente ao abrir o navegador
-    iniciarSDR(socket); 
+// 1. INICIALIZAÇÃO DO SISTEMA
+server.listen(3001, async () => {
+    console.log('🚀 SISTEMA ENERZEE SDR MULTI-CHIP ONLINE');
+    // Inicia os chips 05:30 - 22:45 automaticamente conforme regras do 4_sdr.js
+    await initMultiTenancy(io); 
+});
 
-    socket.on('conectar_whatsapp', () => {
-        console.log("📲 Reconexão manual solicitada...");
-        iniciarSDR(socket);
+// 2. BLOCO ÚNICO DE CONEXÃO SOCKET
+io.on('connection', (socket) => {
+    console.log(`🔌 Dashboard conectado: ${socket.id}`);
+
+    // --- GESTÃO DE INSTÂNCIAS (CHIPS) ---
+    const atualizarListaInstancias = async () => {
+        const list = await db.getActiveInstances();
+        io.emit('instances_list', list); 
+    };
+
+    socket.on('get_instances', async () => {
+        await atualizarListaInstancias();
     });
 
-    // ... restante dos seus socket.on (start_scraping, etc)
+    socket.on('create_instance', async (data) => {
+        await criarNovaInstancia(data.name, data.phone);
+        await atualizarListaInstancias();
+    });
 
-    // --- MOTOR DE BUSCA (SCRAPING) ---
+    // --- MOTOR DE PROSPECÇÃO (RADAR) ---
     socket.on('start_scraping', async (params) => {
-        console.log('🏁 Pipeline Master Iniciado com Persistência em Nuvem.');
         shouldStop = false;
-        let leadsProcessados = 0;
+        const targetInstanceId = params.instanceId; 
 
-        const cidadeLimpa = params.city.replace(/🎯|Alvo no Mapa|Minha Localização Atual|\(.*\)/g, '').trim() || "";
-        const paramsLimpos = { ...params, city: cidadeLimpa };
+        // [PROTEÇÃO 1] Validação de Chip Selecionado
+        if (!targetInstanceId) {
+            return socket.emit('notification', '❌ Erro: Selecione um chip ativo primeiro.');
+        }
 
-        socket.emit('notification', `🚀 Motor iniciado: Buscando em ${cidadeLimpa}`);
+        // [PROTEÇÃO 2] Garantia de Nicho (Evita o erro de toLowerCase)
+        if (!params.niche || (Array.isArray(params.niche) && params.niche.length === 0)) {
+            params.niche = ["Comércio"]; // Fallback seguro
+            console.log("⚠️ Nicho veio vazio do front. Usando 'Comércio'.");
+        }
 
+        // [FUNCIONALIDADE ORIGINAL] Lógica de Detecção de Modo (📍 = Mapa)
+        const isMapMode = params.city && params.city.startsWith('📍');
+        const payloadCorrigido = {
+            ...params,
+            mode: isMapMode ? 'map' : 'city'
+        };
+
+        console.log(`🚀 [RADAR] Modo: ${payloadCorrigido.mode.toUpperCase()}`);
+        console.log(`📍 Alvo: ${params.city} | Chip: ${targetInstanceId}`);
+        socket.emit('notification', `📡 Radar ativado para ${params.niche}...`);
+
+        // [EXECUÇÃO DO MOTOR]
         try {
-            await iniciarVarredura(paramsLimpos, async (evento) => {
+            await iniciarVarredura(payloadCorrigido, async (evento) => {
+                // [FUNCIONALIDADE ORIGINAL] Botão Parar
                 if (shouldStop) return;
 
-                if (evento.type === 'status') {
-                    socket.emit('notification', evento.message);
-                } 
+                if (evento.type === 'lead') {
+                    let lead = evento.data;
+                    
+                    // [FUNCIONALIDADE ORIGINAL] 2_clean.js
+                    const limpos = processarLimpeza([lead]);
                 
-                else if (evento.type === 'lead') {
-                    try {
-                        let leadBruto = evento.data;
-                        leadBruto.name = leadBruto.name || leadBruto.nome;
-                        leadBruto.phone = leadBruto.phone || leadBruto.telefone;
-                        leadBruto.city = leadBruto.city || cidadeLimpa;
-
-                        console.log(`[SERVER] Processando: ${leadBruto.name}`);
-
-                        const leadsLimpos = processarLimpeza([leadBruto]);
+                    if (limpos.length > 0 && limpos[0].valido) {
+                        let leadFinal = limpos[0];
                         
-                        if (leadsLimpos.length > 0) {
-                            let leadFinal = leadsLimpos[0];
-
-                            if (leadFinal.valido) {
-                                // --- FASE 3: ENRIQUECIMENTO ---
-                                socket.emit('notification', `💎 Inteligência: Buscando dados de ${leadFinal.name}...`);
-                                
-                                try {
-                                    leadFinal = await enriquecerLeadIndividual(leadFinal); 
-                                } catch (e) {
-                                    console.log(`[AVISO] Falha no enriquecimento de ${leadFinal.name}.`);
-                                }
-
-                                // --- NOVO: FASE DE PERSISTÊNCIA (SUPABASE) ---
-                                // Salvamos no banco ANTES de mandar para o SDR ou Frontend
-                                try {
-                                    const { error } = await db.saveLead(leadFinal);
-                                    if (error) throw error;
-                                    console.log(`[DB] ✅ Lead salvo no Supabase: ${leadFinal.name}`);
-                                } catch (dbError) {
-                                    console.error(`[DB ERROR] Falha ao salvar no Supabase: ${dbError.message}`);
-                                }
-
-                                // --- FASE 4: FILA SDR ---
-                                if (leadFinal.type === 'mobile') {
-                                    // Passamos o lead para o SDR, que agora também lerá/atualizará o banco
-                                    processarLeadEntrada(leadFinal, socket);
-                                }
-
-                                // --- FASE 5: ENTREGA AO FRONTEND ---
-                                socket.emit('new_lead', leadFinal);
-                                leadsProcessados++;
-                                
-                                const feedbackMsg = leadFinal.dono 
-                                    ? `✅ Sócio Identificado: ${leadFinal.dono}` 
-                                    : `📍 Lead capturado: ${leadFinal.name}`;
-                                
-                                socket.emit('progress_update', { message: feedbackMsg });
-                            }
+                        // [FUNCIONALIDADE ORIGINAL] 3_enrich.js (Enriquecimento de Sócio/CNPJ)
+                        try { 
+                            leadFinal = await enriquecerLeadIndividual(leadFinal); 
+                        } catch(e) { 
+                            console.log(`⚠️ Silenciando erro de API no lead: ${leadFinal.name}`);
                         }
-                    } catch (err) {
-                        console.error("Erro no processamento individual:", err.message);
+
+                        // [FUNCIONALIDADE ORIGINAL] db.saveLead (Persistência no Supabase)
+                        const { error: dbError } = await db.saveLead(leadFinal, targetInstanceId);
+
+                        if (dbError) {
+                            // Registra erro no terminal mas não para o scraper
+                            console.error(`❌ Erro DB (${leadFinal.name}):`, dbError.message);
+                            
+                            // Se não for erro de duplicado, avisa o Dashboard
+                            if (!dbError.message.includes('unique')) {
+                                socket.emit('notification', `⚠️ Erro ao registrar: ${leadFinal.name}`);
+                            }
+                        } else {
+                            // [FUNCIONALIDADE ORIGINAL] Feedback visual no CRM
+                            console.log(`📡 Enviando lead persistido para o front: ${leadFinal.name}`);
+                            socket.emit('new_lead', leadFinal);
+                        }
                     }
                 }
             });
-
-            if (!shouldStop) {
-                socket.emit('bot_finished');
-                socket.emit('notification', `✅ Varredura completa. ${leadsProcessados} leads na nuvem.`);
-            }
-
-        } catch (error) {
-            console.error("Erro Crítico no Scraper:", error);
-            socket.emit('notification', "❌ Falha no motor de busca.");
-            socket.emit('bot_finished');
+        } catch (err) {
+            console.error("🔥 Crash no processo de varredura:", err.message);
+            socket.emit('notification', '❌ O Radar parou devido a uma falha de conexão.');
         }
     });
 
-    socket.on('stop_scraping', () => {
-        shouldStop = true;
-        socket.emit('notification', '🛑 Parada solicitada.');
+    // [FUNCIONALIDADE ORIGINAL] Parar Radar
+    socket.on('stop_scraping', () => { 
+        console.log("🛑 Comando: Parar Radar.");
+        shouldStop = true; 
     });
-});
-
-const PORT = process.env.PORT || 3001;
-server.listen(PORT, () => {
-    console.log(`🚀 SERVIDOR ONLINE NA PORTA ${PORT}`);
 });

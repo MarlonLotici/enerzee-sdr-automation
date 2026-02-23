@@ -1,40 +1,138 @@
+/**
+ * DATABASE.JS - CAMADA DE DADOS SUPABASE (CERTIFIED V2)
+ * Otimizado para SPIN Selling e Multi-Instância.
+ */
+
 const { createClient } = require('@supabase/supabase-js');
 require('dotenv').config();
 
+// Inicialização com a Service Role Key para ignorar travas de RLS no backend
 const supabase = createClient(process.env.SUPABASE_URL, process.env.SUPABASE_KEY);
 
 const db = {
-    // Salvar ou atualizar lead
-    saveLead: async (lead) => {
+    // ========================================================================
+    // 🏢 GESTÃO DE INSTÂNCIAS (CHIPS/EMPRESAS)
+    // ========================================================================
+
+    getActiveInstances: async () => {
         const { data, error } = await supabase
+            .from('instances')
+            .select('*')
+            .order('created_at', { ascending: true });
+        
+        if (error) console.error('[DB] Erro ao buscar instâncias:', error.message);
+        return data || [];
+    },
+
+    getInstanceRules: async (instanceId) => {
+        const { data } = await supabase
+            .from('instances')
+            .select('regional_rules, name, owner_phone')
+            .eq('id', instanceId)
+            .single();
+        return data;
+    },
+
+    updateInstanceStatus: async (instanceId, status) => {
+        await supabase
+            .from('instances')
+            .update({ whatsapp_status: status, updated_at: new Date() })
+            .eq('id', instanceId);
+    },
+
+    // ========================================================================
+    // 👥 GESTÃO DE LEADS (ANTI-DUPLICIDADE)
+    // ========================================================================
+
+    saveLead: async (lead, instanceId) => {
+        // Normalização agressiva: Remove tudo que não é número e garante o sufixo Baileys
+        const phonePuro = String(lead.phone || lead.whatsapp_id).replace(/\D/g, '');
+        const zapId = phonePuro.includes('@') ? phonePuro : `${phonePuro}@s.whatsapp.net`;
+
+        const leadData = {
+            whatsapp_id: zapId,
+            instance_id: instanceId,
+            name: (lead.name || "Sem Nome").replace(/['"“”]/g, ""), // Limpa caracteres que quebram prompt
+            phone: phonePuro,
+            niche: lead.niche || "Padaria",
+            cnpj: lead.cnpj || null,
+            dono: lead.dono || null,
+            endereco_fiscal: lead.endereco_fiscal || lead.address || null,
+            bairro: lead.bairro || null,
+            cep: lead.cep || null,
+            porte: lead.porte || null,
+            capital_social_numeric: lead.capital_social_numeric || 0,
+            status: lead.status || 'new',
+            updated_at: new Date()
+        };
+
+        // Tenta o salvamento. Se houver conflito no whatsapp_id, ele apenas ATUALIZA (upsert)
+        let { error } = await supabase
             .from('leads')
-            .upsert({
-                whatsapp_id: lead.whatsappId || lead.phone,
+            .upsert(leadData, { onConflict: 'whatsapp_id' });
+
+        if (error) {
+            console.error(`❌ [DB ERROR]: ${error.message}`);
+            // Fallback: Marca como erro no banco para revisão manual no Dashboard
+            await supabase.from('leads').upsert({
+                whatsapp_id: zapId,
                 name: lead.name,
-                phone: lead.phone,
-                niche: lead.niche,
-                cnpj: lead.cnpj,
-                dono: lead.dono,
-                endereco_fiscal: lead.endereco_fiscal,
-                bairro: lead.bairro,
-                cep: lead.cep,
-                porte: lead.porte,
-                capital_social: lead.capital_social,
-                status: lead.status || 'new',
-                quality_score: lead.quality_score
+                instance_id: instanceId,
+                status: 'error',
+                updated_at: new Date()
             }, { onConflict: 'whatsapp_id' });
-        return { data, error };
+        } else {
+            console.log(`✅ [DB] Lead persistido com sucesso: ${lead.name}`);
+        }
     },
 
-    // Salvar mensagem no histórico
-    saveMessage: async (zapId, role, content) => {
-        await supabase.from('messages').insert([{ whatsapp_id: zapId, role, content }]);
+    updateLeadStatus: async (whatsappId, updates) => {
+        const { error } = await supabase
+            .from('leads')
+            .update({ ...updates, updated_at: new Date() })
+            .eq('whatsapp_id', whatsappId);
+        return error;
     },
 
-    // Verificar se número está na blacklist
+    // ========================================================================
+    // 💬 GESTÃO DE MENSAGENS (O CÉREBRO DA IA)
+    // ========================================================================
+
+    saveMessage: async (zapId, role, content, instanceId) => {
+        const { error } = await supabase
+            .from('messages')
+            .insert([{ 
+                whatsapp_id: zapId, 
+                role: role, 
+                content: content,
+                instance_id: instanceId 
+            }]);
+        
+        if (error) console.error(`[DB] Erro ao salvar msg de ${zapId}:`, error.message);
+    },
+
+    getHistory: async (zapId, instanceId) => {
+        // Busca as 20 mensagens mais RECENTES (desc)
+        const { data, error } = await supabase
+            .from('messages')
+            .select('role, content')
+            .eq('whatsapp_id', zapId)
+            .eq('instance_id', instanceId)
+            .order('created_at', { ascending: false })
+            .limit(20);
+        
+        if (error) return [];
+        // Inverte o array para que a IA leia na ordem cronológica correta: [velha -> nova]
+        return data.reverse();
+    },
+
     isBlacklisted: async (zapId) => {
-        const { data } = await supabase.from('blacklist').select('*').eq('whatsapp_id', zapId);
-        return data.length > 0;
+        const { data } = await supabase
+            .from('blacklist')
+            .select('id')
+            .eq('whatsapp_id', zapId)
+            .limit(1);
+        return data && data.length > 0;
     }
 };
 

@@ -72,14 +72,14 @@ export default function App() {
     const [editingLead, setEditingLead] = useState(null);
     const [selectedLeadIds, setSelectedLeadIds] = useState(new Set());
 
-    // --- ESTADOS DO MOTOR IA ---
-    const [isConnected, setIsConnected] = useState(false);
-    const [qrCode, setQrCode] = useState("");
-    const [isBotRunning, setIsBotRunning] = useState(false);
-    const [botProgress, setBotProgress] = useState(0);
-    const [botLogs, setBotLogs] = useState([]);
-    const [sessionLeadsCount, setSessionLeadsCount] = useState(0);
-    const [messageInput, setMessageInput] = useState("");
+    // --- ESTADOS DO MOTOR IA (MULTI-INSTÂNCIA 2026) ---
+const [isConnected, setIsConnected] = useState(false);
+const [qrCodeData, setQrCodeData] = useState(null); // Agora guarda { qr, instanceId, name }
+const [instances, setInstances] = useState([]); // Lista de chips no banco
+const [selectedInstanceId, setSelectedInstanceId] = useState(null); 
+const [isBotRunning, setIsBotRunning] = useState(false);
+const [botProgress, setBotProgress] = useState(0);
+const [botLogs, setBotLogs] = useState([]);
 
     // --- ESTADOS DE BUSCA E MAPA ---
     const [filterText, setFilterText] = useState("");
@@ -115,6 +115,27 @@ export default function App() {
             else if (e.pageX < threshold) kanbanRef.current.scrollLeft -= speed;
         };
         window.addEventListener('mousemove', handleMouseMove);
+
+        const handleClearLeads = () => {
+    if(confirm("Deseja limpar a base visual?")) {
+        setLeads([]);
+        setSelectedLeadIds(new Set());
+    }
+};
+
+const handleMyLocation = () => {
+    if (navigator.geolocation) {
+        navigator.geolocation.getCurrentPosition(
+            (p) => setMapCenter([p.coords.latitude, p.coords.longitude]),
+            () => alert("Ative o GPS para usar este recurso.")
+        );
+    }
+};
+
+const handleStartSDR = () => {
+    if(!isConnected) return alert("Conecte o WhatsApp primeiro!");
+    socket.emit('start_sdr');
+};
         return () => window.removeEventListener('mousemove', handleMouseMove);
     }, [activeTab]);
 
@@ -122,14 +143,38 @@ export default function App() {
     useEffect(() => {
         fetchLeadsFromDB();
         socket.connect();
-        socket.on('qr_code', (code) => setQrCode(code));
-        socket.on('whatsapp_status', (s) => setIsConnected(s === 'CONNECTED'));
+
+        // PEDIR LISTA AO CONECTAR
+        socket.on('connect', () => {
+            socket.emit('get_instances'); 
+        });
+
+        socket.on('instances_list', (list) => {
+    setInstances(list);
+    // Se a lista chegou e não temos nada selecionado, seleciona o primeiro chip automaticamente
+    if (list.length > 0 && !selectedInstanceId) {
+        setSelectedInstanceId(list[0].id);
+    }
+});
+
+        socket.on('qr_code', (data) => setQrCodeData(data));
+
+        socket.on('whatsapp_status', (statusData) => {
+            if (statusData.status === 'CONNECTED') {
+                setQrCodeData(null);
+                setIsConnected(true);
+                socket.emit('get_instances'); // Atualiza a lista para mostrar a bolinha verde
+            }
+        });
+
         socket.on('new_lead', (l) => { 
             setLeads(prev => [l, ...prev]); 
             setSessionLeadsCount(c => c + 1);
             playNotificationSound();
         });
+
         socket.on('notification', (m) => setBotLogs(prev => [...prev, `[IA] ${m}`]));
+        
         return () => socket.disconnect();
     }, []);
 
@@ -158,12 +203,22 @@ export default function App() {
     };
 
     const startScraping = () => {
-        setIsBotRunning(!isBotRunning);
-        if (!isBotRunning) {
-            socket.emit('start_scraping', { niche: selectedNiche?.keywords, radius: searchRadius, city: locationName, lat: mapCenter[0], lng: mapCenter[1] });
-            setActiveTab("crm");
-        } else socket.emit('stop_scraping');
-    };
+    console.log("Tentando iniciar Scraping com ID:", selectedInstanceId);
+    if (!selectedInstanceId) return alert("Por favor, selecione um chip na aba Connections antes de iniciar.");
+    
+    setIsBotRunning(!isBotRunning);
+    if (!isBotRunning) {
+        socket.emit('start_scraping', { 
+            niche: selectedNiche?.keywords, 
+            radius: searchRadius, 
+            city: locationName, 
+            lat: mapCenter[0], 
+            lng: mapCenter[1],
+            instanceId: selectedInstanceId // <--- ENVIANDO O ID DO CHIP
+        });
+        setActiveTab("crm");
+    } else socket.emit('stop_scraping');
+};
 
     const handleCitySearch = async (q) => {
         setLocationName(q);
@@ -207,30 +262,29 @@ export default function App() {
         if(!confirm(`Excluir ${selectedLeadIds.size} leads permanentemente?`)) return;
         selectedLeadIds.forEach(id => handleDeleteLead(id));
     };
-
+    
     return (
-        <div className="min-h-screen w-full flex flex-col relative bg-[#020617] overflow-y-auto custom-scrollbar scroll-smooth">
-            
-            {/* HEADER RETRÁTIL */}
-            <header className="glass-panel border-b-0 px-8 py-6 shrink-0 z-50 relative overflow-hidden transition-all duration-700 hover:py-8">
+<div className="min-h-screen w-full flex flex-col relative bg-[#020617] overflow-x-hidden">            
+{/* HEADER RETRÁTIL - VERSÃO COMPACTA 2026 */}
+            <header className="glass-panel border-b-0 px-8 py-3 shrink-0 z-50 relative overflow-hidden transition-all duration-700">
                 <div className="absolute top-0 left-0 w-full h-[1px] bg-gradient-to-r from-transparent via-blue-500/50 to-transparent"></div>
                 <div className="flex justify-between items-center relative z-10">
-                    <div className="flex items-center gap-5">
-                        <div className="bg-blue-600/20 p-4 rounded-3xl border border-blue-500/30 shadow-neon-blue">
-                            <Rocket className="h-8 w-8 text-blue-400" />
+                    <div className="flex items-center gap-4">
+                        <div className="bg-blue-600/20 p-2.5 rounded-2xl border border-blue-500/30 shadow-neon-blue">
+                            <Rocket className="h-6 w-6 text-blue-400" />
                         </div>
-                        <h1 className="text-3xl font-black tracking-tighter text-white uppercase italic">
+                        <h1 className="text-2xl font-black tracking-tighter text-white uppercase italic leading-none">
                             Enerzee SDR <span className="text-blue-500 neon-text">Neural 2026</span>
                         </h1>
                     </div>
-                    <div className="flex gap-8 items-center">
-                        <div className="flex flex-col items-end glass-card px-6 py-2 rounded-[2rem] border-blue-500/20 bg-blue-500/5">
-                            <span className="text-[10px] text-blue-300 font-black uppercase tracking-[0.2em] mb-1">Métricas de Prospecção</span>
-                            <span className="text-3xl font-black text-white neon-text">{leads.length} <span className="text-sm text-slate-500">Leads</span></span>
+                    <div className="flex gap-6 items-center">
+                        <div className="flex flex-col items-end glass-card px-4 py-1.5 rounded-2xl border-blue-500/20 bg-blue-500/5">
+                            <span className="text-[9px] text-blue-300 font-black uppercase tracking-widest mb-0.5">Métricas de Prospecção</span>
+                            <span className="text-xl font-black text-white leading-none">{leads.length} <span className="text-[10px] text-slate-500 uppercase">Leads</span></span>
                         </div>
                         <Button 
                             onClick={startScraping} 
-                            className={`h-16 px-10 rounded-[2rem] font-black text-lg border-2 transition-all ${isBotRunning ? "bg-red-600 hover:bg-red-500" : "bg-blue-600 hover:bg-blue-500"}`}
+                            className={`h-12 px-8 rounded-2xl font-black text-sm border-2 transition-all shadow-lg ${isBotRunning ? "bg-red-600 border-red-500 hover:bg-red-500" : "bg-blue-600 border-blue-500 hover:bg-blue-500"}`}
                         >
                             {isBotRunning ? "PARAR MOTOR" : "INICIAR VARREDURA"}
                         </Button>
@@ -256,11 +310,10 @@ export default function App() {
                 </div>
             )}
 
-            <main className="w-full flex-1 relative z-30 flex flex-col">
-                <Tabs value={activeTab} onValueChange={setActiveTab} className="w-full flex-1 flex flex-col h-full">
-                    
+           <main className="flex-1 flex flex-col overflow-hidden relative z-30">
+    <Tabs value={activeTab} onValueChange={setActiveTab} className="flex-1 flex flex-col overflow-hidden">                    
                     {/* TABS STICKY BAR */}
-                    <div className="glass-panel border-b-0 px-8 py-4 sticky top-0 z-[60] backdrop-blur-3xl bg-[#020617]/80 shadow-2xl">
+                    <div className="glass-panel border-b-0 px-8 py-4 sticky top-0 z-[60] backdrop-blur-3xl bg-[#020617]/90 shadow-2xl">
                         <TabsList className="bg-slate-900/40 border border-white/5 p-1 h-auto rounded-[2rem] gap-2 shadow-inner">
                             <TabsTrigger value="search" className="data-[state=active]:bg-blue-600 data-[state=active]:text-white text-slate-400 px-10 py-4 rounded-2xl font-black uppercase text-[11px] transition-all"><MapPin className="mr-2 h-4 w-4" /> Radar</TabsTrigger>
                             <TabsTrigger value="crm" className="data-[state=active]:bg-blue-600 data-[state=active]:text-white text-slate-400 px-10 py-4 rounded-2xl font-black uppercase text-[11px] transition-all"><LayoutDashboard className="mr-2 h-4 w-4" /> CRM War Room</TabsTrigger>
@@ -290,6 +343,25 @@ export default function App() {
                         </div>
 
                         <div ref={kanbanRef} className="flex-1 flex gap-6 overflow-x-auto p-8 custom-scrollbar bg-slate-950/20 min-h-[500px] scroll-smooth items-start">
+                           {/* NOVA COLUNA: ERROS DE REGISTRO */}
+<KanbanColumn 
+    title="Erros de Registro" 
+    count={getLeadsByStatus('error').length} 
+    color="from-red-900 to-black" 
+    icon={<ShieldAlert className="h-6 w-6 text-red-500 animate-pulse"/>}
+>
+    {getLeadsByStatus('error').map(l => (
+        <LeadCard 
+            key={l.id} 
+            lead={l} 
+            isSelected={selectedLeadIds.has(l.id)} 
+            onSelect={() => toggleSelectLead(l.id)} 
+            onView={() => setViewingLeadDetail(l)} 
+            onEdit={() => setEditingLead(l)} 
+            onDelete={() => handleDeleteLead(l.id)} 
+        />
+    ))}
+</KanbanColumn>
                             <KanbanColumn title="Novos Capturados" count={getLeadsByStatus('new').length} color="from-slate-800 to-slate-950" icon={<Zap className="h-6 w-6 text-slate-400"/>}>
                                 {getLeadsByStatus('new').map(l => (
                                     <LeadCard key={l.id} lead={l} isSelected={selectedLeadIds.has(l.id)} onSelect={() => toggleSelectLead(l.id)} onView={() => setViewingLeadDetail(l)} onEdit={() => setEditingLead(l)} onDelete={() => handleDeleteLead(l.id)} />
@@ -318,7 +390,7 @@ export default function App() {
                         <div className="w-[420px] glass-panel p-10 space-y-10 overflow-y-auto h-full shadow-2xl z-20 border-r border-white/5">
                             <div className="space-y-4">
                                 <Label className="text-blue-400 font-black text-xs uppercase tracking-[0.4em] flex items-center gap-3"><Zap className="h-5 w-5 text-blue-500 animate-pulse"/> 1. Segmento Estratégico</Label>
-                                <div className="glass-card bg-slate-950 p-2 rounded-2xl border-blue-500/20 shadow-inner">
+                                <div className="relative z-[100] glass-card bg-slate-950 p-2 rounded-2xl border-blue-500/20">
                                     <NicheSelect onNicheSelect={setSelectedNiche} />
                                 </div>
                             </div>
@@ -354,154 +426,243 @@ export default function App() {
                     </TabsContent>
 
                     {/* ABA 3: WHATSAPP (MANTIDA) */}
-                   <TabsContent value="connections" className="h-[calc(100vh-140px)] flex flex-col overflow-hidden relative z-20 bg-slate-950/40 m-0">
-    <div className="flex-1 flex overflow-hidden">
-        {/* COLUNA 1: LISTA DE CHATS (Estilo Moderno) */}
-        <div className="w-[320px] border-r border-white/5 overflow-y-auto bg-slate-900/40 custom-scrollbar flex flex-col">
-            <div className="p-6 border-b border-white/5">
-                <p className="text-blue-300 text-[10px] font-black uppercase tracking-[0.3em] mb-4">Fluxo SDR Neural</p>
-                <div className="relative">
-                    <Search className="absolute left-3 top-2.5 h-4 w-4 text-slate-500" />
-                    <Input className="h-10 bg-black/40 border-white/5 pl-9 text-xs rounded-xl" placeholder="Pesquisar conversa..." />
-                </div>
-            </div>
-            <div className="flex-1 overflow-y-auto">
-                {chats.length > 0 ? chats.map(c => (
-                    <div key={c.id} onClick={() => setActiveChat(c)} className={`p-5 cursor-pointer transition-all border-b border-white/5 ${activeChat?.id === c.id ? 'bg-blue-600/20' : 'hover:bg-white/5'}`}>
-                        <div className="flex justify-between items-start mb-1">
-                            <p className="font-bold text-white text-sm truncate uppercase tracking-tighter">{c.name}</p>
-                            <span className="text-[8px] text-slate-500 font-bold">14:02</span>
-                        </div>
-                        <p className="text-[11px] text-slate-400 truncate italic opacity-70">{c.lastMsg || "Aguardando IA..."}</p>
-                    </div>
-                )) : (
-                    <div className="flex flex-col items-center justify-center h-full opacity-30 text-center p-10">
-                        <MessageSquare className="h-12 w-12 mb-4 text-blue-400" />
-                        <p className="text-[10px] font-black uppercase">Sem tráfego neural</p>
-                    </div>
-                )}
-            </div>
+                 <TabsContent value="connections" className="h-[calc(100vh-160px)] flex flex-col overflow-hidden relative z-20 bg-slate-950/40 m-0">
+    <div className="flex-1 flex overflow-hidde n">
+        
+        {/* COLUNA 1: LISTA DE CHATS - COM GESTÃO DE CHIPS */}
+<div className="w-[280px] border-r border-white/5 overflow-y-auto bg-slate-900/40 custom-scrollbar flex flex-col h-full">
+    <div className="p-4 border-b border-white/5 space-y-4">
+        <div>
+            <p className="text-blue-300 text-[9px] font-black uppercase tracking-[0.2em] mb-2">Unidade Ativa</p>
+            <select 
+                value={selectedInstanceId || ''} 
+                onChange={(e) => setSelectedInstanceId(e.target.value)}
+                className="w-full h-10 bg-black/40 border border-white/10 rounded-xl text-[11px] text-white font-bold px-3 outline-none focus:border-blue-500 transition-all"
+            >
+                <option value="">Selecione um Chip...</option>
+                {instances.map(inst => (
+                    <option key={inst.id} value={inst.id}>
+                        {inst.whatsapp_status === 'CONNECTED' ? '🟢' : '🔴'} {inst.name}
+                    </option>
+                ))}
+            </select>
+            <Button 
+                onClick={() => {
+                    const nome = prompt("Nome da nova unidade (Ex: Chip Claro 02):");
+                    if(nome) socket.emit('create_instance', { name: nome });
+                }}
+                className="w-full mt-2 h-7 text-[8px] uppercase font-black bg-blue-600/20 text-blue-400 border border-blue-500/30 hover:bg-blue-600/40"
+            >
+                + Adicionar Unidade
+            </Button>
         </div>
-
-        {/* COLUNA 2: JANELA DE CHAT */}
+        <div className="relative">
+            <Search className="absolute left-3 top-2.5 h-3.5 w-3.5 text-slate-500" />
+            <Input className="h-9 bg-black/40 border-white/5 pl-9 text-[11px] rounded-lg" placeholder="Pesquisar conversa..." />
+        </div>
+    </div>
+    
+</div>
+        {/* COLUNA 2: JANELA DE CHAT - Foco em Conteúdo */}
         <div className="flex-1 flex flex-col bg-black/20 relative">
             {activeChat ? (
                 <>
-                    <div className="p-6 border-b border-white/5 flex items-center justify-between backdrop-blur-md bg-slate-900/40">
-                        <div className="flex items-center gap-4">
-                            <div className="h-10 w-10 bg-blue-600/20 rounded-xl border border-blue-500/30 flex items-center justify-center font-black text-blue-400">{activeChat.name[0]}</div>
-                            <h2 className="text-xl font-black text-white tracking-tighter uppercase">{activeChat.name}</h2>
+                    <div className="p-3 border-b border-white/5 flex items-center justify-between backdrop-blur-md bg-slate-900/40">
+                        <div className="flex items-center gap-3">
+                            <div className="h-8 w-8 bg-blue-600/20 rounded-lg border border-blue-500/30 flex items-center justify-center font-black text-blue-400 text-xs">{activeChat.name[0]}</div>
+                            <h2 className="text-base font-black text-white tracking-tighter uppercase">{activeChat.name}</h2>
                         </div>
-                        <Badge className="bg-emerald-500/10 text-emerald-400 border-emerald-500/20 text-[9px] font-black">AUDITORIA ATIVA</Badge>
+                        <Badge className="bg-emerald-500/10 text-emerald-400 border-emerald-500/20 text-[8px] font-black">AUDITORIA ATIVA</Badge>
                     </div>
-                    <div className="flex-1 p-10 overflow-y-auto custom-scrollbar flex flex-col gap-6">
-                        {/* Exemplo de Mensagem IA */}
-                        <div className="max-w-[80%] bg-slate-800/60 p-4 rounded-2xl rounded-tl-none border border-white/5 self-start">
-                            <p className="text-sm text-slate-300">Olá, vi que você é proprietário da {activeChat.name}. Como está a economia de energia por aí?</p>
+                    {/* Padding reduzido de 10 para 4 */}
+                    <div className="flex-1 p-4 overflow-y-auto custom-scrollbar flex flex-col gap-3">
+                        <div className="max-w-[85%] bg-slate-800/60 p-3 rounded-xl rounded-tl-none border border-white/5 self-start">
+                            <p className="text-xs text-slate-300">Olá, vi que você é proprietário da {activeChat.name}. Como está a economia de energia por aí?</p>
                         </div>
-                        <div className="max-w-[80%] bg-blue-600/80 p-4 rounded-2xl rounded-tr-none border border-blue-500/50 self-end text-white shadow-lg">
-                            <p className="text-sm">Assumindo controle manual da negociação...</p>
+                        <div className="max-w-[85%] bg-blue-600/80 p-3 rounded-xl rounded-tr-none border border-blue-500/50 self-end text-white shadow-lg">
+                            <p className="text-xs font-medium">Assumindo controle manual da negociação...</p>
                         </div>
                     </div>
-                    <div className="p-6 bg-slate-900/40 border-t border-white/5 flex gap-4">
-                        <Input className="h-12 rounded-xl bg-black/40 border-white/10" placeholder="Digite para intervir na IA..." value={messageInput} onChange={e => setMessageInput(e.target.value)} />
-                        <Button className="h-12 w-12 rounded-xl bg-blue-600 shadow-neon-blue"><Send className="h-5 w-5" /></Button>
+                    {/* Input mais fino */}
+                    <div className="p-3 bg-slate-900/40 border-t border-white/5 flex gap-3">
+                        <Input className="h-10 rounded-lg bg-black/40 border-white/10 text-xs" placeholder="Digite para intervir..." value={messageInput} onChange={e => setMessageInput(e.target.value)} />
+                        <Button className="h-10 w-10 rounded-lg bg-blue-600 shadow-neon-blue px-0"><Send className="h-4 w-4" /></Button>
                     </div>
                 </>
             ) : (
                 <div className="flex-1 flex flex-col items-center justify-center opacity-30">
-                    <BrainCircuit className="h-24 w-24 text-blue-400 animate-pulse mb-6" />
-                    <p className="text-xl font-black uppercase tracking-[0.4em] text-blue-300">War Room SDR</p>
+                    <BrainCircuit className="h-16 w-16 text-blue-400 animate-pulse mb-4" />
+                    <p className="text-sm font-black uppercase tracking-[0.4em] text-blue-300">War Room SDR</p>
                 </div>
             )}
         </div>
 
-        {/* COLUNA 3: INTELIGÊNCIA LATERAL (Contexto do Lead) */}
+        {/* COLUNA 3: INTELIGÊNCIA LATERAL - Grid Compacto */}
         {activeChat && (
-            <div className="w-[300px] border-l border-white/5 bg-slate-900/60 p-8 space-y-8 hidden xl:block overflow-y-auto custom-scrollbar">
-                <p className="text-blue-400 text-[9px] font-black uppercase tracking-[0.3em]">Perfil do Decisor</p>
-                <div className="space-y-4">
-                    <div className="bg-yellow-500/10 p-4 rounded-2xl border border-yellow-500/20 shadow-inner">
-                        <span className="text-[9px] text-yellow-600 uppercase font-black block mb-1 tracking-widest">Proprietário</span>
-                        <span className="text-lg font-black text-yellow-500 uppercase tracking-tighter leading-none">MARCOS ZANIOLO</span>
+            <div className="w-[260px] border-l border-white/5 bg-slate-900/60 p-4 space-y-4 hidden xl:block overflow-y-auto custom-scrollbar">
+                <p className="text-blue-400 text-[8px] font-black uppercase tracking-[0.2em]">Perfil do Decisor</p>
+                <div className="space-y-3">
+                    <div className="bg-yellow-500/10 p-3 rounded-xl border border-yellow-500/20 shadow-inner">
+                        <span className="text-[8px] text-yellow-600 uppercase font-black block mb-0.5 tracking-widest">Proprietário</span>
+                        <span className="text-sm font-black text-yellow-500 uppercase tracking-tighter">MARCOS ZANIOLO</span>
                     </div>
-                    <div className="space-y-2">
-                        <span className="text-[9px] text-slate-500 uppercase font-black block tracking-widest">Capacidade de Fechamento</span>
-                        <span className="text-2xl font-black text-white italic leading-none">R$ 150.000,00</span>
+                    <div className="bg-emerald-500/10 p-3 rounded-xl border border-emerald-500/20">
+                        <p className="text-[8px] text-emerald-400 font-black uppercase mb-0.5">Qualificação IA</p>
+                        <p className="text-xl font-black text-emerald-400 italic leading-none">9.8</p>
                     </div>
-                    <div className="pt-6 border-t border-white/5">
-                        <Button variant="outline" className="w-full text-[10px] font-black uppercase h-12 border-white/10 glass-card">Ver Dossiê Completo</Button>
+                    <div className="space-y-1">
+                        <span className="text-[8px] text-slate-500 uppercase font-black block tracking-widest">Potencial de Fechamento</span>
+                        <span className="text-lg font-black text-white italic leading-none">R$ 150k</span>
                     </div>
-                </div>
-                <div className="p-4 bg-emerald-500/10 rounded-2xl border border-emerald-500/20">
-                    <p className="text-[9px] text-emerald-400 font-black uppercase mb-1">Qualificação IA</p>
-                    <p className="text-3xl font-black text-emerald-400 italic leading-none">9.8</p>
                 </div>
             </div>
         )}
-    </div>
-    
-    {/* CONEXÃO FOOTER (Fixado na aba) */}
-    <div className="p-6 border-t border-white/5 flex items-center justify-between bg-slate-900/80 shrink-0">
-        <div className={`flex items-center gap-4 px-6 py-2 rounded-full border ${isConnected ? 'bg-green-500/10 border-green-500/30 shadow-neon-green' : 'bg-red-500/10 border-red-500/30'}`}>
-            <div className={`w-3 h-3 rounded-full ${isConnected ? 'bg-green-500' : 'bg-red-500 animate-pulse'}`}></div>
-            <span className="text-[10px] font-black uppercase tracking-widest">{isConnected ? 'SISTEMA ONLINE' : 'OFFLINE'}</span>
-        </div>
-        {!isConnected && qrCode && <Dialog><DialogTrigger asChild><Button className="bg-white text-black font-black px-10 h-12 rounded-xl text-xs">ABRIR QR CODE</Button></DialogTrigger><DialogContent className="glass-panel flex flex-col items-center p-12 rounded-[3rem] border-white/20"><QRCodeSVG value={qrCode} size={250} /></DialogContent></Dialog>}
-        {!isConnected && !qrCode && <Button onClick={handleStartSDR} className="bg-blue-600 font-black px-10 h-12 rounded-xl text-xs shadow-neon-blue">CONECTAR</Button>}
     </div>
 </TabsContent>
                 </Tabs>
             </main>
 
-            {/* --- MODAL DETALHES GIGANTE: O DOSSIÊ DE INTELIGÊNCIA --- */}
-            <Dialog open={!!viewingLeadDetail} onOpenChange={() => setViewingLeadDetail(null)}>
-                <DialogContent className="glass-panel border-white/20 text-white max-w-7xl rounded-[5rem] p-0 overflow-hidden shadow-[0_0_150px_rgba(0,0,0,1)] bg-[#020617]/99 border-t-[12px] border-t-blue-600">
-                    <div className="p-20 space-y-16">
-                        <div className="flex justify-between items-start">
-                            <div className="space-y-6">
-                                <Badge className="bg-blue-600/20 text-blue-400 border-blue-500/30 px-10 py-3 text-xs uppercase font-black tracking-[0.5em] shadow-inner rounded-full">Ficha de Inteligência Comercial 2026</Badge>
-                                <h2 className="text-8xl font-black tracking-tighter text-white neon-text leading-none uppercase italic">{viewingLeadDetail?.name}</h2>
-                                <p className="text-3xl text-slate-500 font-black uppercase tracking-widest italic">{viewingLeadDetail?.razao_social || 'Razão Social em processamento'}</p>
-                            </div>
-                            <div className="text-right glass-card p-10 rounded-[4rem] border-emerald-500/30 bg-emerald-500/5 shadow-2xl group"><p className="text-xs font-black text-slate-500 uppercase tracking-widest mb-4">Lead Scoring Neural</p><div className="text-9xl font-black text-emerald-400 leading-none group-hover:scale-110 transition-transform">9.8</div></div>
-                        </div>
-                        <div className="grid grid-cols-2 gap-12">
-                            <div className="glass-card p-16 rounded-[4rem] space-y-12 bg-white/5 border-white/10 shadow-2xl relative overflow-hidden group">
-                                <div className="absolute top-0 right-0 p-10 opacity-5 rotate-12 group-hover:opacity-10 transition-opacity"><DollarSign className="h-64 w-64 text-white" /></div>
-                                <p className="text-xs font-black text-blue-400 uppercase tracking-[0.4em] flex items-center gap-4 relative z-10"><DollarSign className="h-7 w-7 text-blue-500 shadow-neon-blue"/> Análise de Poder de Compra</p>
-                                <div className="space-y-10 relative z-10">
-                                    <div><span className="text-xs text-slate-500 uppercase font-black block mb-5 tracking-[0.3em] underline underline-offset-8">Capital Social</span><span className="text-7xl font-black text-white italic tracking-tighter">{new Intl.NumberFormat('pt-BR', { style: 'currency', currency: 'BRL' }).format(viewingLeadDetail?.capital_social || 0)}</span></div>
-                                    <div className="flex gap-10">
-                                        <div><span className="text-xs text-slate-600 uppercase font-black block mb-2 tracking-widest">Porte Fiscal</span><span className="text-4xl font-black text-blue-300 uppercase tracking-tighter italic">{viewingLeadDetail?.porte || 'ME'}</span></div>
-                                        <div><span className="text-xs text-slate-600 uppercase font-black block mb-2 tracking-widest">Abertura</span><span className="text-4xl font-black text-slate-300 uppercase tracking-tighter italic">2014</span></div>
-                                    </div>
-                                </div>
-                            </div>
-                            <div className="glass-card p-16 rounded-[4rem] space-y-12 bg-white/5 border-white/10 shadow-2xl relative overflow-hidden group">
-                                <div className="absolute top-0 right-0 p-10 opacity-5 -rotate-12 group-hover:opacity-10 transition-opacity"><Users className="h-64 w-64 text-white" /></div>
-                                <p className="text-xs font-black text-purple-400 uppercase tracking-[0.4em] flex items-center gap-4 relative z-10"><Users className="h-7 w-7 text-purple-500 shadow-neon-purple"/> Estrutura de Decisão</p>
-                                <div className="bg-yellow-500/10 p-12 rounded-[3.5rem] border-2 border-yellow-500/30 shadow-[0_0_50px_rgba(234,179,8,0.15)] relative z-10">
-                                    <span className="text-[11px] text-yellow-600 uppercase font-black block mb-5 tracking-[0.3em] underline decoration-yellow-900 underline-offset-8">Sócio Administrador / Decisor</span>
-                                    <span className="text-7xl font-black text-yellow-500 uppercase tracking-tighter leading-tight drop-shadow-2xl italic">{viewingLeadDetail?.dono || 'Sócio Identificado'}</span>
-                                </div>
-                                <div className="pl-6 relative z-10">
-                                    <span className="text-xs text-slate-500 uppercase font-black block mb-4 tracking-widest italic opacity-50">Contato Direto WhatsApp</span>
-                                    <span className="text-5xl font-black text-white tracking-tighter border-b-4 border-blue-500/20 pb-4 block">{viewingLeadDetail?.phone}</span>
-                                    <span className="text-xs text-slate-500 uppercase font-black block mt-6 tracking-widest opacity-50 italic">Endereço Registrado</span>
-                                    <span className="text-2xl font-black text-slate-300 uppercase">{viewingLeadDetail?.bairro || viewingLeadDetail?.address}</span>
-                                </div>
-                            </div>
-                        </div>
-                        <div className="flex gap-10 pt-10 relative z-10">
-                            <Button className="flex-1 h-32 bg-blue-600 hover:bg-blue-500 text-5xl font-black rounded-[3rem] shadow-[0_40px_80px_rgba(59,130,246,0.6)] border-2 border-white/20 uppercase italic flex items-center justify-center gap-8 group transform active:scale-95 transition-all">
-                                ABRIR CANAL DE FECHAMENTO <ArrowRight className="h-12 w-12 group-hover:translate-x-6 transition-transform" />
-                            </Button>
-                            <Button variant="outline" className="h-32 px-24 border-2 border-white/10 glass-card text-2xl font-black rounded-[3rem] uppercase tracking-[0.3em] hover:bg-white/5 transition-all" onClick={() => setViewingLeadDetail(null)}>FECHAR FICHA</Button>
-                        </div>
+{/* MODAL DE CONEXÃO MULTI-CHIP (POSIÇÃO CORRETA) */}
+            <Dialog open={!!qrCodeData} onOpenChange={() => setQrCodeData(null)}>
+                <DialogContent className="glass-panel border-white/20 text-white max-w-sm rounded-[2.5rem] p-10 bg-[#020617]/98 shadow-2xl flex flex-col items-center">
+                    <div className="bg-blue-600/20 p-4 rounded-full mb-6 border border-blue-500/30 shadow-neon-blue">
+                        <MessageSquare className="h-10 w-10 text-blue-400" />
                     </div>
+                    <DialogTitle className="text-2xl font-black text-white uppercase italic tracking-tighter text-center">
+                        Vincular Unidade
+                    </DialogTitle>
+                    <p className="text-blue-400 font-bold text-[10px] uppercase tracking-widest mb-8 text-center">
+                        {qrCodeData?.name || 'Nova Instância'}
+                    </p>
+                    
+                    <div className="p-6 bg-white rounded-[2rem] shadow-2xl">
+                        {qrCodeData?.qr && <QRCodeSVG value={qrCodeData.qr} size={200} />}
+                    </div>
+
+                    <p className="text-slate-500 text-[10px] font-bold uppercase mt-8 text-center leading-relaxed">
+                        Abra o WhatsApp no celular <br/> 
+                        Menu &gt; Aparelhos Conectados <br/> 
+                        Escaneie o código acima
+                    </p>
                 </DialogContent>
             </Dialog>
+
+            {/* MODAL DETALHES GIGANTE (MANTIDO) */}
+            <Dialog open={!!viewingLeadDetail} onOpenChange={() => setViewingLeadDetail(null)}>
+                {/* ... seu código do dossiê que já funciona ... */}
+            </Dialog>
+
+            {/* MODAL EDIÇÃO (MANTIDO) */}
+            <Dialog open={!!editingLead} onOpenChange={() => setEditingLead(null)}>
+                {/* ... seu código de edição que já funciona ... */}
+            </Dialog>
+
+          {/* --- MODAL DETALHES GIGANTE: O DOSSIÊ DE INTELIGÊNCIA --- */}
+{/* --- MODAL DETALHES GIGANTE: O DOSSIÊ DE INTELIGÊNCIA --- */}
+<Dialog open={!!viewingLeadDetail} onOpenChange={() => setViewingLeadDetail(null)}>
+    <DialogContent 
+        className="glass-panel border-white/20 text-white max-w-5xl w-[95vw] max-h-[95vh] rounded-[2.5rem] p-0 overflow-y-auto custom-scrollbar shadow-[0_0_100px_rgba(0,0,0,1)] bg-[#020617]/98 border-t-4 border-t-blue-600"
+    >
+        {/* Reduzi o padding de p-10 para p-6 e o espaçamento vertical de space-y-8 para space-y-4 */}
+        <div className="p-6 space-y-4">
+            
+            {/* HEADER DO DOSSIÊ */}
+            <div className="flex justify-between items-start">
+                <div className="space-y-1">
+                    <div className="flex items-center gap-2">
+                        <Badge className="bg-blue-600/20 text-blue-400 border-blue-500/30 px-3 py-0.5 text-[8px] uppercase font-black tracking-widest rounded-full">Inteligência Neural 2026</Badge>
+                        {viewingLeadDetail?.priority_level >= 3 && <Badge className="bg-red-600/20 text-red-500 border-red-500/30 px-2 py-0.5 text-[8px] font-black uppercase animate-pulse">Alta Prioridade 🔥</Badge>}
+                    </div>
+                    {/* Diminuído de text-4xl para text-2xl */}
+                    <h2 className="text-2xl font-black tracking-tighter text-white neon-text leading-tight uppercase italic drop-shadow-lg">{viewingLeadDetail?.name}</h2>
+                    <div className="flex items-center gap-2 text-slate-500 font-bold text-[10px] uppercase tracking-widest italic opacity-80">
+                        <Building2 className="h-3 w-3 text-blue-500" />
+                        <span>{viewingLeadDetail?.razao_social || viewingLeadDetail?.name || 'Identificação não disponível'}</span>
+                    </div>
+                </div>
+                {/* Reduzi o card de score e a fonte de 6xl para 4xl */}
+                <div className="text-right glass-card p-4 rounded-3xl border-emerald-500/20 bg-emerald-500/5 min-w-[120px]">
+                    <p className="text-[8px] font-black text-slate-500 uppercase mb-1 tracking-widest">Score Qualificação</p>
+                    <div className="text-4xl font-black text-emerald-400 leading-none italic">{viewingLeadDetail?.quality_score_int4 || '9.8'}</div>
+                </div>
+            </div>
+
+            {/* GRID DE INFORMAÇÕES TÉCNICAS - Gap reduzido para 4 */}
+            <div className="grid grid-cols-3 gap-4">
+                {/* Blocos com padding reduzido para p-4 e bordas menores */}
+                <div className="glass-card p-4 rounded-3xl space-y-3 bg-white/5 border-white/10">
+                    <p className="text-[9px] font-black text-blue-400 uppercase tracking-widest flex items-center gap-2"><ShieldCheck className="h-3 w-3"/> Rastreio Fiscal</p>
+                    <div className="space-y-2">
+                        <div>
+                            <span className="text-[8px] text-slate-600 uppercase font-black block opacity-60">CNPJ</span>
+                            <span className="text-base font-black text-white tracking-widest font-mono">{viewingLeadDetail?.cnpj || '00.000.000/0000-00'}</span>
+                        </div>
+                        <div>
+                            <span className="text-[8px] text-slate-600 uppercase font-black block opacity-60">Natureza</span>
+                            <p className="text-[10px] font-bold text-blue-300 leading-tight uppercase">{viewingLeadDetail?.natureza_juridica || 'Sociedade Limitada'}</p>
+                        </div>
+                    </div>
+                </div>
+
+                <div className="glass-card p-4 rounded-3xl space-y-3 bg-white/5 border-white/10 relative overflow-hidden">
+                    <DollarSign className="absolute -right-2 -bottom-2 h-16 w-16 text-white opacity-[0.03] rotate-12" />
+                    <p className="text-[9px] font-black text-emerald-400 uppercase tracking-widest flex items-center gap-2"><Zap className="h-3 w-3"/> Poder de Compra</p>
+                    <div className="space-y-2">
+                        <div>
+                            <span className="text-[8px] text-slate-600 uppercase font-black block opacity-60">Capital Social</span>
+                            <span className="text-xl font-black text-white italic tracking-tighter">
+                                {new Intl.NumberFormat('pt-BR', { style: 'currency', currency: 'BRL' }).format(viewingLeadDetail?.capital_social_numeric || viewingLeadDetail?.capital_social || 0)}
+                            </span>
+                        </div>
+                        <div className="flex gap-3">
+                            <div><span className="text-[8px] text-slate-600 font-black block opacity-50 uppercase">Porte</span><span className="text-xs font-black text-blue-300 uppercase italic">{viewingLeadDetail?.porte || 'ME'}</span></div>
+                            <div><span className="text-[8px] text-slate-600 font-black block opacity-50 uppercase">Abertura</span><span className="text-xs font-black text-slate-300 italic">2014</span></div>
+                        </div>
+                    </div>
+                </div>
+
+                <div className="glass-card p-4 rounded-3xl space-y-3 bg-white/5 border-white/10">
+                    <p className="text-[9px] font-black text-purple-400 uppercase tracking-widest flex items-center gap-2"><MapPin className="h-3 w-3"/> Localização</p>
+                    <div className="space-y-2">
+                        <div>
+                            <span className="text-[8px] text-slate-600 font-black block opacity-50 uppercase">Endereço</span>
+                            <p className="text-[10px] font-bold text-slate-300 leading-tight uppercase truncate">{viewingLeadDetail?.endereco_fiscal || viewingLeadDetail?.address || 'Não mapeado'}</p>
+                        </div>
+                        <div className="flex gap-3 border-t border-white/5 pt-2">
+                            <div><span className="text-[8px] text-slate-600 font-black block">Bairro</span><span className="text-[10px] font-black text-white uppercase italic">{viewingLeadDetail?.bairro || 'Centro'}</span></div>
+                            <div><span className="text-[8px] text-slate-600 font-black block">CEP</span><span className="text-[10px] font-black text-white font-mono tracking-tighter">{viewingLeadDetail?.cep || '00000-000'}</span></div>
+                        </div>
+                    </div>
+                </div>
+            </div>
+
+            {/* CONTATO DIRETO - Altura e padding reduzidos */}
+            <div className="bg-blue-600/5 p-4 rounded-3xl border border-blue-500/20 flex items-center justify-between">
+                <div className="flex items-center gap-4">
+                    <div className="h-12 w-12 bg-blue-600/20 rounded-full border border-blue-500/30 flex items-center justify-center shadow-neon-blue">
+                        <Users className="h-6 w-6 text-blue-400" />
+                    </div>
+                    <div>
+                        <span className="text-[8px] text-blue-400 font-black uppercase tracking-widest block">Decisor</span>
+                        <span className="text-xl font-black text-white uppercase tracking-tighter italic leading-none">{viewingLeadDetail?.dono || 'Sócio Administrador'}</span>
+                    </div>
+                </div>
+                <div className="text-right">
+                    <span className="text-[8px] text-slate-500 font-black uppercase tracking-widest block opacity-60">WhatsApp</span>
+                    <span className="text-xl font-black text-blue-400 tracking-widest font-mono shadow-neon-blue">{viewingLeadDetail?.phone || '(48) 0000-0000'}</span>
+                </div>
+            </div>
+
+            {/* BOTÕES DE AÇÃO - Altura reduzida de h-24 para h-14 */}
+            <div className="flex gap-4 pt-2">
+                <Button className="flex-1 h-14 bg-blue-600 hover:bg-blue-500 text-lg font-black rounded-2xl shadow-lg border border-white/10 uppercase italic flex items-center justify-center gap-2 transition-all active:scale-95 group">
+                    ABRIR CANAL DE FECHAMENTO <ArrowRight className="h-5 w-5 group-hover:translate-x-1 transition-transform" />
+                </Button>
+                <Button variant="outline" className="h-14 px-8 border border-white/10 glass-card text-xs font-black rounded-2xl uppercase tracking-widest hover:bg-white/5" onClick={() => setViewingLeadDetail(null)}>FECHAR</Button>
+            </div>
+        </div>
+    </DialogContent>
+</Dialog>
 
             {/* MODAL EDIÇÃO */}
             <Dialog open={!!editingLead} onOpenChange={() => setEditingLead(null)}>
@@ -523,20 +684,21 @@ export default function App() {
 
 function KanbanColumn({ title, count, color, children, icon, isActive }) {
     return (
-        /* min-w-[280px] é o segredo para o card não esticar */
-        <div className={`min-w-[280px] w-[280px] glass-panel rounded-2xl flex flex-col mb-6 overflow-hidden border relative transition-all duration-300 
-            ${isActive ? 'border-blue-500/40 bg-blue-900/5' : 'border-white/5'} 
-            h-[calc(100vh-280px)]`}>
+        /* min-h-screen garante que a coluna encoste no final da página */
+        <div className={`min-w-[310px] w-[310px] glass-panel rounded-3xl flex flex-col mb-10 overflow-hidden border relative transition-all duration-500 
+            ${isActive ? 'border-blue-500/40 bg-blue-900/10 shadow-neon-blue' : 'border-white/5'} 
+            min-h-screen h-fit`}> 
             
-            <div className={`p-3 border-b border-white/10 flex justify-between items-center bg-gradient-to-r ${color} shrink-0`}>
-                 <div className="flex items-center gap-2">
-                    <div className="bg-white/10 p-1.5 rounded-lg text-white">{icon}</div>
-                    <span className="font-black text-[9px] uppercase tracking-wider text-white">{title}</span>
+            <div className={`p-4 border-b border-white/10 flex justify-between items-center bg-gradient-to-r ${color} shrink-0 sticky top-0 z-20`}>
+                 <div className="flex items-center gap-3 relative z-10">
+                    <div className="bg-white/10 p-2 rounded-xl backdrop-blur-md border border-white/5 shadow-sm">{icon}</div>
+                    <span className="font-black text-[10px] uppercase tracking-widest text-white">{title}</span>
                 </div>
-                <Badge className="bg-white/20 text-[10px] h-5">{count}</Badge>
+                <Badge variant="secondary" className="bg-white/20 text-white border-none font-bold text-xs px-2 py-0.5 backdrop-blur-md relative z-10">{count}</Badge>
             </div>
 
-            <div className="p-3 space-y-3 flex-1 overflow-y-auto custom-scrollbar bg-slate-950/20">
+            {/* O conteúdo agora flui naturalmente sem scroll interno forçado */}
+            <div className="p-3 space-y-3 bg-slate-950/20 flex-1">
                 {children}
             </div>
         </div>
@@ -544,41 +706,71 @@ function KanbanColumn({ title, count, color, children, icon, isActive }) {
 }
 
 function LeadCard({ lead, isSelected, onSelect, onView, onEdit }) {
+    // Tenta pegar o valor de ambas as nomenclaturas possíveis do banco
+    const valorPotencial = lead?.capital_social_numeric || lead?.capital_social || 0;
+    
     return (
-        <div 
-            onClick={onView} 
-            className={`glass-card p-3 rounded-xl cursor-pointer relative group border-2 transition-all ${
-                isSelected ? 'border-blue-500/60 bg-blue-900/20' : 'border-white/5 hover:border-blue-500/30'
-            }`}
-        >
-            <div className="flex justify-between items-start mb-2">
-                <div onClick={(e) => { e.stopPropagation(); onSelect(); }}>
-                    {isSelected ? <CheckSquare className="h-4 w-4 text-blue-400" /> : <Square className="h-4 w-4 text-slate-700" />}
+        <div onClick={onView} className={`glass-card p-3 rounded-2xl cursor-pointer relative group transition-all duration-500 border-2 ${
+            isSelected ? 'border-blue-500/60 bg-blue-900/20 shadow-neon-blue' : 'border-white/5 hover:border-blue-500/30'
+        }`}>
+            {/* LINHA 1: SCORE, PRIORIDADE E RATING */}
+            <div className="flex justify-between items-center mb-2">
+                <div className="flex items-center gap-2">
+                    <div onClick={(e) => { e.stopPropagation(); onSelect(); }} className="hover:scale-110 transition-transform">
+                        {isSelected ? <CheckSquare className="h-4 w-4 text-blue-400" /> : <Square className="h-4 w-4 text-slate-700" />}
+                    </div>
+                    {/* Ícone de Prioridade 🔥 baseada no level do banco */}
+                    {lead?.priority_level >= 3 && <Flame className="h-3.5 w-3.5 text-orange-500 animate-pulse shadow-neon-orange" />}
+                    <div className="flex gap-0.5">
+                        {[1,2,3].map(i => (
+                            <div key={i} className={`h-1 w-3 rounded-full ${lead?.quality_score_int4 >= (i*30) ? 'bg-emerald-500 shadow-neon-green' : 'bg-slate-800'}`}></div>
+                        ))}
+                    </div>
                 </div>
-                <Badge className="bg-yellow-500/10 text-yellow-500 border-none text-[8px] h-4 px-1">⭐ {lead?.rating || '4.5'}</Badge>
+                <Badge className="bg-yellow-500/10 text-yellow-500 border-none text-[8px] h-4 px-1.5 font-black uppercase tracking-tighter">⭐ {lead?.rating || '4.5'}</Badge>
             </div>
 
+            {/* LINHA 2: IDENTIFICAÇÃO E CONTATO RÁPIDO */}
             <div className="mb-2">
-                <h3 className="text-sm font-bold text-white leading-tight uppercase truncate">{lead?.name || "Sem Nome"}</h3>
-                <p className="text-[8px] text-slate-500 font-bold uppercase tracking-tighter mt-0.5">{lead?.niche}</p>
-            </div>
-
-            <div className="bg-black/40 p-2 rounded-lg border border-white/5 mb-2">
-                <p className="text-[7px] font-black text-blue-400 uppercase mb-0.5 opacity-70">Potencial</p>
-                <p className="text-sm font-black text-white tracking-tighter">
-                    {new Intl.NumberFormat('pt-BR', { style: 'currency', currency: 'BRL' }).format(lead?.capital_social || 0)}
-                </p>
-            </div>
-
-            <div className="pt-2 border-t border-white/5 flex items-center justify-between">
-                <div className="flex flex-col">
-                    <span className="text-[8px] text-blue-300 font-black uppercase opacity-60">Decisor</span>
-                    <span className="text-[11px] font-black text-yellow-500 uppercase leading-none">
-                        👤 {String(lead?.dono || 'GESTOR').split(' ')[0]}
-                    </span>
+                <h3 className="text-[13px] font-black text-white tracking-tight leading-none uppercase truncate group-hover:text-blue-400 transition-colors">{lead?.name || "Sem Nome"}</h3>
+                <div className="flex flex-col gap-1 mt-2">
+                    <div className="flex items-center gap-2">
+                        <Badge className="bg-blue-500/10 text-blue-400 border-none text-[7px] h-3 px-1 uppercase leading-none">{lead?.porte || 'ME'}</Badge>
+                        <span className="text-[8px] font-bold text-slate-500 uppercase tracking-tighter truncate max-w-[120px]">{lead?.niche}</span>
+                    </div>
+                    {/* NÚMERO VISÍVEL PARA OPERAÇÃO RÁPIDA */}
+                    <div className="flex items-center gap-1.5 opacity-70 group-hover:opacity-100 transition-opacity">
+                        <Phone className="h-2.5 w-2.5 text-blue-400" />
+                        <span className="text-[10px] font-black text-slate-300 tracking-wider font-mono">{lead?.phone || '(00) 0000-0000'}</span>
+                    </div>
                 </div>
-                <Zap className="h-3 w-3 text-blue-400" />
             </div>
+
+            {/* LINHA 3: POTENCIAL FINANCEIRO CORRIGIDO */}
+            <div className="bg-black/40 p-2 rounded-xl border border-white/5 mb-2 flex justify-between items-center">
+                <div>
+                    <p className="text-[7px] font-black text-slate-500 uppercase tracking-widest leading-none italic">Potencial Estimado</p>
+                    <p className="text-xs font-black text-white tracking-tighter mt-0.5 italic">
+                        {new Intl.NumberFormat('pt-BR', { style: 'currency', currency: 'BRL' }).format(valorPotencial)}
+                    </p>
+                </div>
+                <Zap className={`h-3 w-3 ${valorPotencial > 100000 ? 'text-yellow-500 animate-pulse shadow-neon-yellow' : 'text-slate-700'}`} />
+            </div>
+
+            {/* LINHA 4: DECISOR E EDIT */}
+            <div className="flex items-center justify-between">
+                <div className="flex items-center gap-1.5">
+                    <div className="h-5 w-5 rounded-full bg-slate-800 flex items-center justify-center text-[8px] text-white border border-white/10 font-bold uppercase">{lead?.dono?.[0] || 'G'}</div>
+                    <span className="text-[10px] font-bold text-slate-400 uppercase truncate max-w-[140px]">{lead?.dono || 'Gestor Identificado'}</span>
+                </div>
+                <div onClick={(e) => { e.stopPropagation(); onEdit(); }} className="h-6 w-6 rounded-lg bg-blue-600/10 border border-blue-500/20 flex items-center justify-center opacity-0 group-hover:opacity-100 transition-all">
+                    <Edit2 className="h-3 w-3 text-blue-400" />
+                </div>
+            </div>
+
+
+
+
         </div>
     );
 }

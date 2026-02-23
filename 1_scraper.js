@@ -1,173 +1,197 @@
 const puppeteer = require('puppeteer-extra');
 const StealthPlugin = require('puppeteer-extra-plugin-stealth');
+const https = require('https');
+
 puppeteer.use(StealthPlugin());
 
 const SINONIMOS = {
-    'padaria': ['panificadora', 'confeitaria'],
-    'mercado': ['supermercado', 'mercearia', 'mini mercado', 'atacarejo'],
-    'energia solar': ['instalação solar', 'energia fotovoltaica'],
-    'restaurante': ['churrascaria', 'pizzaria', 'bistro'],
-    'oficina': ['mecânica', 'auto center'],
-    'clinica': ['consultório', 'odontologia'],
-    'hotel': ['pousada', 'hostel', 'resort', 'motel']
+    'padaria': ['panificadora', 'confeitaria', 'fabricação de pães', 'padaria artesanal', 'casa de pães', 'indústria de pães', 'confeitaria fina', 'fábrica de bolos'],
+    'mercado': ['supermercado', 'mercearia', 'mini mercado', 'atacarejo', 'hortifruti', 'empório', 'quitanda'],
+    'restaurante': ['churrascaria', 'pizzaria', 'bistro', 'marmitaria', 'self service', 'hamburgueria', 'sushi bar'],
+    'oficina': ['mecânica', 'auto center', 'funilaria', 'pintura automotiva', 'centro automotivo', 'auto elétrica'],
+    'posto': ['posto de combustível', 'abastecimento', 'loja de conveniência', 'posto de gasolina'],
+    'clinica': ['consultório', 'odontologia', 'dentista', 'estética', 'clínica médica', 'laboratório'],
+    'farmacia': ['drogaria', 'farmácia de manipulação', 'farmácia popular'],
+    'energia solar': ['instalação solar', 'energia fotovoltaica', 'painel solar', 'integrador solar'],
+    'escola': ['colégio', 'educação infantil', 'ensino médio', 'escola de idiomas', 'creche']
 };
 
+// --- MOTOR DE GEOGRAFIA ---
+const delay = (ms) => new Promise(res => setTimeout(res, ms));
+
+async function buscarBairrosReais(cidade) {
+    console.log(`🗺️ [MAPPING] Iniciando triangulação geográfica para: ${cidade}...`);
+    const fetchOSM = (query) => new Promise((resolve) => {
+        const url = `https://nominatim.openstreetmap.org/search?q=${encodeURIComponent(query)}&country=Brazil&format=json&addressdetails=1&limit=45`;
+        const req = https.get(url, { headers: { 'User-Agent': `EnerzeeBot-Debug-${Math.random()}` } }, (res) => {
+            let data = '';
+            res.on('data', c => data += c);
+            res.on('end', () => { try { const parsed = JSON.parse(data); resolve(Array.isArray(parsed) ? parsed : []); } catch { resolve([]); } });
+        });
+        req.on('error', () => resolve([]));
+    });
+
+    let bairrosSet = new Set();
+    const res1 = await fetchOSM(`bairros em ${cidade}`);
+    res1.forEach(item => { const b = item.address?.suburb || item.address?.neighbourhood; if (b) bairrosSet.add(b); });
+
+    if (bairrosSet.size === 0) {
+        console.log(`⚠️ [OSM] API bloqueada. Usando Morfologia Brasileira para ${cidade}.`);
+        return [`Centro`, `Jardim`, `Vila`, `Parque`, `Distrito Industrial`].map(z => `${z}, ${cidade}`);
+    }
+    console.log(`✅ [MAPPING] ${bairrosSet.size} bairros detectados.`);
+    return Array.from(bairrosSet).slice(0, 15).map(b => `${b}, ${cidade}`);
+}
+
+// --- SCROLL PROFUNDO (DEEP SCAN) ---
 async function humanScroll(page) {
+    console.log("🖱️ [SCROLL] Iniciando varredura profunda da lista...");
     await page.evaluate(async () => {
         const wrapper = document.querySelector('div[role="feed"]');
         if (!wrapper) return;
         await new Promise((resolve) => {
-            let totalHeight = 0;
-            let distance = 400;
+            let lastHeight = 0;
+            let tentativas = 0;
             const timer = setInterval(() => {
-                const scrollHeight = wrapper.scrollHeight;
-                wrapper.scrollBy(0, distance);
-                totalHeight += distance;
-                if (totalHeight >= scrollHeight || wrapper.childElementCount > 80) {
+                wrapper.scrollBy(0, 400);
+                console.log(`📜 [BROWSER] Itens no Feed: ${wrapper.childElementCount}`);
+                if (wrapper.scrollHeight === lastHeight) {
+                    tentativas++;
+                } else {
+                    tentativas = 0;
+                }
+                lastHeight = wrapper.scrollHeight;
+                // Busca até 150 itens ou até o Google parar de entregar
+                if (tentativas >= 10 || wrapper.childElementCount > 150) {
                     clearInterval(timer);
                     resolve();
                 }
-            }, 800);
+            }, 900);
         });
     });
 }
 
+// --- CORE DO SCRAPER (CLICK & COLLECT V2026) ---
 async function iniciarVarredura(params, onProgress) {
     const { city, niche, mode, lat, lng } = params;
     const sendStatus = (msg) => onProgress({ type: 'status', message: msg });
 
+    console.log("🔧 [DEBUG] Analisando termos de busca...");
     let termos = [];
-    const listaNichos = Array.isArray(niche) ? niche : [niche];
+    const listaNichos = Array.isArray(niche) ? niche : [niche || "Comércio"];
     listaNichos.forEach(n => {
-        const chave = n.toLowerCase().trim();
-        termos.push(chave);
-        if (SINONIMOS[chave]) termos.push(...SINONIMOS[chave]);
+        let val = (typeof n === 'object' && n.keywords) ? n.keywords : n;
+        if (typeof val === 'string') {
+            const chave = val.toLowerCase().trim();
+            termos.push(chave);
+            if (SINONIMOS[chave]) termos.push(...SINONIMOS[chave]);
+        }
     });
     termos = [...new Set(termos)];
-
-    sendStatus(`🚀 [MOTOR V12.1 - ANTI-RUÍDO] Buscando em @${lat},${lng}`);
+    console.log(`🔎 [RADAR] Termos Ativos: [${termos.join(', ')}]`);
 
     const browser = await puppeteer.launch({
         headless: false,
-        args: ['--start-maximized', '--no-sandbox', '--disable-setuid-sandbox'],
-        defaultViewport: null
+        args: ['--start-maximized', '--no-sandbox', '--disable-gpu', '--disable-dev-shm-usage']
     });
 
     const page = await browser.newPage();
-    await page.setUserAgent('Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36');
+    page.on('console', msg => { if (msg.text().includes('[BROWSER]')) console.log(msg.text()); });
+    await page.setUserAgent('Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/121.0.0.0 Safari/537.36');
 
     try {
-        for (const termo of termos) {
-            let url = '';
-            
-            if (mode === 'map' && lat && lng) {
-                url = `https://www.google.com.br/maps/search/${encodeURIComponent(termo)}/@${lat},${lng},15z?hl=pt-BR`;
-            } else {
-                const cidadeLimpa = city.replace(/🎯|Alvo no Mapa|\(.*\)/g, '').trim();
-                url = `https://www.google.com.br/maps/search/${encodeURIComponent(termo + ' em ' + cidadeLimpa)}?hl=pt-BR`;
-            }
+        let zonas = (mode !== 'map') ? await buscarBairrosReais(city) : [city];
+        console.log(`📍 [SCRAPER] Atacando ${zonas.length} zonas geográficas.`);
 
-            sendStatus(`📡 Radar fixado: ${termo}`);
+        for (const zona of zonas) {
+            for (const termo of termos) {
+                // Passo 1: Limpeza da localização e construção da URL inteligente
+                const localLimpo = zona.includes('📍') ? "" : ` em ${zona}`;
+                const query = `${termo}${localLimpo}`;
+                
+                let url = '';
+                if (mode === 'map' && lat && lng) {
+                    // Se for clique no mapa, usa as coordenadas reais para evitar o DDD 48
+                    url = `https://www.google.com.br/maps/search/${encodeURIComponent(termo)}/@${lat},${lng},14z?hl=pt-BR`;
+                } else {
+                    // Se for busca por cidade/bairro, usa o formato padrão
+                    url = `https://www.google.com.br/maps/search/${encodeURIComponent(query)}?hl=pt-BR`;
+                }
+                
+                console.log(`📡 [RADAR] Alvo: ${query}`);
+                await page.goto(url, { waitUntil: 'domcontentloaded', timeout: 40000 });
+                
+                try {
+                    await page.waitForSelector('div[role="feed"]', { timeout: 10000 });
+                    await humanScroll(page);
+                } catch (e) {
+                    console.log("⏭️ [DEBUG] Zona sem resultados ou falha no carregamento.");
+                    continue;
+                }
 
-            try {
-                await page.goto(url, { waitUntil: 'domcontentloaded', timeout: 60000 });
-                await new Promise(r => setTimeout(r, 5000)); 
-            } catch (e) { continue; }
-
-            await humanScroll(page);
-
-            const leads = await page.evaluate((termoRef) => {
-                const results = [];
-                const items = document.querySelectorAll('div[role="article"], a[href*="/maps/place/"]');
-                const vistos = new Set();
-
-                items.forEach(item => {
-                    let linkEl = item.tagName === 'A' ? item : item.querySelector('a[href*="/maps/place/"]');
-                    if (!linkEl || !linkEl.href.includes('/place/')) return;
-                    
-                    const link = linkEl.href;
-                    if (vistos.has(link)) return;
-                    vistos.add(link);
-
-                    const container = item.closest('div[role="article"]') || item.parentElement;
-                    const text = container ? container.innerText : "";
-                    const lines = text.split('\n');
-
-                    const nome = linkEl.getAttribute('aria-label') || lines[0];
-                    const telMatch = text.match(/(?:\(?\d{2}\)?\s?)?(?:9\d{4}[-\s]?\d{4}|\d{4}[-\s]?\d{4})/);
-
-                    // --- FILTRO V12.1: LISTA NEGRA DE PALAVRAS ---
-                    // Ignora qualquer linha que pareça status ou telefone
-                    const filtroLixo = /(Aberto|Fechado|Fecha|Abre|Estrela|comentário|Filtro|Avaliaç|Fabricante|Congelado|Indústria|Pães|\(\d{2}\)|CNPJ)/i;
-
-                    const regexCEP = /\d{5}-?\d{3}/;
-                    const regexLogradouro = /(?:Rua|Av|Avenida|Travessa|Rod|Rodovia|Estrada|Servidão|Praça|Largo|Al\.)/i;
-
-                    // 1. Tenta achar CEP (Ouro)
-                    let addressLine = lines.find(l => regexCEP.test(l) && !filtroLixo.test(l));
-
-                    // 2. Tenta achar Rua/Av (Prata)
-                    if (!addressLine) {
-                        addressLine = lines.find(l => regexLogradouro.test(l) && l.match(/\d+/) && !filtroLixo.test(l));
-                    }
-
-                    // 3. Tenta achar linha com vírgula e número (Bronze), mas aplica o filtro de lixo rigorosamente
-                    if (!addressLine) {
-                        addressLine = lines.find(l => 
-                            l.includes(',') && 
-                            l.match(/\d+/) && 
-                            !filtroLixo.test(l) &&
-                            l.length > 10 // Endereço muito curto geralmente é erro
-                        );
-                    }
-
-                    const addressClean = (addressLine || "").replace(/·.*/g, '').replace(/ZAP.*/gi, '').trim();
-
-                    // Extração de Cidade
-                    let cidadeDetectada = "";
-                    if (addressClean.length > 5) {
-                        const partesEnd = addressClean.split(',');
-                        if (partesEnd.length >= 2) {
-                            let candidato = partesEnd[partesEnd.length - 2].trim();
-                            if (candidato.includes('-')) {
-                                candidato = candidato.split('-').pop().trim();
-                            }
-                            cidadeDetectada = candidato;
-                        }
-                    }
-
-                    if (cidadeDetectada.length < 3 || !isNaN(parseInt(cidadeDetectada))) {
-                        cidadeDetectada = ""; 
-                    }
-
-                    const finalAddress = addressClean.length > 10 ? addressClean : "Endereço não identificado";
-
-                    results.push({
-                        name: nome,
-                        nome: nome,
-                        niche: termoRef,
-                        phone: telMatch ? telMatch[0] : "",
-                        telefone: telMatch ? telMatch[0] : "",
-                        address: finalAddress,
-                        city: cidadeDetectada, 
-                        link: link,
-                        link_maps: link,
-                        valido: true 
-                    });
+                // --- CAPTURA DE LINKS ---
+                const linksLeads = await page.evaluate(() => {
+                    return Array.from(document.querySelectorAll('a[href*="/maps/place/"]'))
+                        .map(a => a.href)
+                        .filter((v, i, a) => a.indexOf(v) === i); // Únicos
                 });
 
-                if (results.length === 0) console.error("[DIAGNÓSTICO] O scraper não extraiu leads.");
-                return results;
-            }, termo);
+                console.log(`🕵️ [DEBUG] ${linksLeads.length} leads potenciais na lista. Iniciando extração detalhada...`);
 
-            if (leads.length > 0) {
-                for (const lead of leads) {
-                    await onProgress({ type: 'lead', data: lead }); 
+                for (let i = 0; i < linksLeads.length; i++) {
+                    try {
+                        console.log(`👉 [DETALHE] Abrindo lead ${i + 1}/${linksLeads.length}...`);
+                        
+                        // Clica no link para abrir o painel lateral
+                        const linkSelector = `a[href="${linksLeads[i]}"]`;
+                        await page.click(linkSelector);
+                        await delay(2000); // Espera o painel lateral carregar dados reais
+
+                        const leadInfo = await page.evaluate((urlLead, termoRef, cidadeRef, zonaRef) => {
+                            // SELETORES DE PAINEL LATERAL 2026
+                            const nome = document.querySelector('h1')?.innerText || "Sem Nome";
+                            const painelTexto = document.body.innerText;
+                            
+                            // Regex de Telefone (Foca no painel lateral onde o dado está completo)
+                            const matchTel = painelTexto.match(/(\(?\d{2}\)?\s?)?(9?\d{4}[-\s]?\d{4})/);
+                            
+                            if (!matchTel) return null; // Ignora se não tiver telefone mesmo no detalhe
+
+                            // Endereço (Busca o ícone de localização para pegar o texto vizinho)
+                            let endereco = "Endereço não identificado";
+                            const btnEndereco = document.querySelector('button[data-item-id="address"]');
+                            if (btnEndereco) endereco = btnEndereco.innerText;
+
+                            return {
+                                name: nome,
+                                niche: termoRef,
+                                phone: matchTel[0],
+                                address: endereco,
+                                city: cidadeRef,
+                                bairro: zonaRef.split(',')[0],
+                                link: urlLead,
+                                valido: true
+                            };
+                        }, linksLeads[i], termo, city, zona);
+
+                        if (leadInfo) {
+                            console.log(`✅ [EXTRAÍDO] ${leadInfo.name} | ${leadInfo.phone}`);
+                            await onProgress({ type: 'lead', data: leadInfo });
+                        } else {
+                            console.log(`❌ [IGNORADO] Sem telefone no painel lateral.`);
+                        }
+
+                        // Proteção para não ser bloqueado (Simula leitura humana)
+                        if (i % 5 === 0) await delay(1000);
+
+                    } catch (e) {
+                        console.log(`⚠️ Erro ao processar lead ${i + 1}. Pulando...`);
+                    }
                 }
             }
         }
-    } catch (erro) {
-        console.error("ERRO NO MOTOR:", erro);
+    } catch (err) {
+        console.error("🔥 ERRO CRÍTICO NO MOTOR:", err);
     } finally {
         await browser.close();
         sendStatus("🏁 Varredura finalizada.");

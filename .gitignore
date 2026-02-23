@@ -56,3 +56,11 @@ wpp_session/
 sdr_db.json
 node_modules/
 .env
+
+node_modules/
+.env
+wpp_sessions/
+.wwebjs_auth/
+temp_audio_*
+*.ogg
+*.mp3

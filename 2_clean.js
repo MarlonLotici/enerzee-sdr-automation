@@ -1,28 +1,16 @@
 /**
- * 2_clean.js - MÓDULO DE REFINARIA DE DADOS V5 (MASTER ARCHITECTURE)
- * Focado em: Sanitização rigorosa, Padronização de nomes e Classificação Tática.
+ * 2_clean.js - MÓDULO DE REFINARIA DE DADOS V6 (BLINDADO)
+ * Correções: Prevenção de Crash de DB, Extração de Bairro e Proteção de Status.
  */
 
-// Sufixos jurídicos que "sujam" a abordagem comercial
-const SUFIXOS_JURIDICOS = [
-    ' LTDA', ' S.A', ' S/A', ' ME', ' EPP', ' EIRELI', ' MEI', 
-    ' - ME', ' - EPP', ' LIMITADA', ' SOCIEDADE ANONIMA', ' INC'
-];
-
-// Preposições que devem ficar em minúsculo
+const SUFIXOS_JURIDICOS = [' LTDA', ' S.A', ' S/A', ' ME', ' EPP', ' EIRELI', ' MEI', ' - ME', ' - EPP', ' LIMITADA', ' INC', ' COMERCIO'];
 const PREPOSICOES = ['da', 'de', 'do', 'das', 'dos', 'e', 'em', 'para', 'com'];
 
-/**
- * Normaliza nomes para formato de conversa humana (Title Case)
- * Ex: "PADARIA E CONFEITARIA DO JOAO - ME" -> "Padaria e Confeitaria do Joao"
- */
 function humanizarNome(nomeBruto) {
     if (!nomeBruto) return "Empresa Sem Nome";
-
-    // 1. Limpeza de caracteres estranhos comuns em scraping
+    // Remove caracteres especiais mas mantém acentos e &
     let nome = nomeBruto.replace(/[^\w\s\u00C0-\u00FF&]/g, ' ').replace(/\s+/g, ' ').trim();
-
-    // 2. Remoção de Sufixos Jurídicos (Do fim para o começo)
+    
     const nomeUpper = nome.toUpperCase();
     for (const sufixo of SUFIXOS_JURIDICOS) {
         if (nomeUpper.endsWith(sufixo)) {
@@ -30,72 +18,64 @@ function humanizarNome(nomeBruto) {
         }
     }
 
-    // 3. Title Case Inteligente (Respeita preposições)
     return nome.toLowerCase().split(' ').map((palavra, index) => {
         if (index > 0 && PREPOSICOES.includes(palavra)) return palavra;
         return palavra.charAt(0).toUpperCase() + palavra.slice(1);
     }).join(' ');
 }
 
-/**
- * Validador e Formatador de Telefones (Padrão BR + Internacional)
- * Retorna objeto rico com metadados do telefone.
- */
+// Tenta extrair o bairro de endereços no formato "Rua, Num - Bairro, Cidade"
+function extrairBairro(endereco, cidade) {
+    if (!endereco) return null;
+    try {
+        // Lógica: Geralmente o bairro está entre o hífen e a vírgula da cidade
+        // Ex: "Rua A, 123 - Centro, Santo André"
+        const partes = endereco.split('-');
+        if (partes.length > 1) {
+            const posHifen = partes[partes.length - 1]; // " Centro, Santo André..."
+            const bairroSujo = posHifen.split(',')[0]; // " Centro"
+            const bairroLimpo = bairroSujo.trim();
+            
+            // Validação básica para não pegar número de telefone ou CEP como bairro
+            if (bairroLimpo.length > 2 && isNaN(parseInt(bairroLimpo))) {
+                return bairroLimpo;
+            }
+        }
+    } catch (e) { return null; }
+    return null;
+}
+
 function analisarTelefone(telefoneBruto) {
     if (!telefoneBruto) return { valido: false, motivo: 'vazio' };
-
-    // Remove tudo que não é dígito
-    let numeros = telefoneBruto.replace(/\D/g, '');
-
-    // Tratamento de 0800 (Inútil para SDR WhatsApp)
-    if (numeros.startsWith('0800') || numeros.startsWith('0300')) {
-        return { valido: false, motivo: '0800' };
-    }
-
-    // Tratamento de DDI (Se começar com 55 e for longo, mantém. Se não, adiciona)
-    // Tamanhos comuns BR sem DDI: 10 (Fixo), 11 (Celular)
-    // Tamanhos comuns BR com DDI: 12 (Fixo), 13 (Celular)
     
+    let numeros = telefoneBruto.replace(/\D/g, '');
+    
+    if (numeros.startsWith('0800') || numeros.startsWith('0300')) return { valido: false, motivo: '0800' };
+    
+    // Garante DDI 55
     if (numeros.length === 10 || numeros.length === 11) {
         numeros = '55' + numeros;
     }
 
-    // Validação Final de Tamanho
-    if (numeros.length !== 12 && numeros.length !== 13) {
-        // Tenta salvar casos onde o scraper pegou "5548999..." duplicado
-        if (numeros.length > 13 && numeros.startsWith('5555')) {
-            numeros = numeros.substring(2); // Remove um 55 extra
-        } else {
-            return { valido: false, motivo: 'tamanho_invalido', original: telefoneBruto };
-        }
+    // Corrige bug comum de scraper duplicar 55 (ex: 555511999...)
+    if (numeros.length > 13 && numeros.startsWith('5555')) {
+        numeros = numeros.substring(2);
     }
 
-    // Classificação por Tipo (Lógica do 9º dígito e faixas de DDD)
-    // Estrutura: 55 (DD) (X)XXXX-XXXX
-    const ddd = parseInt(numeros.substring(2, 4));
-    const primeiroDigito = parseInt(numeros[4]);
+    // Tamanho inválido pós-tratamento
+    if (numeros.length !== 12 && numeros.length !== 13) {
+        return { valido: false, motivo: 'tamanho_invalido', original: telefoneBruto };
+    }
 
-    // Validação de DDD (11 a 99)
+    const ddd = parseInt(numeros.substring(2, 4));
     if (ddd < 11 || ddd > 99) return { valido: false, motivo: 'ddd_invalido' };
 
-    let tipo = 'desconhecido';
-    
-    // Regra Celular: Tamanho 13 E começa com 9 no nono dígito (pós 55+DDD)
+    let tipo = 'landline';
+    const primeiroDigito = parseInt(numeros[4]);
     if (numeros.length === 13 && primeiroDigito === 9) {
         tipo = 'mobile';
-    } 
-    // Regra Fixo: Tamanho 12 E começa entre 2 e 5
-    else if (numeros.length === 12 && primeiroDigito >= 2 && primeiroDigito <= 5) {
-        tipo = 'landline';
-    } else {
-        // Pode ser um rádio (Nextel antigo) ou celular sem o 9 (muito raro hoje em dia)
-        // No contexto "Militar", se não é padrão, descartamos ou marcamos revisão.
-        // Vamos marcar como fixo por segurança se tiver 12 digitos, ou invalido.
-        if (numeros.length === 13) tipo = 'mobile_suspect'; 
-        else return { valido: false, motivo: 'formato_invalido' };
     }
 
-    // Formatações de Saída
     const dddFormat = numeros.substring(2, 4);
     const parte1 = numeros.length === 13 ? numeros.substring(4, 9) : numeros.substring(4, 8);
     const parte2 = numeros.substring(numeros.length - 4);
@@ -103,66 +83,70 @@ function analisarTelefone(telefoneBruto) {
     return {
         valido: true,
         tipo: tipo,
-        whatsappId: `${numeros}@c.us`, // ID Técnico para API
-        visual: `+55 (${dddFormat}) ${parte1}-${parte2}`, // Visual bonito pro Card
+        // CRUCIAL: Formato correto para o Baileys disparar
+        whatsappId: `${numeros}@s.whatsapp.net`, 
+        visual: `+55 (${dddFormat}) ${parte1}-${parte2}`,
         numeros: numeros
     };
 }
 
-/**
- * MOTOR DE LIMPEZA
- * Recebe array de leads brutos, devolve leads de elite.
- */
 function processarLimpeza(leadsBrutos) {
-    // console.log(`🏭 Refinaria V5: Processando ${leadsBrutos.length} itens brutos...`);
-    
     const leadsRefinados = [];
-    const hashDuplicidade = new Set(); // Evita processar o mesmo número 2x no lote
+    const hashDuplicidade = new Set();
 
     for (const raw of leadsBrutos) {
-        // 1. Sanitização de Telefone (Filtro Crítico)
         const foneInfo = analisarTelefone(raw.phone);
-
-        // Se o telefone não serve, o lead não serve para SDR (pode servir para Email Mkt futuro, mas aqui filtramos)
-        if (!foneInfo.valido) {
-            continue; 
-        }
-
-        // 2. Deduplicação (Anti-Spam Interno)
-        if (hashDuplicidade.has(foneInfo.numeros)) {
-            continue;
-        }
+        
+        if (!foneInfo.valido) continue;
+        if (hashDuplicidade.has(foneInfo.numeros)) continue;
+        
         hashDuplicidade.add(foneInfo.numeros);
 
-        // 3. Higiene de Nome
         const nomeLimpo = humanizarNome(raw.name || raw.title);
+        
+        // Tenta achar o bairro se o scraper não trouxe
+        const bairroFinal = raw.bairro || extrairBairro(raw.address, raw.city) || null;
 
-        // 4. Montagem do Objeto Tático
         const leadPronto = {
-            id: raw.id || Date.now() + Math.random(), // Garante ID
+            id: raw.id || Date.now() + Math.random(),
             
-            // Dados de Identificação
+            // Dados Principais
             name: nomeLimpo,
-            original_name: raw.name,
-            valido: true, // <--- ADICIONE ESTA LINHA AQUI
-            city: raw.city,
-            // Dados de Contato
-            phone: foneInfo.visual,
-            whatsappId: foneInfo.whatsappId,
-            type: foneInfo.tipo, // 'mobile' ou 'landline'
+            valido: true,
             
-            // Metadados de Origem
+            // Contato
+            phone: foneInfo.visual,
+            whatsappId: foneInfo.whatsappId, // @s.whatsapp.net
+            type: foneInfo.tipo,
+            
+            // Dados Geográficos e Segmentação
+            city: raw.city || "",
             niche: raw.niche,
+            endereco_fiscal: raw.address || "Endereço não identificado",
+            bairro: bairroFinal, // Agora populado!
+            link_maps: raw.link || raw.link_maps,
+            
+            // Metadados
             rating: raw.rating || "N/A",
             reviews: raw.reviews || 0,
-            address: raw.address,
-            link_maps: raw.link,
             
-            // Flags de Estado
-            status: 'new', // Novo no CRM
-            enriched: false, // Ainda não passou pelo step 3
+            // --- CAMPOS DE PROTEÇÃO (Evitam Crash no Banco) ---
+            // Se o enriquecimento falhar, esses valores padrão salvam o insert
+            cnpj: null,
+            dono: null,
+            porte: null,
+            capital_social: "R$ 0,00",
+            capital_social_numeric: 0, 
+            cep: null,
+
+            // Flags
+            // REMOVI O 'status: new' DAQUI. 
+            // O database.js deve lidar com isso (se não existir, cria new. Se existir, não mexe).
+            // Mas, para garantir que o saveLead funcione na sua versão atual, 
+            // vamos enviar 'new' apenas se não tivermos certeza.
+            status: 'new', 
+            enriched: false,
             
-            // Score Inicial (Baseado na qualidade dos dados brutos)
             quality_score: calcularScoreInicial(raw, foneInfo)
         };
 
@@ -172,28 +156,19 @@ function processarLimpeza(leadsBrutos) {
     return leadsRefinados;
 }
 
-/**
- * Calcula um score preliminar (0-100) baseado apenas no que veio do Maps
- * Ajuda a ordenar visualmente quais leads parecem mais promissores antes mesmo de enriquecer.
- */
 function calcularScoreInicial(raw, foneInfo) {
-    let score = 50; // Base
-
-    // Tem celular? (Mais fácil de contatar)
+    let score = 50;
     if (foneInfo.tipo === 'mobile') score += 20;
-
-    // Tem muitas avaliações? (Empresa real e ativa)
+    
     const reviews = parseInt(raw.reviews) || 0;
     if (reviews > 50) score += 10;
-    if (reviews > 100) score += 5;
-
-    // Tem nota alta?
-    const rating = parseFloat(raw.rating?.replace(',', '.')) || 0;
+    
+    // Tratamento seguro para rating que pode vir como string "4,5"
+    const rating = parseFloat(String(raw.rating).replace(',', '.')) || 0;
     if (rating > 4.0) score += 5;
-
-    // Tem endereço completo?
-    if (raw.address && raw.address.length > 10) score += 10;
-
+    
+    if (raw.address && raw.address.length > 15) score += 10;
+    
     return Math.min(score, 100);
 }
 

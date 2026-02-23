@@ -1,410 +1,651 @@
 /**
- * 4_sdr.js - MÓDULO DE VENDAS NEURAL V10 (VERSÃO FINAL CORRIGIDA)
+ * 4_sdr.js - MÓDULO DE VENDAS NEURAL V12 (BAILEYS MULTI-TENANCY)
+ * INTEGRAL: Vision, PDF, Regras Regionais Enerzee, Anti-Ban e Horários.
  */
-const { Client, LocalAuth } = require('whatsapp-web.js');
-const qrcode = require('qrcode-terminal');
+const { 
+    makeWASocket, 
+    useMultiFileAuthState, 
+    DisconnectReason, 
+    delay, 
+    fetchLatestBaileysVersion,
+    makeCacheableSignalKeyStore,
+    downloadMediaMessage 
+} = require('@whiskeysockets/baileys');
+const pino = require('pino');
+const fs = require('fs');
 const Groq = require('groq-sdk');
-require('dotenv').config();
 const pdf = require('pdf-parse');
-const db = require('./database'); 
 const { createClient } = require('@supabase/supabase-js');
-const supabase = createClient(process.env.SUPABASE_URL, process.env.SUPABASE_KEY);
 
+// --- CONFIGURAÇÃO E SEGURANÇA ---
+const supabase = createClient(process.env.SUPABASE_URL, process.env.SUPABASE_KEY);
 const groq = new Groq({ apiKey: process.env.GROQ_API_KEY });
 const MODELO_CEREBRO = "llama-3.3-70b-versatile"; 
+const MODELO_VISAO = "llama-3.2-11b-vision-preview";
+// --- TRAVA DE SEGURANÇA (MEMÓRIA VIVA) ---
+const leadsEmProcessamento = new Set();
+if (!fs.existsSync('./wpp_sessions')) fs.mkdirSync('./wpp_sessions');
 
-const client = new Client({
-    authStrategy: new LocalAuth({ dataPath: './wpp_session' }),
-    puppeteer: {
-        headless: true,
-        args: ['--no-sandbox', '--disable-setuid-sandbox']
-    }
-});
-
-let isReady = false;
-let socketRef = null; // Mantenha apenas esta variável solta
-
-// ... abaixo segue a função analisarIntencao ... 
+const sessions = new Map(); 
+const instanciasLigando = new Set();
+let ioSocket = null; 
 
 // ============================================================================
-// 🧠 NÚCLEO DE INTELIGÊNCIA ARTIFICIAL
+// 🕒 SEGURANÇA: HORÁRIO COMERCIAL (05:30 - 22:45)
+// ============================================================================
+function dentroDoExpediente() {
+    const agora = new Date();
+    const tempoAtual = agora.getHours() * 60 + agora.getMinutes();
+    return tempoAtual >= (5 * 60 + 30) && tempoAtual <= (22 * 60 + 45);
+}
+
+// ============================================================================
+// 🧠 NÚCLEO IA: INTENÇÃO E RESPOSTA (SEU "CLOSER V11" INTEGRAL)
 // ============================================================================
 
 async function analisarIntencao(historico) {
-    const prompt = `
-    Analise a conversa abaixo. Você é um classificador de leads para energia solar.
-    Classifique a última intenção do cliente em UMA das categorias:
-    [INTERESSE] - Quer saber mais, perguntou preço, disse sim.
-    [DUVIDA] - Fez uma pergunta técnica ou sobre a empresa.
-    [NEGATIVO] - Disse não, não tenho interesse, pare, já tenho.
-    [ROBO] - Mensagem automática, URA, "digite 1".
-    [HUMANO] - Pede para falar com atendente real ou está muito confuso.
-
-    Histórico:
-    ${historico}
-    
-    Responda APENAS a tag.
-    `;
-
+    const prompt = `Analise a conversa abaixo e classifique a intenção do cliente em: [INTERESSE], [DUVIDA], [NEGATIVO], [ROBO] ou [HUMANO]. Responda APENAS a tag.\n\nHistórico:\n${historico}`;
     try {
-        const chatCompletion = await groq.chat.completions.create({
+        const res = await groq.chat.completions.create({
             messages: [{ role: 'user', content: prompt }],
             model: MODELO_CEREBRO,
-            temperature: 0,
-            max_tokens: 10
+            temperature: 0
         });
-        return chatCompletion.choices[0].message.content.trim();
-    } catch (e) {
-        return "[HUMANO]";
-    }
+        const raw = res.choices[0].message.content;
+const match = raw.match(/\[(INTERESSE|DUVIDA|NEGATIVO|ROBO|HUMANO)\]/);
+return match ? match[0] : "[HUMANO]";
+    } catch (e) { return "[HUMANO]"; }
 }
 
-/**
- * O CLOSER V11: Inteligência Regional Enerzee + Lead Scoring
- * Substitua toda a sua função gerarResposta por esta:
- */
-async function gerarResposta(historico, contextoLead) {
-    const nomeLead = contextoLead.dono || contextoLead.name || "Gestor";
-    const nomeEmpresa = contextoLead.name || "sua empresa";
+// ============================================================================
+// 🧠 NÚCLEO IA: A MATRIZ DE VENDAS (AGORA COM AS REGRAS TÉCNICAS REAIS)
+// ============================================================================
+
+// ============================================================================
+// 🧠 NÚCLEO IA: "THE ARCHITECT" - STATE OF THE ART SDR V3.0
+// ============================================================================
+
+async function gerarRespostaIA(historico, contextoLead, instanceData) {
+    // 1. ANÁLISE DE DADOS E CONTEXTO (Data Intelligence)
+    const nomeLead = (contextoLead.dono && typeof contextoLead.dono === 'string') 
+        ? contextoLead.dono.split(' ')[0] 
+        : (contextoLead.name || "Gestor");
+
+    const nomeEmpresa = (contextoLead.name || "sua empresa")
+        .replace(/\s(LTDA|ME|EIRELI|S\.A|LIMITED)\b/gi, '') 
+        .trim();
+
     const bairroLead = contextoLead.bairro || "sua região";
+    const donoChip = "Marlon"; ///"Especialista Enerzee"; 
     
-    // 1. Identifica se é VIP (Baseado no priority_level que criamos no Supabase)
-    const isVIP = contextoLead.priority_level === 2;
-    const tomVoz = isVIP ? "Executivo/Consultivo (foco em eficiência fiscal e ROI)" : "Parceiro/Direto (foco em economia no boleto)";
+    // Perfilamento Financeiro (High Ticket vs Mass Market)
+    const isBigFish = (contextoLead.capital_social_numeric > 500000);
+    
+    // Definição de Arquétipo de Venda
+    const perfilComportamental = isBigFish 
+        ? "ARQUÉTIPO: O BANQUEIRO DE INVESTIMENTOS. Tom: Direto, focado em EBITDA, Redução de OPEX e Zero CAPEX." 
+        : "ARQUÉTIPO: O CONSULTOR PARCEIRO. Tom: Educativo, focado em 'sobrar dinheiro no caixa' e alívio das contas.";
 
-    // 2. Conhecimento Regional Extraído da Relação de Atendimento 2026 
-    const infoRegional = `
-    - PE, BA, CE, MT, GO, MG, SP: Ofereça 2 meses de 25% de desconto e depois fixo em 15%.
-    - PR: Mencione 16% de desconto.
-    - RS e SC: Ofereça entre 10% e 15% de economia real.
-    - MS, PA, RN, TO: Desconto a partir de 10%.
-    `;
+    // 2. SYSTEM PROMPT: A ARQUITETURA DE VENDAS
+  const systemPrompt = `
+# 🤖 IDENTIDADE E MISSÃO (SDR CLERIGÓ V18)
+Você é o Especialista Marlon, consultor sênior da ENERZEE. 
+Você é o Especialista Marlon. Fale sempre em nome do Marlon.
+Sua missão: Ajudar a ${nomeEmpresa} a reduzir custos fixos via ENERGIA POR ASSINATURA.
+Diferencial: Usinas com tecnologia WEG operadas por parceiros como Bow-e, Ultragás, Nextron e Origo.
 
-    const systemPrompt = `
-# PERSONA: ESTRATEGISTA COMERCIAL NEURAL ENERZEE
-Você é o Especialista Comercial Sênior da Enerzee, a maior integradora 5 estrelas da WEG no Brasil[cite: 103, 175, 178].
-TOM DE VOZ: ${tomVoz}.
+# 📏 REGRA DE OURO: ESPELHAMENTO (ANTI-VÁCUO)
+- Se o lead enviar mensagens curtas ou monossilábicas (ex: "Oi", "Sim", "Ue", "Não"), você DEVE responder de forma proporcionalmente curta.
+- Evite explicações longas se o lead não demonstrou alto interesse ainda.
+- Se o lead for direto, seja direto. Se ele for detalhista, seja detalhista.
 
-# CONTEXTO DO ECOSSISTEMA
-1. EZEE CONNECT: Portabilidade por assinatura. Sem investimento, obras ou taxas[cite: 330, 332]. Desconto via Lei 14.300/2022[cite: 335].
-2. EZEE SOLAR (REVO): Sistema fotovoltaico com INVESTIMENTO ZERO. O sistema se paga com a economia[cite: 379, 388, 485].
-3. MOBILIDADE (WEMOB): Linha completa de carregadores WEG[cite: 310, 1130, 1139].
-4. ARMAZENAMENTO (BESS): Baterias industriais para redução de custos e backup[cite: 553, 568].
+# 🎯 A ESCADA DE CONVERSÃO (O MÉTODO)
+1. **ABORDAGEM:** Use o bairro e o nome do lead. Gere dúvida sobre o "valor cheio".
+2. **EDUCAÇÃO:** Explique a "Portabilidade Digital" (Zero investimento/obras).
+3. **QUALIFICAÇÃO:** Peça a foto da conta para validar o lote de créditos.
+4. **FECHAMENTO:** Agende o vídeo de 15 min via Calendly.
 
-# DIRETRIZES REGIONAIS (RELAÇÃO 2026)
-${infoRegional}
+# 🎣 GANCHO INICIAL (ISCA LEI 14.300)
+- "${nomeLead}, vi que a ${nomeEmpresa} fica no ${bairroLead}. Vcs já fazem parte das empresas que utilizam energia por assinatura usando a lei 14.300 pra baixar a conta de luz ou ainda estão pagando o valor cheio pra concessionária?"
 
-# PROTOCOLO SNIPER
-- IDENTIFICAÇÃO: Use o bairro ${bairroLead} para gerar autoridade local.
-- TRIAGEM: Lead alugado -> Ezee Connect[cite: 337]. Telhado grande/agro -> Ezee Solar/Baterias[cite: 237, 261].
-- COLETA DA FATURA (GUIA DUDA): Peça a foto da conta: "Nítida, por inteiro e paralela ao papel"[cite: 1924, 1934].
+# 💎 O PRODUTO E PARCEIROS
+- **O que é:** Assinatura de energia limpa (igual portabilidade de celular).
+- **Operadores:** Bow-e, Ultragás, Nextron e Órigo.
+- **Segurança:** A concessionária (Celesc, Copel, etc) continua responsável pela entrega e manutenção.
 
-# REGRAS RÍGIDAS
-1. Máximo 2 frases curtas. 
-2. Sem termos robóticos.
-3. Sempre termine com uma pergunta curta.`;
+# [cite_start]🗺️ REGRAS REGIONAIS (TABELA DE DESCONTOS) [cite: 4]
+1. [cite_start]**PE, BA, CE, MG:** 2 meses de 25% de desconto, depois 15% fixo (Bow-e). [cite: 4]
+2. [cite_start]**MT, GO, MS, PA:** Descontos de 12% a 15%. [cite: 4]
+3. [cite_start]**PR (Copel):** 15% de desconto fixo (Nextron). [cite: 4]
+4. [cite_start]**SC (Celesc) e RS (RGE/CEEE):** 10% a 15% de economia. [cite: 4]
+
+# 📅 PROTOCOLO CALENDLY (AGENDAMENTO HUMANIZADO)
+- "Pra eu te mostrar o estudo, o melhor é uma chamada de vídeo rápida de 15 min. Vou te mandar o link da minha agenda, vc escolhe o horário e o sistema já reserva pra gente. Pode ser?"
+- Link: https://calendly.com/marlonlotici6/30min 
+
+# 🎙️ GATILHO DE ÁUDIO (TRAVA RÍGIDA)
+- Se o cliente perguntar "Como funciona?", "É seguro?" ou "É placa?": responda EXCLUSIVAMENTE com a tag [AUDIO_CREDIBILIDADE] sem nenhum outro texto antes ou depois.
+- Se a tag "<<Áudio de Credibilidade Enviado>>" já estiver no histórico, não repita.
+
+# 🚨 REGRAS DE EXECUÇÃO (SAFETY RAILS)
+- **Extensão:** MÁXIMO 2 frases curtas. Use "vc", "vcs", "tá", "pra".
+- **Interação:** Sempre termine com uma pergunta curta.
+- **Erro de Mídia:** "Opa, essa foto não é da conta de luz rs. Consegue mandar uma nítida da fatura aberta?"
+- **Escassez:** Mencione que o "lote de créditos na usina local" está quase no fim.
+`;
 
     try {
         const chatCompletion = await groq.chat.completions.create({
-            messages: [{ role: 'system', content: systemPrompt }, ...historico],
+            messages: [
+                { role: 'system', content: systemPrompt },
+                ...historico 
+            ],
             model: MODELO_CEREBRO,
-            temperature: 0.3,
-            max_tokens: 150
+            temperature: 0.1, // Temperatura baixa para seguir as regras estritamente
+            max_tokens: 150,
+            presence_penalty: 0.05,
+            frequency_penalty: 0.1
         });
         return chatCompletion.choices[0].message.content;
     } catch (e) {
-        return "Consegue me enviar uma foto da sua última fatura? Assim consigo calcular seu desconto exato aqui pela Enerzee.";
+        console.error("❌ Erro na IA:", e.message);
+        // Fallback Inteligente
+        return `Opa ${nomeLead}, minha conexão oscilou aqui. Mas resumindo: é economia direta sem obras. Consegue me mandar a foto da conta de luz para eu ver se a ${nomeEmpresa} é compatível com nossas usinas WEG?`;
     }
 }
 
 // ============================================================================
-// 🎮 MOTOR DE FLUXO (WORKFLOW)
+// 🕵️ EXTRAÇÃO DE DADOS (VISION E PDF) - SEM SIMPLIFICAÇÃO
 // ============================================================================
 
-// ============================================================================
-// 🎮 MOTOR DE FLUXO (LOOP DE DISPARO COM RÉGUA DE 3 DIAS)
-// ============================================================================
-
-async function loopDisparos() {
-    if (!isReady) return;
-
-    const agora = new Date();
-    // Define o tempo de corte: 24 horas atrás
-    const dataCorte = new Date(agora.getTime() - 24 * 60 * 60 * 1000).toISOString();
-
-    // 1. PRIORIDADE MÁXIMA: FOLLOW-UP (Recuperar leads que não responderam)
-    // Busca leads em 'contact', com menos de 3 tentativas e parados há mais de 24h
-    const { data: leadsParaFollow } = await supabase
-        .from('leads')
-        .select('*')
-        .eq('status', 'contact')
-        .lt('last_contact_at', dataCorte)
-        .lt('followup_step', 3)
-        .limit(1);
-
-    if (leadsParaFollow?.length > 0) {
-        return executarReguaFollowUp(leadsParaFollow[0]);
-    }
-
-    // 2. SEGUNDA PRIORIDADE: NOVOS LEADS
-    const { data: leadsNovos } = await supabase
-        .from('leads')
-        .select('*')
-        .eq('status', 'new')
-        .limit(1);
-
-    if (leadsNovos?.length > 0) {
-        // Trava o lead para 'contact' imediatamente para evitar disparos duplicados
-        const lead = leadsNovos[0];
-        await supabase.from('leads')
-            .update({ status: 'contact', last_contact_at: new Date().toISOString() })
-            .eq('whatsapp_id', lead.whatsapp_id);
-            
-        return executarAbordagemInicial(lead);
-    }
-
-    // 3. SE FILA VAZIA, TENTA NOVAMENTE EM 1 MINUTO
-    console.log("[SDR] 📭 Aguardando novos leads ou tempo de follow-up...");
-    setTimeout(loopDisparos, 60000);
-}
-
-/**
- * RÉGUA DE FOLLOW-UP: Value Stacking Enerzee
- */
-async function executarReguaFollowUp(lead) {
-    const proximoPasso = (lead.followup_step || 0) + 1;
-    let msg = "";
-
-    // Conteúdo estratégico baseado nos manuais Enerzee/WEG
-    switch (proximoPasso) {
-        case 1:
-            // Foco: Autoridade WEG e Confiança
-            msg = `Oi ${lead.dono?.split(' ')[0] || 'tudo bem'}? Passando para reforçar que a Enerzee é parceira 5 estrelas da WEG[cite: 103, 175]. Tecnologia nacional com garantia total para a *${lead.name}*. Conseguiu ver minha mensagem anterior?`;
-            break;
-        case 2:
-            // Foco: Lei 14.300 e Sem Investimento (Ezee Connect)
-            msg = `Sabia que a Lei 14.300 garante sua economia sem você gastar um real em obras[cite: 335]? No Ezee Connect é só portabilidade[cite: 330]. Quer que eu simule quanto sua conta de luz cai hoje?`;
-            break;
-        case 3:
-            // Foco: Escassez e Despedida
-            msg = `Vou precisar encerrar seu chamado por aqui para liberar a vaga de desconto do bairro ${lead.bairro || 'daí'}. Se ainda tiver interesse em reduzir custos fixos, me manda um "OI" agora!`;
-            break;
-    }
-
-    if (msg) {
-        await enviarComSimulacao(lead.whatsapp_id, msg);
-        
-        // Atualiza o passo e o timestamp no banco
-        await supabase.from('leads')
-            .update({ 
-                followup_step: proximoPasso, 
-                last_contact_at: new Date().toISOString() 
-            })
-            .eq('whatsapp_id', lead.whatsapp_id);
-
-        await db.saveMessage(lead.whatsapp_id, 'assistant', msg);
-        console.log(`[SDR] 🔄 Follow-up #${proximoPasso} enviado para ${lead.name}`);
-    }
-
-    // Agenda o próximo ciclo com delay humano
-    setTimeout(loopDisparos, Math.random() * 20000 + 40000);
-}
-
-async function executarAbordagemInicial(lead) {
-    const msgInicial = lead.dono 
-        ? `Olá ${lead.dono.split(' ')[0]}, tudo bem? Sou da Enerzee.\n\nVi que a *${lead.name}* está no bairro ${lead.bairro || 'daí'}. Nossa missão é trocar seu boleto caro da concessionária por um até 25% mais barato via Ezee Connect[cite: 335, 1843]. Vocês já geram a própria energia?`
-        : `Olá, bom dia. Gostaria de falar com o responsável pela *${lead.name}* sobre a redução de custos via Lei 14.300. É por aqui?`;
-
-    await enviarComSimulacao(lead.whatsapp_id, msgInicial);
-    await db.saveMessage(lead.whatsapp_id, 'assistant', msgInicial);
-    console.log(`[SDR] 🚀 Abordagem inicial enviada para ${lead.name}`);
-    
-    setTimeout(loopDisparos, Math.random() * 20000 + 40000);
-}
-
-// Helper de simulação humana
-async function enviarComSimulacao(zapId, msg) {
+async function executarLeituraIA(buffer) {
     try {
-        const chat = await client.getChatById(zapId);
-        await chat.sendStateTyping();
-        await new Promise(r => setTimeout(r, 4000));
-        await client.sendMessage(zapId, msg);
-    } catch (e) { console.error("Erro envio:", e.message); }
+        const completion = await groq.chat.completions.create({
+            messages: [{ 
+                role: "user", 
+                content: [
+                    { 
+                        type: "text", 
+                        text: `Você é um motor de extração de dados. 
+                        Analise a imagem e identifique se é uma conta de energia. 
+                        Se não for, retorne: {"error": "invalid_media"}. 
+                        Se for, extraia EXATAMENTE neste formato JSON, convertendo valores para números puros:
+                        {
+                          "concessionaria": "nome da empresa",
+                          "valor_total": 0.00,
+                          "consumo_kwh": 0,
+                          "estado": "UF",
+                          "mes_referencia": "MM/AAAA"
+                        }` 
+                    }, 
+                    { 
+                        type: "image_url", 
+                        image_url: { url: `data:image/jpeg;base64,${buffer.toString('base64')}` } 
+                    }
+                ] 
+            }],
+            model: MODELO_VISAO,
+            temperature: 0,
+        });
+
+        const rawResponse = completion.choices[0].message.content;
+        const match = rawResponse.match(/\{[\s\S]*\}/);
+        if (!match) return { error: "parse_error" };
+
+        const analise = JSON.parse(match[0]);
+
+        // PROTEÇÃO: Garante que consumo e valor sejam números para o cálculo não falhar
+        analise.consumo_kwh = Number(String(analise.consumo_kwh).replace(/[^\d.]/g, ''));
+        analise.valor_total = Number(String(analise.valor_total).replace(/[^\d.]/g, ''));
+
+        return analise;
+    } catch (e) {
+        return { error: "critical_failure" };
+    }
+}
+
+async function transcreverAudioIA(buffer) {
+    try {
+        const tempPath = `./temp_audio_${Date.now()}.ogg`;
+        fs.writeFileSync(tempPath, buffer);
+
+        const transcription = await groq.audio.transcriptions.create({
+            file: fs.createReadStream(tempPath),
+            model: "whisper-large-v3",
+            language: "pt",
+            response_format: "json",
+        });
+
+        if (fs.existsSync(tempPath)) fs.unlinkSync(tempPath);
+        return transcription.text;
+    } catch (e) {
+        console.error("❌ Erro na transcrição de áudio:", e.message);
+        return null;
+    }
+}
+
+function calcularEconomiaRegional(analise) {
+    const estadosTop = ['PE', 'BA', 'CE', 'MT', 'GO', 'MG', 'SP'];
+    let perc = estadosTop.includes(analise.estado) ? 0.25 : 0.15;
+    if (analise.estado === 'PR') perc = 0.16;
+    return { descontoReais: (analise.valor_total * perc).toFixed(2) };
 }
 
 // ============================================================================
-// 📡 EVENTOS DO WHATSAPP
+// ⚙️ MOTOR MULTI-INSTÂNCIA BAILEYS
 // ============================================================================
 
-client.on('qr', (qr) => {
-    // Esta linha envia o código para o seu frontend React
-    if (socketRef) {
-        socketRef.emit('qr_code', qr); 
-        console.log("🚀 QR Code enviado para o Frontend");
+async function startInstance(instanceId, instanceName) {
+    if (instanciasLigando.has(instanceId)) return; // Se já está ligando, ignora
+    instanciasLigando.add(instanceId);
+
+    console.log(`[MANAGER] 🚀 Ligando SDR: ${instanceName}`);
+    const { state, saveCreds } = await useMultiFileAuthState(`wpp_sessions/${instanceId}`);
+    const { version } = await fetchLatestBaileysVersion();
+
+    const sock = makeWASocket({
+        version,
+        auth: { creds: state.creds, keys: makeCacheableSignalKeyStore(state.keys, pino({ level: 'silent' })) },
+        printQRInTerminal: false, // QR vai pro dashboard
+        logger: pino({ level: 'silent' }),
+        browser: ["Enerzee SDR", "Chrome", "1.0"]
+    });
+
+    // Guardamos o socket com uma flag 'ready' falsa inicialmente
+    sessions.set(instanceId, { sock, ready: false }); 
+    sock.ev.on('creds.update', saveCreds);
+
+    sock.ev.on('connection.update', async (update) => {
+        const { connection, lastDisconnect, qr } = update;
+        if (qr && ioSocket) ioSocket.emit('qr_code', { qr, instanceId, name: instanceName })
+        
+        if (connection === 'open') {
+            console.log(`✅ [SDR] Canal Pronto e Estável: ${instanceName}`);
+            sessions.set(instanceId, { sock, ready: true }); // <--- LIBERADO PARA ENVIO
+            instanciasLigando.delete(instanceId);
+            await db.updateInstanceStatus(instanceId, 'CONNECTED');
+            if (ioSocket) ioSocket.emit('whatsapp_status', { status: 'CONNECTED', instanceId });
+        }
+
+        if (connection === 'close') {
+            sessions.set(instanceId, { sock, ready: false });
+            instanciasLigando.delete(instanceId);
+            const reason = (lastDisconnect.error)?.output?.statusCode;
+            if (reason !== DisconnectReason.loggedOut) {
+                console.log(`🔄 [SDR] Conexão instável em ${instanceName}. Reiniciando em 5s...`);
+                setTimeout(() => startInstance(instanceId, instanceName), 5000);
+            }
+        }
+    });
+    // --- O ESCUTADOR DE MENSAGENS (O OUVIDO DO ROBÔ) ---
+    sock.ev.on('messages.upsert', async ({ messages, type }) => {
+        if (type !== 'notify') return;
+        for (const msg of messages) {
+            // Nota: Sem a trava '!msg.key.fromMe' para que ele ouça as suas mensagens manuais também
+            if (msg.message) {
+                await processarMensagem(sock, msg, instanceId);
+            }
+        }
+    });
+   
+}
+
+// ============================================================================
+// 📩 PROCESSADOR DE MENSAGENS E WORKFLOW
+// ============================================================================
+//
+// ============================================================================
+// 📩 PROCESSADOR DE MENSAGENS E WORKFLOW
+// ============================================================================
+
+async function processarMensagem(sock, msg, instanceId) {
+    const remoteJid = msg.key.remoteJid;
+    if (remoteJid.includes('@g.us')) return; 
+
+    const fromMe = msg.key.fromMe; 
+    
+    // --- 🛡️ NORMALIZAÇÃO UNIVERSAL (JID vs LID) ---
+    const idPuro = remoteJid.split(':')[0].split('@')[0];
+    const dominio = remoteJid.includes('@lid') ? '@lid' : '@s.whatsapp.net';
+    const cleanJid = idPuro + dominio;
+
+    // ========================================================================
+    // 🌟 TÓPICO 1: FILTRO ANTI-FANTASMA (O PORTEIRO)
+    // ========================================================================
+    const { data: lead } = await supabase.from('leads').select('*').eq('whatsapp_id', cleanJid).single();
+    
+    if (!lead) return; 
+
+    // --- 📝 EXTRAÇÃO DE CONTEÚDO ---
+    const texto = msg.message.conversation || 
+                  msg.message.extendedTextMessage?.text || 
+                  msg.message.imageMessage?.caption || 
+                  msg.message.videoMessage?.caption || "";
+
+    const messageType = Object.keys(msg.message)[0];
+    let textoTranscrevido = null;
+
+    // --- 👤 1. DETECÇÃO DE INTERVENÇÃO MANUAL ---
+    if (fromMe) {
+        if (!texto) return;
+        console.log(`👤 [HUMANO] Você enviou uma mensagem para ${lead.name}. Pausando IA.`);
+        try {
+            await db.saveMessage(cleanJid, 'assistant', texto, instanceId);
+            await supabase.from('leads').update({ 
+                is_paused: true, 
+                last_human_interaction: new Date().toISOString() 
+            }).eq('whatsapp_id', cleanJid);
+        } catch (e) {
+            console.log("⚠️ [Aviso] Erro ao pausar lead no banco.");
+        }
+        return; 
     }
-    // Mantém o backup no terminal
-    qrcode.generate(qr, { small: true });
-});
 
-client.on('ready', () => {
-    isReady = true;
-    if (socketRef) socketRef.emit('whatsapp_status', 'CONNECTED');
-    loopDisparos();
-});
+    // --- 3. PROCESSAMENTO DE MÍDIA INTELIGENTE ---
+    if (messageType === 'audioMessage' || messageType === 'imageMessage' || messageType === 'documentMessage') {
+        console.log(`📄 [MÍDIA] Analisando arquivo enviado por ${lead.name}...`);
+        
+        try {
+            const buffer = await downloadMediaMessage(msg, 'buffer', {}, { logger: pino({ level: 'silent' }) });
+            let analise = null;
 
-// --- HELPER DE ATRASO HUMANO (Novo) ---
-const delayHumano = (min = 10, max = 35) => {
-    const ms = Math.floor(Math.random() * (max - min + 1) + min) * 1000;
-    return new Promise(resolve => setTimeout(resolve, ms));
-};
+            if (messageType === 'audioMessage') {
+                console.log(`🎤 [SDR] Ouvindo áudio de ${lead.name}...`);
+                textoTranscrevido = await transcreverAudioIA(buffer);
+                
+                if (textoTranscrevido) {
+                    console.log(`📝 [SDR] Áudio transcrito: "${textoTranscrevido}"`);
+                    await db.saveMessage(cleanJid, 'user', `(Áudio) ${textoTranscrevido}`, instanceId);
+                    if (lead.is_paused) return; 
+                } else {
+                    return; 
+                }
+            } 
+            else if (messageType === 'imageMessage') {
+                analise = await executarLeituraIA(buffer);
+            } 
+            else if (messageType === 'documentMessage' && msg.message.documentMessage.mimetype === 'application/pdf') {
+                console.log(`📄 [SDR] Lendo PDF enviado por ${lead.name}...`);
+                const data = await pdf(buffer);
+                
+                const promptPDF = `Você é um extrator de dados de alta precisão. O texto abaixo foi extraído de um arquivo PDF. 
+                Sua tarefa:
+                1. Identifique se o texto pertence a uma CONTA DE ENERGIA ELÉTRICA (fatura de luz).
+                2. Se NÃO for uma conta de energia (ex: currículo, boleto de carro, receita), retorne ESTRITAMENTE o JSON: {"error": "invalid_media"}
+                3. Se FOR uma conta de energia, extraia os dados ESTRITAMENTE neste formato JSON (números puros sem vírgula de milhar): 
+                {"concessionaria": "nome da empresa", "valor_total": 0.00, "consumo_kwh": 0, "estado": "UF"}
+                
+                Texto extraído do PDF:
+                ${data.text}`;
 
-// --- MOTOR DE MENSAGENS COM TRAVA DE PAUSA (Substituto) ---
-client.on('message', async (msg) => {
-    if (msg.isGroupMsg) return;
-    const zapId = msg.from;
+                const res = await groq.chat.completions.create({
+                    messages: [{ role: "user", content: promptPDF }],
+                    model: MODELO_CEREBRO,
+                    temperature: 0
+                });
 
-    // 1. DETECÇÃO DE INTERVENÇÃO MANUAL: Se você mandar msg pelo celular, a IA pausa este lead
-    if (msg.fromMe) {
-        console.log(`[HUMANO] 👤 Intervenção manual detectada para ${zapId}. IA pausada.`);
-        await supabase.from('leads').update({ is_paused: true }).eq('whatsapp_id', zapId);
+                const match = res.choices[0].message.content.match(/\{[\s\S]*\}/);
+                analise = match ? JSON.parse(match[0]) : null;
+            }
+
+            if (analise && analise.consumo_kwh > 0) {
+                const economia = calcularEconomiaRegional(analise);
+                const estudo = `📊 *ESTUDO PRELIMINAR* ⚡\nUnidade: ${lead.name}\nRedução Estimada: R$ ${economia.descontoReais}/mês\n\nConsegue falar agora rapidinho?`;
+
+                await supabase.from('leads').update({ 
+                    status: 'waiting_analysis',
+                    last_analysis_data: analise 
+                }).eq('whatsapp_id', cleanJid);
+
+                if (!lead.is_paused) {
+                    await sock.sendMessage(remoteJid, { text: estudo });
+                    await db.saveMessage(remoteJid, 'assistant', estudo, instanceId);
+                }
+                return; 
+            } else if (messageType !== 'audioMessage') {
+                if (!lead.is_paused) {
+                    await sock.sendMessage(remoteJid, { text: "Opa, essa foto parece ser de outra coisa rs. Consegue mandar uma nítida da fatura aberta? Pode ser print do PDF também." });
+                }
+                return;
+            }
+        } catch (err) {
+            console.error("❌ Erro em mídia:", err.message);
+            return;
+        }
+    }
+
+    // --- 4. LÓGICA DE RESPOSTA IA ---
+    if (lead.is_paused) {
+        if (texto && messageType !== 'audioMessage') await db.saveMessage(cleanJid, 'user', texto, instanceId);
         return;
     }
 
-    // 2. COMANDOS DE REATIVAÇÃO
-    if (msg.body === '#play') {
-        await supabase.from('leads').update({ is_paused: false }).eq('whatsapp_id', zapId);
-        return await msg.reply("🚀 IA Reativada. Voltarei a responder este lead.");
-    }
+    const mensagemParaIA = (messageType === 'audioMessage') ? `O cliente enviou um áudio dizendo: "${textoTranscrevido}"` : texto;
+    if (!mensagemParaIA) return;
 
-    // 3. VERIFICA SE O LEAD ESTÁ EM PAUSA
-    const { data: leadStatus } = await supabase.from('leads').select('is_paused').eq('whatsapp_id', zapId).single();
-    if (leadStatus?.is_paused) return;
+    console.log(`🧠 [IA] Gerando resposta para ${lead.name}...`);
+    if (messageType !== 'audioMessage') await db.saveMessage(cleanJid, 'user', texto, instanceId);
 
-    // 4. LOG DE MENSAGEM RECEBIDA
-    const { data: leadData } = await supabase.from('leads').select('*').eq('whatsapp_id', zapId).single();
-    if (!leadData) return;
-
-    // 5. DETECÇÃO DE FATURA (IA Vision / PDF)
-    if (msg.hasMedia) {
-        const media = await msg.downloadMedia();
-        if (msg.type === 'image') {
-            const analise = await executarLeituraIA(media.data);
-            if (analise) return await finalizarFluxoComercial(analise, msg, leadData);
-        }
-        if (msg.type === 'document' && media.mimetype === 'application/pdf') {
-            const buffer = Buffer.from(media.data, 'base64');
-            const pdfData = await pdf(buffer);
-            const analise = await executarLeituraTextoIA(pdfData.text);
-            if (analise) return await finalizarFluxoComercial(analise, msg, leadData);
-        }
-    }
-
-    // 6. PROCESSAMENTO DE RESPOSTA TEXTUAL COM ATRASO HUMANO
-    await db.saveMessage(zapId, 'user', msg.body);
-    const chat = await msg.getChat();
+    const histRaw = await db.getHistory(cleanJid, instanceId);
+    const historico = histRaw.map(m => ({ role: m.role, content: m.content }));
+    const instanceData = await db.getInstanceRules(instanceId);
     
-    // Simula tempo de leitura
-    await delayHumano(5, 12); 
-    await chat.sendStateTyping();
-    // Simula tempo de digitação
-    await delayHumano(10, 20); 
+    let resposta = await gerarRespostaIA(historico, lead, instanceData);
 
-    const historicoRaw = await supabase.from('messages').select('role, content').eq('whatsapp_id', zapId).order('created_at', { ascending: true });
-    const historico = historicoRaw.data.map(m => ({ role: m.role, content: m.content }));
-    const resposta = await gerarResposta(historico, leadData);
+    if (resposta) {
+        // ========================================================================
+        // 🌟 TÓPICO 4 E 6: INTERCEPTADOR DE ÁUDIO E DELAY
+        // ========================================================================
+        
+        if (resposta.includes('[AUDIO_CREDIBILIDADE]')) {
+            console.log("🎤 [SDR] Gatilho de áudio detectado. Iniciando gravação...");
+            await sock.sendPresenceUpdate('recording', remoteJid); 
+            await delay(5000); 
+            
+            const audioPath = './assets/audio_credibilidade.mp3.ogg'; 
+            if (fs.existsSync(audioPath)) {
+                await sock.sendMessage(remoteJid, { audio: { url: audioPath }, mimetype: 'audio/ogg', ptt: true });
+                await db.saveMessage(cleanJid, 'assistant', '<<Áudio de Credibilidade Enviado>>', instanceId);
+            } else {
+                console.log("❌ [ERRO] Arquivo de áudio não encontrado.");
+            }
+            return; 
+        } 
+        
+        const tempoDigitacao = (resposta.length * 35) + 1500;
+        await sock.sendPresenceUpdate('composing', remoteJid);
+        await delay(Math.max(3000, Math.min(tempoDigitacao, 10000))); 
+        
+        await sock.sendMessage(remoteJid, { text: resposta });
+        await db.saveMessage(cleanJid, 'assistant', resposta, instanceId);
+    }
+} // <-- ÚNICO E EXATO FECHAMENTO DA FUNÇÃO (Linha limpa sem sobras)
+
+//============================================================================
+// 🔄 DISPAROS AUTOMÁTICOS E FOLLOW-UP
+// ============================================================================
+
+async function loopDisparos() {
+    // 1. Trava de Horário (Segurança Anti-Ban)
+    if (!dentroDoExpediente()) return setTimeout(loopDisparos, 60000 * 5);
+
+    // 2. Busca candidatos 'new' no banco
+    const { data: candidatos } = await supabase.from('leads').select('*').eq('status', 'new').limit(10);
+    if (!candidatos || candidatos.length === 0) return setTimeout(loopDisparos, 40000);
+
+    const l = candidatos.find(item => !leadsEmProcessamento.has(item.id));
+
+    if (l) {
+        const instancia = sessions.get(l.instance_id);
+        if (!instancia || !instancia.ready) return setTimeout(loopDisparos, 10000);
+
+        // --- 🚀 ACRÉSCIMO ESTRATÉGICO: CHECAGEM DE BLACKLIST ---
+        const estaNaBlacklist = await db.isBlacklisted(l.whatsapp_id);
+        if (estaNaBlacklist) {
+            console.log(`🚫 [BLACKLIST] Lead ${l.name} (${l.whatsapp_id}) encontrado na lista de restrição. Abortando...`);
+            await supabase.from('leads').update({ status: 'blacklisted' }).eq('id', l.id);
+            return setTimeout(loopDisparos, 2000); // Pula rápido para o próximo lead da fila
+        }
+
+        // 3. Trava na Memória Viva
+        leadsEmProcessamento.add(l.id);
+        console.log(`🎯 [SDR] Preparando contato para: ${l.name}`);
+
+        const jitter = Math.random() * 30000 + 30000; // Entre 30s e 60s
+
+        setTimeout(async () => {
+            try {
+                // 4. Verificação de última hora: Já existe conversa?
+                const hist = await db.getHistory(l.whatsapp_id, l.instance_id);
+                if (hist.length > 0) {
+                    console.log(`⚠️ [ABORTADO] ${l.name} já possui histórico. Pulando...`);
+                    await supabase.from('leads').update({ status: 'contact' }).eq('id', l.id);
+                    return;
+                }
+
+                // 5. Construção da Saudação Personalizada (Abordagem V17 - Lei 14.300)
+                const primeiroNome = l.dono ? l.dono.split(' ')[0] : "Gestor";
+                const bairro = l.bairro || "sua região";
+                
+                const saudacao = l.dono 
+                    ? `${primeiroNome}, vi que a ${l.name} fica no ${bairro}. Vcs já fazem parte das empresas que utilizam energia por assinatura usando a lei 14.300 pra baixar a conta de luz ou ainda estão pagando o valor cheio pra concessionária?` 
+                    : `Olá, falo com o responsável pela ${l.name}?`;
+
+                // 6. Tenta o envio real
+                await instancia.sock.sendMessage(l.whatsapp_id, { text: saudacao });
+
+                // 7. Gravação de sucesso e persistência
+                await db.saveMessage(l.whatsapp_id, 'assistant', saudacao, l.instance_id);
+                await supabase.from('leads').update({ 
+                    status: 'contact', 
+                    last_contact_at: new Date().toISOString() 
+                }).eq('id', l.id);
+
+                console.log(`✅ [SUCESSO REAL] Mensagem entregue e banco atualizado para ${l.name}!`);
+
+            } catch (err) {
+                console.error(`❌ [FALHA] Envio falhou para ${l.name}. O lead continuará como 'new'.`, err.message);
+            } finally {
+                // 8. Limpeza da trava de memória
+                leadsEmProcessamento.delete(l.id);
+            }
+        }, jitter);
+    }
+    setTimeout(loopDisparos, 40000); 
+}
+
+async function loopRecuperacaoConversas() {
+    // --- 🛑 TRAVA DO ZUMBI DA MADRUGADA ---
+    // Se estiver fora do horário comercial, ele pausa a busca e tenta de novo em 5 minutos.
+    if (!dentroDoExpediente()) return setTimeout(loopRecuperacaoConversas, 60000 * 5);
+
+    console.log("🕵️ [SDR] Escaneando mensagens não respondidas e travas de pausa...");
+
+    // 1. LÓGICA ORIGINAL: Busca leads que estão em conversa ativa e NÃO estão pausados
+    const { data: leadsAtivos } = await supabase
+        .from('leads')
+        .select('*')
+        .eq('status', 'contact')
+        .eq('is_paused', false);
+
+    if (leadsAtivos) {
+        for (const l of leadsAtivos) {
+            // Busca a última mensagem dessa conversa
+            const { data: mensagens } = await supabase
+                .from('messages')
+                .select('role')
+                .eq('whatsapp_id', l.whatsapp_id)
+                .order('created_at', { ascending: false })
+                .limit(1);
+
+            // Se a última mensagem foi do 'user', a IA precisa responder!
+            if (mensagens && mensagens.length > 0 && mensagens[0].role === 'user') {
+                console.log(`⚠️ [ALERTA] Lead ${l.name} aguardando resposta há algum tempo. Ativando IA...`);
+                
+                const instancia = sessions.get(l.instance_id);
+                if (instancia && instancia.ready) {
+                    await processarMensagemManual(instancia.sock, l);
+                }
+            }
+        }
+    }
+
+    // --- 🚀 NOVO INCREMENTO: GESTÃO DE RETOMADA APÓS INTERVENÇÃO HUMANA ---
+    // Busca leads que você assumiu manualmente (is_paused = true)
+    const { data: leadsPausados } = await supabase
+        .from('leads')
+        .select('*')
+        .eq('is_paused', true);
+
+    if (leadsPausados) {
+        for (const l of leadsPausados) {
+            // Se não houver registro de interação humana, ignoramos para segurança
+            if (!l.last_human_interaction) continue;
+
+            const dezMinutosEmMs = 10 * 60 * 1000; // Define o intervalo de 10 minutos
+            const ultimaInteracao = new Date(l.last_human_interaction).getTime();
+            const agora = new Date().getTime();
+
+            // Se o tempo de silêncio humano for maior que 10 minutos, devolvemos para a IA
+            if (agora - ultimaInteracao > dezMinutosEmMs) {
+                console.log(`🔄 [SDR] Tempo de intervenção humana esgotado para ${l.name}. Retomando IA...`);
+                
+                // Remove a trava de pausa no banco de dados
+                await supabase.from('leads')
+                    .update({ is_paused: false })
+                    .eq('id', l.id);
+
+                // Força uma verificação imediata para ver se o cliente deixou alguma pergunta no vácuo
+                const instancia = sessions.get(l.instance_id);
+                if (instancia && instancia.ready) {
+                    await processarMensagemManual(instancia.sock, l);
+                }
+            }
+        }
+    }
+
+    // Roda a cada 5 minutos para não sobrecarregar o banco
+    setTimeout(loopRecuperacaoConversas, 1000 * 60 * 5);
+}
+
+async function processarMensagemManual(sock, lead) {
+    const remoteJid = lead.whatsapp_id;
+
+    // 1. Mostra que a IA está "digitando" para ser humano
+    await sock.sendPresenceUpdate('composing', remoteJid);
+    await delay(5000);
+
+    // 2. Busca histórico e regras
+    const histRaw = await db.getHistory(remoteJid, lead.instance_id);
+    const historico = histRaw.map(m => ({ role: m.role, content: m.content }));
+    const instanceData = await db.getInstanceRules(lead.instance_id);
+    
+    // 3. Gera a resposta de "venda"
+    const resposta = await gerarRespostaIA(historico, lead, instanceData);
     
     if (resposta) {
-        await client.sendMessage(zapId, resposta);
-        await db.saveMessage(zapId, 'assistant', resposta);
-    }
-});
-
-function iniciarSDR(socket) {
-    socketRef = socket; // Garante que o robô use o canal de comunicação correto
-    if (!isReady) {
-        client.initialize().catch(err => console.error("Erro init WPP:", err));
-    } else {
-        socket.emit('whatsapp_status', 'CONNECTED');
+        await sock.sendMessage(remoteJid, { text: resposta });
+        await db.saveMessage(remoteJid, 'assistant', resposta, lead.instance_id);
+        console.log(`🤖 [SDR] Resposta de recuperação enviada para ${lead.name}`);
     }
 }
-
-async function executarLeituraIA(base64Image) {
-    try {
-        const completion = await groq.chat.completions.create({
-            messages: [
-                {
-                    role: "user",
-                    content: [
-                        { type: "text", text: "Extraia desta fatura de energia brasileira em JSON: {concessionaria, valor_total, consumo_kwh, estado}. Responda apenas o JSON puro." },
-                        { type: "image_url", image_url: { url: `data:image/jpeg;base64,${base64Image}` } }
-                    ],
-                },
-            ],
-            model: "llama-3.2-11b-vision-preview",
-            temperature: 0,
-        });
-        return JSON.parse(completion.choices[0].message.content);
-    } catch (e) { return null; }
-}
-
-function calcularEconomiaRegional(analise, lead) {
-    const estadosTop = ['PE', 'BA', 'CE', 'MT', 'GO', 'MG', 'SP'];
-    let percDesconto = 0.15; // Padrão 15% (Lei 14.300)
-
-    if (estadosTop.includes(analise.estado)) percDesconto = 0.25; // 25% conforme Relação 2026
-    if (analise.estado === 'PR') percDesconto = 0.16;
-
-    const descontoReais = (analise.valor_total * percDesconto).toFixed(2);
-    const valorFinal = (analise.valor_total - descontoReais).toFixed(2);
-    return { descontoReais, valorFinal };
-}
-
-/**
- * EXTRAÇÃO DE DADOS DO TEXTO DO PDF (LLAMA 3.3)
- */
-async function executarLeituraTextoIA(texto) {
-    try {
-        const completion = await groq.chat.completions.create({
-            messages: [{
-                role: "user",
-                content: `Extraia os dados técnicos desta fatura e responda APENAS o JSON: {concessionaria, valor_total, consumo_kwh, estado}. \n\nTexto: ${texto.substring(0, 3000)}`
-            }],
-            model: "llama-3.3-70b-versatile",
-            temperature: 0,
-        });
-        const raw = completion.choices[0].message.content;
-        const jsonMatch = raw.match(/\{[\s\S]*\}/);
-        return jsonMatch ? JSON.parse(jsonMatch[0]) : null;
-    } catch (e) { return null; }
-}
-
-
-/**
- * FINALIZAÇÃO COMERCIAL: ESTUDO DE VIABILIDADE EZEE CONNECT
- */
-async function finalizarFluxoComercial(analise, msg, leadData) {
-    const economia = calcularEconomiaRegional(analise, leadData);
-    const chat = await msg.getChat();
-
-    console.log(`[SDR] 🧠 Elaborando estudo para ${leadData.name}...`);
-    
-    // Simula o tempo de análise técnica (elaboração do estudo)
-    await chat.sendStateTyping();
-    await delayHumano(45, 80); 
-
-    const estudoMsg = `📊 *ESTUDO DE VIABILIDADE ENERZEE* ⚡\n` +
-                      `-------------------------------------------\n` +
-                      `🏢 *Unidade:* ${leadData.name}\n` +
-                      `📉 *Redução Estimada:* R$ ${economia.descontoReais}/mês\n` +
-                      `✅ *Investimento:* ZERO (Modalidade Assinatura)\n\n` +
-                      `Esse benefício é possível graças à *Lei 14.300 (Marco Legal da Energia)*. Ela é fundamental pois garante o direito de você compensar créditos de nossas usinas parceiras diretamente na sua conta, reduzindo seu custo sem precisar de obras ou telhado próprio.\n\n` +
-                      `*${leadData.dono?.split(' ')[0] || 'Gestor'}*, para eu te mostrar como garantir sua cota e travar esse desconto antes que a grade regional complete, podemos fazer uma breve call de vídeo amanhã?`;
-
-    await msg.reply(estudoMsg);
-    await db.saveMessage(msg.from, 'assistant', estudoMsg);
-    await supabase.from('leads').update({ status: 'waiting_analysis' }).eq('whatsapp_id', msg.from);
-}
-
-
-
-module.exports = { iniciarSDR, processarLeadEntrada: () => {} };
+module.exports = {
+    initMultiTenancy: async (io) => {
+        ioSocket = io;
+        const insts = await db.getActiveInstances(); //
+        for (const i of insts) { 
+            await startInstance(i.id, i.name); //
+            await delay(2000); //
+        }
+        
+        // Inicia os dois motores de busca
+        loopDisparos();            // Motor 1: Novos Leads
+        loopRecuperacaoConversas(); // Motor 2: Conversas Pendentes (O NOVO)
+    },
+    enviarMensagemSDR: async () => {}, //
+    criarNovaInstancia: async (n, t) => {
+        const { data } = await supabase.from('instances').insert([{ name: n, owner_phone: t }]).select().single(); //
+        if (data) startInstance(data.id, data.name); //
+        return data; //
+    }
+};
