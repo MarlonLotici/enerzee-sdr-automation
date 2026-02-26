@@ -9,20 +9,24 @@ require('dotenv').config();
 // Inicialização com a Service Role Key para ignorar travas de RLS no backend
 const supabase = createClient(process.env.SUPABASE_URL, process.env.SUPABASE_KEY);
 
+// ... código anterior (imports e inicialização do supabase)
+
 const db = {
     // ========================================================================
     // 🏢 GESTÃO DE INSTÂNCIAS (CHIPS/EMPRESAS)
     // ========================================================================
 
-    getActiveInstances: async () => {
-        const { data, error } = await supabase
-            .from('instances')
-            .select('*')
-            .order('created_at', { ascending: true });
-        
-        if (error) console.error('[DB] Erro ao buscar instâncias:', error.message);
-        return data || [];
-    },
+ getActiveInstances: async () => {
+    const { data, error } = await supabase
+        .from('instances')
+        .select('*')
+        // 🛡️ NOVO FILTRO: Pega quem está CONNECTED ou DISCONNECTED, mas ignora o que for NULL ou 'BANNED'
+        .neq('whatsapp_status', 'BANNED') 
+        .order('created_at', { ascending: true });
+    
+    if (error) console.error('[DB] Erro ao buscar instâncias:', error.message);
+    return data || [];
+},
 
     getInstanceRules: async (instanceId) => {
         const { data } = await supabase
@@ -40,6 +44,29 @@ const db = {
             .eq('id', instanceId);
     },
 
+    // 🌟 NOVA FUNÇÃO INSERIDA AQUI:
+    getDailyContactCount: async (instanceId) => {
+        const hoje = new Date().toISOString().split('T')[0]; // Pega apenas a data YYYY-MM-DD
+        
+        const { count, error } = await supabase
+            .from('leads')
+            .select('*', { count: 'exact', head: true })
+            .eq('instance_id', instanceId)
+            .eq('status', 'contact') // Conta apenas quem já foi movido para atendimento
+            .gte('last_contact_at', hoje); // Que ocorreu hoje
+
+        if (error) {
+            console.error(`[DB] Erro ao contar envios do chip ${instanceId}:`, error.message);
+            return 999; // Trava por segurança se der erro na busca
+        }
+        return count || 0;
+    },
+
+    // ========================================================================
+    // 👥 GESTÃO DE LEADS (ANTI-DUPLICIDADE)
+    // ========================================================================
+    
+    // ... restante do seu código (saveLead, updateLeadStatus, etc)
     // ========================================================================
     // 👥 GESTÃO DE LEADS (ANTI-DUPLICIDADE)
     // ========================================================================
@@ -83,6 +110,7 @@ const db = {
             }, { onConflict: 'whatsapp_id' });
         } else {
             console.log(`✅ [DB] Lead persistido com sucesso: ${lead.name}`);
+            return { error: null };
         }
     },
 

@@ -1,3 +1,6 @@
+require('dotenv').config();
+
+
 /**
  * SERVER.JS - ORQUESTRADOR MESTRE MULTI-TENANCY 2026
  * Versão Final: Scraper + Clean + Enrich + SDR + Estabilidade
