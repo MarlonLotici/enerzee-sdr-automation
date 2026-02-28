@@ -50,19 +50,21 @@ io.on('connection', (socket) => {
         await atualizarListaInstancias();
     });
 
-    // --- MOTOR DE PROSPECÇÃO (RADAR) ---
+   // --- MOTOR DE PROSPECÇÃO (RADAR COM DISTRIBUIÇÃO AUTOMÁTICA) ---
     socket.on('start_scraping', async (params) => {
         shouldStop = false;
-        const targetInstanceId = params.instanceId; 
+        
+        // 🎲 1. Busca todos os chips que estão ativos/conectados no banco
+        const activeChips = await db.getActiveInstances();
+        let chipCounter = 0; // O nosso "carteador"
 
-        // [PROTEÇÃO 1] Validação de Chip Selecionado
-        if (!targetInstanceId) {
-            return socket.emit('notification', '❌ Erro: Selecione um chip ativo primeiro.');
+        if (activeChips.length === 0) {
+            return socket.emit('notification', '❌ Erro: Nenhum chip ativo encontrado para distribuir os leads.');
         }
 
-        // [PROTEÇÃO 2] Garantia de Nicho (Evita o erro de toLowerCase)
+        // [PROTEÇÃO 2] Garantia de Nicho
         if (!params.niche || (Array.isArray(params.niche) && params.niche.length === 0)) {
-            params.niche = ["Comércio"]; // Fallback seguro
+            params.niche = ["Comércio"];
             console.log("⚠️ Nicho veio vazio do front. Usando 'Comércio'.");
         }
 
@@ -74,8 +76,8 @@ io.on('connection', (socket) => {
         };
 
         console.log(`🚀 [RADAR] Modo: ${payloadCorrigido.mode.toUpperCase()}`);
-        console.log(`📍 Alvo: ${params.city} | Chip: ${targetInstanceId}`);
-        socket.emit('notification', `📡 Radar ativado para ${params.niche}...`);
+        console.log(`📍 Alvo: ${params.city} | 🎲 Distribuindo entre ${activeChips.length} chips conectados.`);
+        socket.emit('notification', `📡 Radar ativado! Distribuindo leads para ${activeChips.length} chips...`);
 
         // [EXECUÇÃO DO MOTOR]
         try {
@@ -92,26 +94,28 @@ io.on('connection', (socket) => {
                     if (limpos.length > 0 && limpos[0].valido) {
                         let leadFinal = limpos[0];
                         
-                        // [FUNCIONALIDADE ORIGINAL] 3_enrich.js (Enriquecimento de Sócio/CNPJ)
+                        // [FUNCIONALIDADE ORIGINAL] 3_enrich.js
                         try { 
                             leadFinal = await enriquecerLeadIndividual(leadFinal); 
                         } catch(e) { 
                             console.log(`⚠️ Silenciando erro de API no lead: ${leadFinal.name}`);
                         }
 
-                        // [FUNCIONALIDADE ORIGINAL] db.saveLead (Persistência no Supabase)
-                        const { error: dbError } = await db.saveLead(leadFinal, targetInstanceId);
+                        // 🎲 A MÁGICA ACONTECE AQUI (Round-Robin)
+                        const chipSorteado = activeChips[chipCounter % activeChips.length];
+                        chipCounter++; 
+
+                        console.log(`🎲 [DISTRIBUIÇÃO] Lead ${leadFinal.name} entregue para o chip: ${chipSorteado.name}`);
+
+                        // Salva no banco com o ID do chip sorteado
+                        const { error: dbError } = await db.saveLead(leadFinal, chipSorteado.id);
 
                         if (dbError) {
-                            // Registra erro no terminal mas não para o scraper
                             console.error(`❌ Erro DB (${leadFinal.name}):`, dbError.message);
-                            
-                            // Se não for erro de duplicado, avisa o Dashboard
                             if (!dbError.message.includes('unique')) {
                                 socket.emit('notification', `⚠️ Erro ao registrar: ${leadFinal.name}`);
                             }
                         } else {
-                            // [FUNCIONALIDADE ORIGINAL] Feedback visual no CRM
                             console.log(`📡 Enviando lead persistido para o front: ${leadFinal.name}`);
                             socket.emit('new_lead', leadFinal);
                         }
@@ -123,7 +127,6 @@ io.on('connection', (socket) => {
             socket.emit('notification', '❌ O Radar parou devido a uma falha de conexão.');
         }
     });
-
     // [FUNCIONALIDADE ORIGINAL] Parar Radar
     socket.on('stop_scraping', () => { 
         console.log("🛑 Comando: Parar Radar.");

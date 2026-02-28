@@ -9,7 +9,8 @@ const {
     delay, 
     fetchLatestBaileysVersion,
     makeCacheableSignalKeyStore,
-    downloadMediaMessage 
+    downloadMediaMessage, 
+    generateMessageID 
 } = require('@whiskeysockets/baileys');
 const pino = require('pino');
 const fs = require('fs');
@@ -40,13 +41,15 @@ let ioSocket = null;
 
 // 🕒 SEGURANÇA: HORÁRIO COMERCIAL (05:30 - 22:45)
 // ============================================================================
+// 🕒 SEGURANÇA: HORÁRIO COMERCIAL CORRIGIDO (05:30 - 22:45)
 function dentroDoExpediente() {
     const agora = new Date();
     const tempoAtual = agora.getHours() * 60 + agora.getMinutes();
-    // Retorna 'true' apenas se estiver entre 05:30 e 22:45
-    return tempoAtual >= (8 * 60) && tempoAtual <= (19 * 60);
+    
+    // 05:30 = (5 * 60) + 30 = 330
+    // 22:45 = (22 * 60) + 45 = 1365
+    return tempoAtual >= 330 && tempoAtual <= 1365;
 }
-
 // ============================================================================
 // 🧠 NÚCLEO IA: INTENÇÃO E RESPOSTA (SEU "CLOSER V11" INTEGRAL)
 // ============================================================================
@@ -101,6 +104,23 @@ Você é o Especialista Marlon, consultor sênior da ENERZEE. Fale em primeira p
 Missão: Ajudar a ${nomeEmpresa} a reduzir custos via Energia por Assinatura.
 Parceiros: Bow-e, Ultragás, Nextron e Órigo (Usinas WEG).
 
+# 🛑 REGRA DE DESCARTE ABSOLUTA
+Se o cliente disser que JÁ TEM USINA SOLAR, já usa placas no telhado ou já fez portabilidade com outra empresa:
+1. NÃO tente contornar a objeção, NÃO tente vender e NÃO faça perguntas do SPIN.
+2. Agradeça a atenção educadamente, parabenize pela iniciativa sustentável e encerre o assunto.
+3. Exemplo de tom: "Ah, que maravilha que vcs já geram a própria energia! Parabéns pela iniciativa sustentável. Muito obrigado pela atenção e um excelente dia pra vcs! 👋"
+
+# 🔄 REGRA DE REDIRECIONAMENTO (O "NINJA" DO FINANCEIRO)
+Se a pessoa informar que é da recepção, reservas ou setor errado:
+1. PARE o SPIN Selling imediatamente.
+2. NUNCA peça desculpas ou diga "incomodar". Use um tom profissional e direto.
+3. Foque no DEPARTAMENTO (Financeiro/Custos) e não no "Dono". Isso soa muito mais profissional.
+4. Use este script base:
+   - "Com certeza, Julio! Como o assunto é especificamente sobre a redução técnica na fatura de energia (conforme a Lei 14.300), o ideal é eu falar direto com o Financeiro ou com quem cuida da parte de Suprimentos/Custos. Vc consegue me passar o contato direto desse setor ou o e-mail para eu enviar o estudo de viabilidade?"
+5. Se insistirem para você ligar no fixo ou site, tente uma última vez:
+   - "Entendi. É que por aqui consigo enviar o gráfico de economia pronto para análise. Não teria um WhatsApp de apoio do financeiro ou da gerência?"
+6. Se a resposta for negativa novamente, encerre com: "Perfeito, vou buscar por lá então. Obrigado pela orientação!"
+
 # 🌪️ O CORAÇÃO DO NEGÓCIO: MÉTODO SPIN SELLING (SUA PRIORIDADE MÁXIMA)
 Você é OBRIGADO a seguir estas etapas rigorosamente. NUNCA pule fases e NUNCA ofereça a solução/link antes da hora. Identifique em qual estágio a conversa está e avance apenas UM passo por vez:
 
@@ -116,7 +136,7 @@ Você é OBRIGADO a seguir estas etapas rigorosamente. NUNCA pule fases e NUNCA 
 Siga EXATAMENTE esta regra quando chegar no Passo 5:
 1. Peça a foto da conta de luz APENAS UMA VEZ.
 2. Se o cliente der desculpa ("tô sem ela", "mando depois"), hesitar ou mudar de assunto: NUNCA INSISTA NA CONTA.
-3. Mude a rota para a reunião: "Tudo bem! Pra facilitar, a gente pode fazer uma chamada de vídeo de uns 15 min. Vc leva a fatura lá e eu simulo ao vivo na tela pra vc ver a economia. O que acha?"
+3. Mude a rota para a reunião: "Tudo bem! Pra facilitar, a gente pode fazer uma chamada de vídeo de uns 20 min. Vc leva a fatura lá e eu simulo ao vivo na tela pra vc ver a economia. O que acha?"
 4. Se ele TOPAR a reunião (e SÓ SE TOPAR), envie o link: "Fechado! Escolhe o melhor horário aqui: https://calendly.com/marlonlotici6/30min"
 
 # 🧠 MOTOR SEMÂNTICO E ANTI-LOOP
@@ -137,6 +157,11 @@ Priorize responder com estas tags exclusivas (SEM TEXTO EXTRA) se a dúvida bate
 - MT, GO, MS, PA: Descontos de 12% a 15%.
 - PR (Copel): 15% de desconto fixo.
 - SC e RS: 10% a 15% de economia.
+
+# 💎 REGRAS REGIONAIS (PARA 25% DE DESCONTO)
+- A âncora principal de venda é SEMPRE: "Até 25% de desconto na fatura".
+- REGRA DE OURO: NUNCA explique a divisão dos meses a menos que o cliente pergunte "como funciona esse desconto?" ou "por que *até*?".
+- SE ELE PERGUNTAR, explique de forma leve: "A gente dá um super bônus de 25% de desconto nos dois primeiros meses pra vc sentir a diferença logo de cara! Depois, fica um desconto fixo de 15% pra sempre."
 
 # 🚨 REGRA ABSOLUTA DE FORMATO E BALÕES (RISCO DE FALHA CRÍTICA)
 1. **A LEI DA QUEBRA:** Se a sua resposta tiver mais de UMA frase, você OBRIGATORIAMENTE deve usar a tag [QUEBRA] para separar. 
@@ -290,7 +315,26 @@ async function startInstance(instanceId, instanceName) {
             }
         }
     });
-    // --- O ESCUTADOR DE MENSAGENS (O OUVIDO DO ROBÔ) ---
+    
+    sock.ev.on('contacts.upsert', async (contacts) => {
+        for (const c of contacts) {
+            if (c.id && c.lid) {
+                const cleanId = c.id.split(':')[0] + '@s.whatsapp.net';
+                const cleanLid = c.lid.split(':')[0] + '@lid';
+                await supabase.from('leads').update({ whatsapp_lid: cleanLid }).eq('whatsapp_id', cleanId);
+            }
+        }
+    });
+
+    sock.ev.on('contacts.update', async (contacts) => {
+        for (const c of contacts) {
+            if (c.id && c.lid) {
+                const cleanId = c.id.split(':')[0] + '@s.whatsapp.net';
+                const cleanLid = c.lid.split(':')[0] + '@lid';
+                await supabase.from('leads').update({ whatsapp_lid: cleanLid }).eq('whatsapp_id', cleanId);
+            }
+        }
+    });
     sock.ev.on('messages.upsert', async ({ messages, type }) => {
         if (type !== 'notify') return;
         
@@ -346,14 +390,17 @@ async function startInstance(instanceId, instanceName) {
 }
 
 // ============================================================================
-// 🛡️ PASSO 1: O "CARIMBO" E RASTREIO DIGITAL DO ROBÔ
+// 🛡️ PASSO 1: O "CARIMBO" E RASTREIO DIGITAL DO ROBÔ (NATIVO E SEGURO)
 // ============================================================================
 async function enviarMensagemIA(sock, jid, content) {
     try {
+        // 1. Deixa o próprio Baileys criar e enviar a mensagem (Garante a entrega no Ataque)
         const sentMsg = await sock.sendMessage(jid, content);
+        
+        // 2. Pega o ID oficial gerado e carimba na memória viva
         if (sentMsg?.key?.id) {
             mensagensEnviadasPelaIA.add(sentMsg.key.id); 
-            mapaRastreioLID.set(sentMsg.key.id, jid); // 🔗 Salva: "A msg X foi para o JID Y"
+            mapaRastreioLID.set(sentMsg.key.id, jid); // 🔗 O Fio de Ariadne está a salvo aqui!
             
             // Limpa da memória após 24h para não lotar a RAM
             setTimeout(() => {
@@ -367,7 +414,7 @@ async function enviarMensagemIA(sock, jid, content) {
         return null;
     }
 }
-    async function processarMensagem(sock, msg, instanceId, textoConsolidado = null) {    const remoteJid = msg.key.remoteJid;
+async function processarMensagem(sock, msg, instanceId, textoConsolidado = null) {    const remoteJid = msg.key.remoteJid;
     if (remoteJid.includes('@g.us')) return; 
 
     const fromMe = msg.key.fromMe; 
@@ -378,45 +425,60 @@ async function enviarMensagemIA(sock, jid, content) {
     const cleanJid = idPuro + dominio;
 
   // ========================================================================
-// 🌟 TÓPICO 1: FILTRO ANTI-FANTASMA E TRADUTOR DE LID (O FIM DOS CHUTES)
+// 🌟 TÓPICO 1: FILTRO ANTI-FANTASMA E TRADUTOR DE LID (VIA BANCO DE DADOS)
 // ========================================================================
+// 1. Busca normal pelo JID
 let { data: lead } = await supabase.from('leads').select('*').eq('whatsapp_id', cleanJid).single();
 
+// 2. Se for um fantasma (@lid), pergunta ao banco quem ele é!
 if (!lead && cleanJid.includes('@lid')) {
-    const msgRespondidaId = msg.message?.extendedTextMessage?.contextInfo?.stanzaId;
-    let numeroReal = null;
-
-    if (msgRespondidaId && mapaRastreioLID.has(msgRespondidaId)) {
-        numeroReal = mapaRastreioLID.get(msgRespondidaId);
-        console.log(`🔗 [RASTREIO EXATO] Identidade confirmada: ${numeroReal}`);
-    } else if (!fromMe) {
-        console.log(`⚠️ [LID SOLTO] Tentando descobrir JID pelo Baileys...`);
-        const numeroPuro = msg.key.participant || msg.participant;
-        if (numeroPuro && numeroPuro.includes('@s.whatsapp.net')) {
-            numeroReal = numeroPuro.split(':')[0] + '@s.whatsapp.net';
-            console.log(`✅ [BAILEYS REVELOU] Identidade real: ${numeroReal}`);
-        } else {
-            console.log(`❌ [FANTASMA TOTAL] Impossível cravar quem enviou o LID ${cleanJid}. Abortando para não misturar conversas!`);
-            return; 
-        }
+    console.log(`⚠️ [LID SOLTO] Mensagem de ${cleanJid}. Buscando no banco de dados...`);
+    const { data: leadLid } = await supabase.from('leads').select('*').eq('whatsapp_lid', cleanJid).single();
+    
+    if (leadLid) {
+        console.log(`✅ [ARIADNE INFALÍVEL] O banco dedurou: É a ${leadLid.name}`);
+        lead = leadLid;
+    
     } else {
-        return; // Se for vc digitando e não sabe quem é, aborta.
-    }
+        // 🚨 TENTATIVA DE RESGATE DE EMERGÊNCIA (O XEQUE-MATE) 🚨
+        // 👇 AQUI ESTÁ A MÁGICA: Ele vai olhar no remoteJidAlt que descobrimos!
+        const realJidRescue = msg.key.remoteJidAlt || msg.key.participant || msg.message?.extendedTextMessage?.contextInfo?.participant;
+        const quotedMsgId = msg.message?.extendedTextMessage?.contextInfo?.stanzaId;
 
-    if (numeroReal) {
-        const { data: originalLead } = await supabase.from('leads').select('*').eq('whatsapp_id', numeroReal).single();
+        let originalLead = null;
+
+        // 🥷 RESGATE NINJA 1: Ele citou a nossa mensagem? 
+        if (quotedMsgId && mapaRastreioLID.has(quotedMsgId)) {
+            const memoryJid = mapaRastreioLID.get(quotedMsgId);
+            console.log(`🥷 [RESGATE NINJA 1] Lead descoberto através da mensagem citada!`);
+            const { data } = await supabase.from('leads').select('*').eq('whatsapp_id', memoryJid).single();
+            originalLead = data;
+        }
+
+        // 🥷 RESGATE NINJA 2: O WhatsApp mandou o número oculto no remoteJidAlt?
+        if (!originalLead && realJidRescue) {
+            const cleanRescue = realJidRescue.split(':')[0].split('@')[0] + '@s.whatsapp.net';
+            console.log(`🥷 [RESGATE NINJA 2] Analisando bolso secreto da Meta: ${cleanRescue}`);
+            const { data } = await supabase.from('leads').select('*').eq('whatsapp_id', cleanRescue).single();
+            originalLead = data;
+        }
+
+        // Conclusão do Resgate
         if (originalLead) {
-            console.log(`✅ [RECONHECIDO] Mensagem de ${originalLead.name} mapeada com segurança.`);
-            lead = originalLead; 
+            console.log(`✅ [RESGATE BEM-SUCEDIDO] Identidade revelada: ${originalLead.name}. Salvando LID no banco!`);
+            await supabase.from('leads').update({ whatsapp_lid: cleanJid }).eq('id', originalLead.id);
+            lead = originalLead;
         } else {
-            return; 
+            console.log(`❌ [BLINDAGEM TOTAL] WhatsApp ocultou completamente o número. Abortando.`);
+            return;
         }
-    } else {
-        return; 
     }
 } else if (!lead) {
-    return; // Fora da base
+    return; // Fora da base, ignora.
 }
+
+
+
 // --- 📝 EXTRAÇÃO DE CONTEÚDO (ACEITANDO A GAVETA) ---
     const textoOriginal = msg.message.conversation || 
                           msg.message.extendedTextMessage?.text || 
@@ -432,21 +494,27 @@ if (!lead && cleanJid.includes('@lid')) {
 
     // --- 👤 1. DETECÇÃO DE INTERVENÇÃO MANUAL ---
     if (fromMe) {
+        // ⏳ ANTI-RACE CONDITION: Aumentado para 3s para garantir 100% de leitura do ID.
+        await new Promise(resolve => setTimeout(resolve, 3000)); 
+        
+        // 🛡️ Verifica se foi o robô que enviou
+        if (msg.key.id && mensagensEnviadasPelaIA.has(msg.key.id)) {
+            return; // Ufa! Foi a IA, ignora e deixa o jogo seguir.
+        }
+
         if (!texto) return;
-        console.log(`👤 [HUMANO] Você enviou uma mensagem para ${lead.name}. Pausando IA.`);
-try {
-            // 🎯 Usa o ID oficial do lead para o banco aceitar o salvamento
+        console.log(`👤 [HUMANO] Você enviou uma mensagem para o lead. Pausando IA.`);
+        try {
             await db.saveMessage(lead.whatsapp_id, 'assistant', texto, instanceId);
             await supabase.from('leads').update({ 
                 is_paused: true, 
                 last_human_interaction: new Date().toISOString() 
-            }).eq('id', lead.id); // 🎯 Usa o ID único do lead para pausar com segurança
+            }).eq('id', lead.id); 
         } catch (e) {
             console.log("⚠️ [Aviso] Erro ao pausar lead no banco.");
         }
         return; 
     }
-
 // ========================================================================
     // 🤖 PASSO 4: FILTRO ANTI-ROBÔ COM HOLOFOTE (DEBUG)
     // ========================================================================
@@ -639,20 +707,22 @@ try {
                 .map(t => t.trim())
                 .filter(t => t.length > 0)
                 .slice(0, 3); 
-
-            for (let i = 0; i < mensagensSplit.length; i++) {
+for (let i = 0; i < mensagensSplit.length; i++) {
                 const trecho = mensagensSplit[i];
-                const tempoDigitacao = (trecho.length * 60) + 2500;
+                // 🔥 NOVO CALCULO: Mais lento (80ms por letra + 4seg de base)
+                const tempoDigitacao = (trecho.length * 80) + 4000; 
                 
                 await sock.sendPresenceUpdate('composing', remoteJid);
-                await delay(Math.max(3000, Math.min(tempoDigitacao, 12000))); 
+                // 🔥 NOVO LIMITE: Mínimo de 5 segundos digitando, máximo de 14s
+                await delay(Math.max(5000, Math.min(tempoDigitacao, 14000))); 
                 
                 await enviarMensagemIA(sock, remoteJid, { text: trecho });
-                await db.saveMessage(lead.whatsapp_id, 'assistant', trecho, instanceId); // ✅ Salva no banco com o ID real
+                await db.saveMessage(lead.whatsapp_id, 'assistant', trecho, instanceId); 
 
                 if (i < mensagensSplit.length - 1) {
                     await sock.sendPresenceUpdate('paused', remoteJid);
-                    await delay(Math.random() * 2000 + 2500); 
+                    // 🔥 NOVO RESPIRO: Pausa de 3.5 a 6.5 segundos entre um balão e outro
+                    await delay(Math.random() * 3000 + 3500); 
                 }
             }
         } // <- Fim do if (resposta)
@@ -666,17 +736,15 @@ try {
     }
 
 } // <-- ÚNICO E EXATO FECHAMENTO DA FUNÇÃO processarMensagem
-    //============================================================================
-// 🔄 DISPAROS AUTOMÁTICOS E FOLLOW-UP (FILA INDIANA ABSOLUTA E SONO INTELIGENTE)
+
+// ============================================================================
+// 🔄 MOTOR DE ATAQUE INDEPENDENTE (PARALELISMO POR CHIP)
 // ============================================================================
 const chipsEsgotadosHoje = new Set();
 let dataControleLimites = new Date().toISOString().split('T')[0];
 
-async function loopDisparos() {
-    // 1. Trava de Horário (Segurança Anti-Ban)
-    if (!dentroDoExpediente()) return setTimeout(loopDisparos, 60000 * 5);
-
-    // ⏰ DESPERTADOR: Limpa o cache de chips esgotados se virou o dia (Meia-noite)
+async function motorAtaquePorChip(instanceId) {
+    // ⏰ DESPERTADOR: Limpa o cache de chips esgotados se virou o dia
     const hojeAgora = new Date().toISOString().split('T')[0];
     if (dataControleLimites !== hojeAgora) {
         chipsEsgotadosHoje.clear();
@@ -686,154 +754,177 @@ async function loopDisparos() {
 
     // 🚀 CONFIGURAÇÃO DE LIMITES POR CHIP
     const CONFIG_CHIPS = {
-        "2ff1fd4d-c3a4-4b2f-977b-8472eb9c80f1": { limite: 25, nome: "Chip 48 (Novo)" },
-        "a5e45805-abb4-4d76-a387-5a22b34c6bb4": { limite: 55, nome: "Chip Matriz (Aquecido)" }
+        "2ff1fd4d-c3a4-4b2f-977b-8472eb9c80f1": { limite: 55, nome: "Chip 48 (respondendo)" },
+        "74905749-7b50-4b13-92e8-b12663c1d67d": { limite: 55, nome: "Chip 46 (modo ataque)" }
     };
 
-    // 2. Busca candidatos 'new' no banco (Sempre puxa 5)
-    const { data: candidatos } = await supabase.from('leads').select('*').eq('status', 'new').limit(5);
-    
-    // 🛡️ TRAVA MESTRA: Se não tem lead novo ou se TODOS os chips bateram a meta, o motor dorme.
-    if (!candidatos || candidatos.length === 0 || chipsEsgotadosHoje.size >= Object.keys(CONFIG_CHIPS).length) {
-        if (chipsEsgotadosHoje.size > 0) {
-            console.log(`🌙 [SISTEMA DORMINDO] Chips atuais bateram a meta ou fila vazia. Pausando por 30 minutos.`);
-            return setTimeout(loopDisparos, 1800000); 
-        }
-        return setTimeout(loopDisparos, 40000); 
-    }
+    const config = CONFIG_CHIPS[instanceId] || { limite: 20, nome: `Chip-${instanceId.substring(0, 4)}` };
+    console.log(`🚀 [MOTOR] Iniciando turbina de ataque independente para: ${config.nome}`);
 
-    // 🌟 AQUI COMEÇA A FILA INDIANA (O SEGREDO ANTI-BAN COM RAIO-X)
-    for (const l of candidatos) {
-        console.log(`\n🔎 [RAIO-X] Analisando lead: ${l.name}`);
-        
-        if (leadsEmProcessamento.has(l.id)) {
-            console.log(`⏩ [PULO] Lead já está na fila de processamento.`);
-            continue;
-        }
-        
-        // 🤫 FILTRO SILENCIOSO: Se o chip deste lead está na lista de esgotados, ignora o lead
-        if (chipsEsgotadosHoje.has(l.instance_id)) {
-            console.log(`⏩ [PULO] Chip dono desse lead já esgotou a cota hoje.`);
-            continue;
-        }
-
-        const instancia = sessions.get(l.instance_id);
-        if (!instancia) {
-            console.log(`❌ [FALHA SILENCIOSA] A sessão ID ${l.instance_id} NÃO EXISTE na memória do Node. O Chip conectou?`);
-            continue;
-        }
-        if (!instancia.ready) {
-            console.log(`❌ [FALHA SILENCIOSA] A sessão existe, mas a flag 'ready' está FALSA. O WhatsApp não conectou direito.`);
-            continue;
-        }
-
-        // 🛡️ VERIFICAÇÃO DE SAÚDE E LIMITE DIÁRIO
-        const chipInfo = CONFIG_CHIPS[l.instance_id] || { limite: 20, nome: "Chip Padrão" };
-        const enviosHoje = await db.getDailyContactCount(l.instance_id);
-
-        if (enviosHoje >= chipInfo.limite) {
-            console.log(`🛏️ [LIMITE ATINGIDO] ${chipInfo.nome} bateu a meta de ${chipInfo.limite} envios. Colocando chip para dormir.`);
-            chipsEsgotadosHoje.add(l.instance_id);
-            continue; 
-        }
-
-        // --- 🚀 CHECAGEM DE BLACKLIST ---
-        const estaNaBlacklist = await db.isBlacklisted(l.whatsapp_id);
-        if (estaNaBlacklist) {
-            console.log(`🚫 [BLACKLIST] Lead ${l.name} restrito. Abortando...`);
-            await supabase.from('leads').update({ status: 'blacklisted' }).eq('id', l.id);
-            continue; 
-        }
-
-        // 3. Trava na Memória Viva
-        leadsEmProcessamento.add(l.id);
-
-        // 🕒 JITTER SEQUENCIAL (5s para teste)
-        const jitter = Math.random() * 120000 + 120000;
-        
-        console.log(`🎯 [SDR] ${chipInfo.nome} na mira para: ${l.name} (${enviosHoje + 1}/${chipInfo.limite})`);
-        console.log(`⏳ [ANTI-BAN] Fila Indiana: Aguardando ${Math.round(jitter/1000)}s antes de atirar...`);
-
-        // 🛑 A MÁGICA ESTÁ AQUI: O robô realmente PARA e espera!
-        await delay(jitter);
+    // Loop Infinito exclusivo deste chip
+    while (true) {
+        let currentLeadId = null; 
 
         try {
-            // 4. Verificação de última hora
-            const hist = await db.getHistory(l.whatsapp_id, l.instance_id);
-            if (hist.length > 0) {
-                console.log(`⚠️ [ABORTADO] ${l.name} já possui histórico. O SDR não manda saudação para quem já conversou! Pulando...`);
-                await supabase.from('leads').update({ status: 'contact' }).eq('id', l.id);
+            // 1. Trava de Horário (Segurança Anti-Ban)
+            if (!dentroDoExpediente()) {
+                await delay(60000 * 5); 
                 continue;
             }
 
-            console.log(`🚀 [DISPARANDO] Enviando saudação para ${l.name}...`);
-// 🔍 VALIDAÇÃO DE IDENTIDADE REAL (ANTI-VÁCUO)
-            // 🔍 VALIDAÇÃO DE IDENTIDADE REAL (ANTI-VÁCUO)
-            const [result] = await instancia.sock.onWhatsApp(l.whatsapp_id);
+            // 2. Busca 1 lead 'new' que pertença EXCLUSIVAMENTE a este chip
+            const { data: lead, error } = await supabase
+                .from('leads')
+                .select('*')
+                .eq('status', 'new')
+                .eq('instance_id', instanceId)
+                .order('created_at', { ascending: true }) 
+                .limit(1)
+                .maybeSingle();
+
+            if (error) throw error;
+
+            if (!lead) {
+                await delay(30000); 
+                continue;
+            }
+
+            currentLeadId = lead.id;
+
+            // 3. Trava de Processamento Duplo
+            if (leadsEmProcessamento.has(lead.id)) { 
+                await delay(5000); 
+                continue; 
+            }
+
+            // 4. Checa Limite Diário do Chip
+            const enviosHoje = await db.getDailyContactCount(instanceId);
+            if (enviosHoje >= config.limite) {
+                console.log(`🌙 [METAS] ${config.nome} atingiu o limite de ${config.limite} disparos hoje. Dormindo por 30 minutos.`);
+                await delay(1800000); // 30 minutos
+                continue;
+            }
+
+            // 5. Checagem de Blacklist 
+            const estaNaBlacklist = await db.isBlacklisted(lead.whatsapp_id);
+            if (estaNaBlacklist) {
+                console.log(`🚫 [BLACKLIST] Lead ${lead.name} restrito. Abortando...`);
+                await supabase.from('leads').update({ status: 'blacklisted' }).eq('id', lead.id);
+                continue; 
+            }
+
+            // Bloqueia o lead na memória viva
+            leadsEmProcessamento.add(lead.id);
+
+            // 6. Jitter Sequencial (Espera Humana entre 2 e 4 minutos)
+            const jitter = Math.random() * 120000 + 120000;
+            console.log(`🎯 [${config.nome}] Mirando em: ${lead.name} (${enviosHoje + 1}/${config.limite}). Aguardando ${Math.round(jitter/1000)}s...`);
+            await delay(jitter);
+
+            // 7. Verificação de Saúde da Conexão
+            const instancia = sessions.get(instanceId);
+            if (!instancia || !instancia.ready) {
+                console.log(`❌ [FALHA SILENCIOSA] ${config.nome} não está com o canal pronto. Reagendando lead...`);
+                leadsEmProcessamento.delete(lead.id);
+                await delay(10000);
+                continue;
+            }
+
+            // 8. Verificação de Histórico
+            const hist = await db.getHistory(lead.whatsapp_id, instanceId);
+            if (hist && hist.length > 0) {
+                console.log(`⚠️ [ABORTADO] ${lead.name} já possui histórico. O SDR não manda saudação dupla! Pulando...`);
+                await supabase.from('leads').update({ status: 'contact' }).eq('id', lead.id);
+                leadsEmProcessamento.delete(lead.id);
+                continue;
+            }
+
+            // 9. Validação de Identidade (Anti-Vácuo)
+            const [result] = await instancia.sock.onWhatsApp(lead.whatsapp_id);
+            
             if (!result || !result.exists) {
-                console.log(`🚫 [NÚMERO INVÁLIDO] ${l.whatsapp_id} não existe. Pulando...`);
-                await supabase.from('leads').update({ status: 'invalid' }).eq('id', l.id);
+                console.log(`🚫 [NÚMERO INVÁLIDO] ${lead.name} não tem WhatsApp. Pulando...`);
+                await supabase.from('leads').update({ status: 'invalid' }).eq('id', lead.id);
+                leadsEmProcessamento.delete(lead.id);
                 continue;
             }
 
-            // 👇 AS 4 LINHAS NOVAS QUE FALTAVAM 👇
-            if (l.whatsapp_id !== result.jid) {
-                console.log(`🔄 [AJUSTE DE ROTA] Corrigindo 9º dígito no banco: ${l.whatsapp_id} -> ${result.jid}`);
-                await supabase.from('leads').update({ whatsapp_id: result.jid }).eq('id', l.id);
+            // 10. Limpeza Profunda de LID e JID
+            let cleanLid = null;
+            if (result.lid) {
+                cleanLid = result.lid.split(':')[0].split('@')[0] + '@lid';
+                await supabase.from('leads').update({ whatsapp_lid: cleanLid }).eq('id', lead.id);
             }
-            
-            l.whatsapp_id = result.jid; // 🎯 Aqui a mágica acontece
-            // 🚀 SIMULAÇÃO DE PRESENÇA HUMANA
-            await instancia.sock.sendPresenceUpdate('composing', l.whatsapp_id);
-            await delay(Math.random() * 4000 + 4000); 
-            await instancia.sock.sendPresenceUpdate('paused', l.whatsapp_id);
 
-            // 5. Saudação Direta (Otimizada para Taxa de Resposta)
-            const primeiroNome = l.dono ? l.dono.split(' ')[0] : "Gestor";
-            const bairro = l.bairro ? `aí no ${l.bairro}` : "aí na região";
-            const nomeEmpresa = l.name ? l.name.replace(/\s(LTDA|ME|EIRELI|S\.A|LIMITED)\b/gi, '').trim() : "vcs";
+            const cleanJid = result.jid.split(':')[0].split('@')[0] + '@s.whatsapp.net';
+            if (lead.whatsapp_id !== cleanJid) {
+                console.log(`🔄 [AJUSTE DE ROTA] Corrigindo 9º dígito: ${lead.whatsapp_id} -> ${cleanJid}`);
+                await supabase.from('leads').update({ whatsapp_id: cleanJid }).eq('id', lead.id);
+                lead.whatsapp_id = cleanJid;
+            }
+
+            // PLANO B: Se o onWhatsApp falhou em trazer o LID
+            if (result.exists && !cleanLid) {
+                try {
+                    const [contact] = await instancia.sock.getContact(cleanJid);
+                    if (contact && contact.lid) {
+                        cleanLid = contact.lid.split(':')[0].split('@')[0] + '@lid';
+                        await supabase.from('leads').update({ whatsapp_lid: cleanLid }).eq('id', lead.id);
+                    }
+                } catch (e) { /* Ignora se falhar */ }
+            }
+
+            // 11. Saudação Dinâmica e Humanizada (Ajustada)
+            console.log(`🚀 [DISPARANDO] ${config.nome} enviando saudação para ${lead.name}...`);
             
-            // 🔥 VERSÃO SNIPER: Curta e Curiosa
-            const saudacao = `Opa ${primeiroNome}, Marlon aqui! [QUEBRA] Vi que a ${nomeEmpresa} é ${bairro}. [QUEBRA] Vcs já ativaram o desconto de 15% na fatura de luz de vcs ou ainda pagam o valor total pra Celpe?`;
-           
-           
-           
-            // 6. O Fatiador de Balões (Para a primeira mensagem ir separada e humana)
+            // Simulação de presença antes do envio
+            await instancia.sock.sendPresenceUpdate('composing', cleanJid);
+            await delay(Math.random() * 4000 + 4000); 
+            await instancia.sock.sendPresenceUpdate('paused', cleanJid);
+
+            // Montagem da Saudação
+            const saudacaoInicial = lead.dono ? `Opa ${lead.dono.split(' ')[0]}` : "Opa, falo com o proprietário";
+            const bairro = lead.bairro ? `aí no ${lead.bairro}` : "aí na região";
+            const nomeEmpresa = lead.name ? lead.name.replace(/\s(LTDA|ME|EIRELI|S\.A|LIMITED)\b/gi, '').trim() : "vcs";
+            
+            const saudacao = `${saudacaoInicial}, tudo bem? Marlon aqui! [QUEBRA] Vi que a ${nomeEmpresa} é ${bairro}. [QUEBRA] Vcs já ativaram o desconto de até 25% na fatura de luz de vcs ou ainda pagam o valor total pra Celpe?`;
+
+            // 12. Fatiador de Balões com Simulação Humana
             const mensagensSplit = saudacao.split('[QUEBRA]').map(t => t.trim()).filter(t => t.length > 0);
             
             for (let i = 0; i < mensagensSplit.length; i++) {
                 const trecho = mensagensSplit[i];
-                const tempoDigitacao = (trecho.length * 60) + 2500;
+                const tempoDigitacao = (trecho.length * 80) + 4000; 
                 
-                await instancia.sock.sendPresenceUpdate('composing', l.whatsapp_id);
-                await delay(Math.max(3000, Math.min(tempoDigitacao, 8000))); 
+                await instancia.sock.sendPresenceUpdate('composing', cleanJid);
+                await delay(Math.max(5000, Math.min(tempoDigitacao, 14000))); 
                 
-                await enviarMensagemIA(instancia.sock, l.whatsapp_id, { text: trecho });
-                await db.saveMessage(l.whatsapp_id, 'assistant', trecho, l.instance_id);
+                await enviarMensagemIA(instancia.sock, cleanJid, { text: trecho });
+                await db.saveMessage(cleanJid, 'assistant', trecho, instanceId);
 
                 if (i < mensagensSplit.length - 1) {
-                    await instancia.sock.sendPresenceUpdate('paused', l.whatsapp_id);
-                    await delay(Math.random() * 2000 + 2000); 
+                    await instancia.sock.sendPresenceUpdate('paused', cleanJid);
+                    await delay(Math.random() * 3000 + 3500); 
                 }
             }
 
-            // 7. Atualização de Sucesso no Banco
+            // 13. Conclusão de Sucesso
             await supabase.from('leads').update({ 
                 status: 'contact', 
                 last_contact_at: new Date().toISOString() 
-            }).eq('id', l.id);
+            }).eq('id', lead.id);
 
-            console.log(`✅ [SUCESSO REAL] Mensagem entregue por ${chipInfo.nome} para ${l.name}!`);
+            console.log(`✅ [SUCESSO REAL] Mensagem entregue por ${config.nome} para ${lead.name}!`);
+
+            // Libera o lead da memória
+            leadsEmProcessamento.delete(lead.id);
 
         } catch (err) {
-            console.error(`❌ [FALHA] Envio falhou para ${l.name}.`, err.message);
-        } finally {
-            leadsEmProcessamento.delete(l.id);
+            console.error(`❌ Erro no motor do chip ${instanceId}:`, err.message);
+            if (currentLeadId) leadsEmProcessamento.delete(currentLeadId); 
+            await delay(10000); 
         }
-    } // <-- Fim do loop for...of
-    
-    // Só agenda a próxima rodada DEPOIS que a fila toda acabar
-    setTimeout(loopDisparos, 30000); 
+    }
 }
 
 async function loopRecuperacaoConversas() {
@@ -1020,16 +1111,19 @@ async function processarMensagemManual(sock, lead) {
         for (let i = 0; i < mensagensSplit.length; i++) {
             const trecho = mensagensSplit[i];
 
-            const tempoDigitacao = (trecho.length * 60) + 2500;
+            // 🔥 NOVO CALCULO
+            const tempoDigitacao = (trecho.length * 80) + 4000; 
             await sock.sendPresenceUpdate('composing', remoteJid);
-            await delay(Math.max(3000, Math.min(tempoDigitacao, 12000))); 
+            // 🔥 NOVO LIMITE
+            await delay(Math.max(5000, Math.min(tempoDigitacao, 14000))); 
             
             await enviarMensagemIA(sock, remoteJid, { text: trecho });
             await db.saveMessage(remoteJid, 'assistant', trecho, instanceId);
 
             if (i < mensagensSplit.length - 1) {
                 await sock.sendPresenceUpdate('paused', remoteJid);
-                await delay(Math.random() * 2000 + 2500); 
+                // 🔥 NOVO RESPIRO
+                await delay(Math.random() * 3000 + 3500); 
             }
         }
         console.log(`✅ [SDR-RECUPERAÇÃO] Resposta de recuperação concluída para ${lead.name}`);
@@ -1042,12 +1136,14 @@ module.exports = {
         const insts = await db.getActiveInstances(); 
         for (const i of insts) { 
             await startInstance(i.id, i.name); 
-            await delay(2000); 
+            await delay(3000); 
+            
+            // 🚀 LIGA A TURBINA INDEPENDENTE PARA ESTE CHIP!
+            motorAtaquePorChip(i.id); 
         }
         
-        // Motores religados e blindados!
-        loopDisparos();             // Motor 1: Novos Leads (LIGADO E EM FILA INDIANA)
-        loopRecuperacaoConversas(); // Motor 2: Conversas Pendentes (LIGADO E BLINDADO)
+        // Motor 2: Conversas Pendentes (Mantém como estava)
+        loopRecuperacaoConversas(); 
     },
     enviarMensagemSDR: async () => {}, 
     criarNovaInstancia: async (n, t) => {
