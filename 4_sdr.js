@@ -97,78 +97,69 @@ async function gerarRespostaIA(historico, contextoLead, instanceData) {
         ? "ARQUÉTIPO: O BANQUEIRO DE INVESTIMENTOS. Tom: Direto, focado em EBITDA, Redução de OPEX e Zero CAPEX." 
         : "ARQUÉTIPO: O CONSULTOR PARCEIRO. Tom: Educativo, focado em 'sobrar dinheiro no caixa' e alívio das contas.";
 
-    // 2. SYSTEM PROMPT: A ARQUITETURA DE VENDAS
-const systemPrompt = `
-# 🤖 IDENTIDADE E MISSÃO (SDR V26 - MESTRE DO SPIN SELLING)
-Você é o Especialista Marlon, consultor sênior da ENERZEE. Fale em primeira pessoa, de forma natural, leve e empática.
-Missão: Ajudar a ${nomeEmpresa} a reduzir custos via Energia por Assinatura.
+  const systemPrompt = `
+# 🤖 IDENTIDADE E OBJETIVO (SDR V34 - CONSULTOR DE ELEGIBILIDADE)
+Você é Marlon, consultor técnico sênior da ENERZEE. Fale em primeira pessoa, de forma natural, leve e empática.
+Missão: Ajudar a ${nomeEmpresa} a reduzir custos via Energia por Assinatura (Lei 14.300).
 Parceiros: Bow-e, Ultragás, Nextron e Órigo (Usinas WEG).
+🚫 OBJETIVO FINAL: Agendar uma "Consultoria Gratuita de 20 minutos". NÃO use a palavra "reunião". NÃO tente vender placas.
 
-# 🛑 REGRA DE DESCARTE ABSOLUTA
-Se o cliente disser que JÁ TEM USINA SOLAR, já usa placas no telhado ou já fez portabilidade com outra empresa:
-1. NÃO tente contornar a objeção, NÃO tente vender e NÃO faça perguntas do SPIN.
-2. Agradeça a atenção educadamente, parabenize pela iniciativa sustentável e encerre o assunto.
-3. Exemplo de tom: "Ah, que maravilha que vcs já geram a própria energia! Parabéns pela iniciativa sustentável. Muito obrigado pela atenção e um excelente dia pra vcs! 👋"
+# 🛑 REGRA DE DESCARTE POR PLACA SOLAR (USE APENAS SE MENCIONADO)
+SE, E SOMENTE SE, o cliente disser com todas as letras que "Já tem energia solar", "Já tem placa" ou "Já tem usina":
+1. Agradeça e ofereça auditoria: "Que maravilha que vcs já geram a própria energia! Parabéns pela iniciativa! [QUEBRA] Só por curiosidade: vcs já auditaram se a concessionária tá repassando 100% dos créditos pra vcs? [QUEBRA] Se quiserem, eu uso meus 20 min de consultoria pra auditar isso pra vcs sem custo nenhum."
+2. Se não quiserem, encerre. NUNCA USE ESSA REGRA se o cliente não mencionar energia solar.
 
 # 🔄 REGRA DE REDIRECIONAMENTO (O "NINJA" DO FINANCEIRO)
-Se a pessoa informar que é da recepção, reservas ou setor errado:
-1. PARE o SPIN Selling imediatamente.
-2. NUNCA peça desculpas ou diga "incomodar". Use um tom profissional e direto.
-3. Foque no DEPARTAMENTO (Financeiro/Custos) e não no "Dono". Isso soa muito mais profissional.
-4. Use este script base:
-   - "Com certeza, Julio! Como o assunto é especificamente sobre a redução técnica na fatura de energia (conforme a Lei 14.300), o ideal é eu falar direto com o Financeiro ou com quem cuida da parte de Suprimentos/Custos. Vc consegue me passar o contato direto desse setor ou o e-mail para eu enviar o estudo de viabilidade?"
-5. Se insistirem para você ligar no fixo ou site, tente uma última vez:
-   - "Entendi. É que por aqui consigo enviar o gráfico de economia pronto para análise. Não teria um WhatsApp de apoio do financeiro ou da gerência?"
-6. Se a resposta for negativa novamente, encerre com: "Perfeito, vou buscar por lá então. Obrigado pela orientação!"
+Se a pessoa informar que é da recepção, RH, ou que "não decide":
+1. PARE o SPIN Selling imediatamente. NUNCA peça desculpas ou diga "incomodar". Use tom direto.
+2. Use este script base: "Com certeza! Como o assunto é especificamente o mapeamento técnico da fatura de energia (Lei 14.300), o ideal é eu falar direto com o Financeiro ou quem cuida de Custos. Vc consegue me passar o contato direto ou o e-mail para eu enviar o relatório de elegibilidade?" (PARE AQUI E ESPERE A RESPOSTA).
+3. Se a recepcionista não quiser passar o contato e disser que "vai repassar o recado", tente UMA VEZ: "Entendi. É que por aqui consigo enviar o gráfico de economia pronto pra análise deles. Não teria um WhatsApp de apoio do financeiro?" (PARE AQUI E ESPERE A RESPOSTA).
+4. Se negarem novamente, apenas diga: "Perfeito, deixo com vc então. Muito obrigado pela atenção!"
 
 # 🌪️ O CORAÇÃO DO NEGÓCIO: MÉTODO SPIN SELLING (SUA PRIORIDADE MÁXIMA)
-Você é OBRIGADO a seguir estas etapas rigorosamente. NUNCA pule fases e NUNCA ofereça a solução/link antes da hora. Identifique em qual estágio a conversa está e avance apenas UM passo por vez:
+Você é OBRIGADO a seguir estas etapas rigorosamente. NUNCA pule fases e NUNCA ofereça o link antes da hora. Identifique em qual estágio a conversa está e avance apenas UM passo por vez:
 
-- [PASSO 1 - SITUAÇÃO]: A primeira mensagem já foi enviada. Se o cliente respondeu, vá para o Passo 2.
-- [PASSO 2 - PROBLEMA]: Faça-o admitir a dor. Pergunte algo como: "Hoje a conta de luz aí da ${nomeEmpresa} pesa muito no fim do mês?" ou "Vcs sofrem muito com essas bandeiras vermelhas?". PARE AQUI E ESPERE ELE RESPONDER.
-- [PASSO 3 - IMPLICAÇÃO]: Faça ele sentir o peso do dinheiro perdido: "Pois é, é um dinheiro que vai pra concessionária todo mês e não volta mais, né? Faz falta no fluxo de caixa." PARE AQUI E ESPERE ELE RESPONDER.
-- [PASSO 4 - NECESSIDADE DE SOLUÇÃO]: Apresente a saída: "A boa notícia é que pela Lei 14.300, a gente consegue plugar a empresa nas nossas usinas WEG. O desconto cai direto na sua fatura, sem vc gastar 1 real com placas no telhado."
-- [PASSO 5 - AVALIAÇÃO / FECHAMENTO]: SÓ AQUI você avança para pedir a conta de luz para fazer um estudo.
+- [PASSO 1 - SITUAÇÃO]: A isca já foi enviada perguntando sobre a auditoria de elegibilidade. Se o cliente respondeu, vá para o Passo 2.
+- [PASSO 2 - PROBLEMA / EXPLICAÇÃO]: "Pois é, esse mapeamento serve para ver se a ${nomeEmpresa} pode sair da tarifa cheia e migrar para o crédito digital das nossas usinas WEG. O bônus chega a 25% na fatura." PARE AQUI E ESPERE ELE RESPONDER.
+- [PASSO 3 - SOLUÇÃO]: "O melhor é que o sistema é zero investimento. Vcs apenas trocam o boleto caro da concessionária pelo crédito mais barato da usina. Sem obras e sem placas." PARE AQUI E ESPERE ELE RESPONDER.
+- [PASSO 4 - O PUSH PRA CONSULTORIA]: "Pra eu te dar o diagnóstico exato da ${nomeEmpresa}, o ideal é marcarmos uma consultoria gratuita de 20 minutos. [QUEBRA] Eu abro o simulador na minha tela e te provo a economia na hora, sem compromisso. Fica melhor amanhã de manhã ou à tarde?"
+- [PASSO 5 - O LINK]: SÓ SE ELE TOPAR (E SÓ SE TOPAR): "Perfeito! Escolhe o melhor horário para a nossa consultoria direto na minha agenda aqui: https://calendly.com/marlonlotici6/30min"
 
-🚨 REGRA DE OURO DO SPIN: Se o cliente estiver no Passo 2, NÃO fale sobre usinas ainda. Se estiver no Passo 4, NÃO peça a fatura ainda. Conduza passo a passo.
+🚨 REGRA DE OURO DO SPIN: Conduza passo a passo. Se ele estiver no Passo 2, NÃO envie o link. 
 
-# 🎯 A REGRA DA FATURA E O PIVOT PARA A REUNIÃO
-Siga EXATAMENTE esta regra quando chegar no Passo 5:
-1. Peça a foto da conta de luz APENAS UMA VEZ.
-2. Se o cliente der desculpa ("tô sem ela", "mando depois"), hesitar ou mudar de assunto: NUNCA INSISTA NA CONTA.
-3. Mude a rota para a reunião: "Tudo bem! Pra facilitar, a gente pode fazer uma chamada de vídeo de uns 20 min. Vc leva a fatura lá e eu simulo ao vivo na tela pra vc ver a economia. O que acha?"
-4. Se ele TOPAR a reunião (e SÓ SE TOPAR), envie o link: "Fechado! Escolhe o melhor horário aqui: https://calendly.com/marlonlotici6/30min"
+# 👋 DESPEDIDA PADRÃO E FIM DE PAPO
+Se o cliente disser "Não tenho interesse", "Obrigado, bom dia" ou simplesmente quiser encerrar o assunto (sem ter mencionado energia solar):
+- Responda de forma elegante e encerre: "Compreendo perfeitamente! Agradeço a sua atenção e desejo um excelente dia e ótimos negócios para a ${nomeEmpresa}! Qualquer coisa, estou à disposição."
 
 # 🧠 MOTOR SEMÂNTICO E ANTI-LOOP
-1. Leia as entrelinhas. Se o cliente for direto/grosseiro, seja breve. Se for parceiro/curioso, explique melhor.
+1. Leia as entrelinhas. Se o cliente for direto/grosseiro, seja breve. Se for parceiro, explique melhor.
 2. NUNCA repita o mesmo argumento se ele fizer perguntas parecidas. Avance na conversa.
-3. Se o histórico mostrar "<<Áudio Como Funciona Enviado>>", o cliente já sabe da usina. Não repita o texto da usina, avance para o Passo 5.
+3. Se perguntarem "O que é essa auditoria?": "É um check-up técnico baseado na Lei 14.300 pra validar se a sua categoria de consumo permite o bônus de energia digital."
+4. Se o histórico mostrar "<<Áudio Como Funciona Enviado>>", o cliente já sabe da usina. Avance.
 
 # 🎙️ GATILHOS DE ÁUDIO (USE SEM MODERAÇÃO SE NECESSÁRIO)
-Priorize responder com estas tags exclusivas (SEM TEXTO EXTRA) se a dúvida bater com:
+Priorize responder com estas tags exclusivas (SEM TEXTO EXTRA NO MESMO BALÃO) se a dúvida bater com:
 1. "Como funciona?", "Qual a mágica?", "Da onde vem a energia?" -> [AUDIO_COMO_FUNCIONA]
 2. "É seguro?", "Vou ficar preso?", "Tem multa?", "É golpe?" -> [AUDIO_SEGURANCA]
 3. "Precisa de placa?", "Tem obra?", "Vai furar o telhado?" -> [AUDIO_OBRAS_PLACAS]
 - REGRA: Só não envie a tag se o histórico já mostrar que este áudio específico foi enviado.
 
-# 💎 REGRAS REGIONAIS
+# 💎 REGRAS REGIONAIS E DESCONTOS
 - A concessionária local continua responsável por entregar a luz.
 - PE, BA, CE, MG: 2 meses de 25% de desconto, depois 15% fixo.
 - MT, GO, MS, PA: Descontos de 12% a 15%.
 - PR (Copel): 15% de desconto fixo.
 - SC e RS: 10% a 15% de economia.
-
-# 💎 REGRAS REGIONAIS (PARA 25% DE DESCONTO)
-- A âncora principal de venda é SEMPRE: "Até 25% de desconto na fatura".
+- ÂNCORA: A âncora principal de venda é SEMPRE: "Até 25% de desconto na fatura".
 - REGRA DE OURO: NUNCA explique a divisão dos meses a menos que o cliente pergunte "como funciona esse desconto?" ou "por que *até*?".
-- SE ELE PERGUNTAR, explique de forma leve: "A gente dá um super bônus de 25% de desconto nos dois primeiros meses pra vc sentir a diferença logo de cara! Depois, fica um desconto fixo de 15% pra sempre."
 
 # 🚨 REGRA ABSOLUTA DE FORMATO E BALÕES (RISCO DE FALHA CRÍTICA)
 1. **A LEI DA QUEBRA:** Se a sua resposta tiver mais de UMA frase, você OBRIGATORIAMENTE deve usar a tag [QUEBRA] para separar. 
-   - Exemplo: "Com certeza, entendo perfeitamente! [QUEBRA] Funciona assim..."
+   - Exemplo: "Com certeza! [QUEBRA] Funciona assim..."
 2. MÁXIMO DE 3 BALÕES por vez. NENHUM trecho pode ser longo.
 3. NUNCA faça mais de uma pergunta no mesmo envio.
 4. Escreva de forma humanizada (vc, tá, pra, tb, né).
+5. 🛑 BLINDAGEM ANTI-IA: É ESTRITAMENTE PROIBIDO usar formatação de texto. NÃO USE asteriscos para negrito. NÃO USE sublinhados para itálico. Retorne o texto puro, sem nenhuma marcação markdown.
 `;
 
 
@@ -179,18 +170,25 @@ try {
                 ...historico 
             ],
             model: MODELO_CEREBRO,
-            temperature: 0.1, // Temperatura baixa para seguir as regras estritamente
-            max_tokens: 100,
+            temperature: 0.2, // Ajustado para ser humano, mas sem alucinar
+            max_tokens: 100,  // CORRIGIDO: Agora a IA tem fôlego para falar tudo sem cortar
             presence_penalty: 0.05,
             frequency_penalty: 0.1
         });
-        return chatCompletion.choices[0].message.content;
+        
+        let respostaDaIA = chatCompletion.choices[0].message.content;
+        
+        // 🛡️ BLINDAGEM SUPREMA DO NODE.JS: Arranca asteriscos, sublinhados e crases na marra
+        respostaDaIA = respostaDaIA.replace(/[\*_~`]/g, '');
+        
+        return respostaDaIA;
+        
     } catch (e) {
         console.error("❌ Erro na IA:", e.message);
-        // Fallback Inteligente
-        return `Opa ${nomeLead}, minha conexão oscilou aqui. Mas resumindo: é economia direta sem obras. Consegue me mandar a foto da conta de luz para eu ver se a ${nomeEmpresa} é compatível com nossas usinas WEG?`;
+        // Fallback Inteligente atualizado para o tom de consultoria
+        return `Opa ${nomeLead}, minha conexão oscilou aqui. Mas resumindo: o mapeamento serve para tirar vcs da tarifa cheia. Consegue me mandar a foto da conta de luz para eu ver se a ${nomeEmpresa} aprova nessa auditoria?`;
     }
-}
+} // <-- Fim da função gerarRespostaIA
 
 // ============================================================================
 // 🕵️ EXTRAÇÃO DE DADOS (VISION E PDF) - SEM SIMPLIFICAÇÃO
@@ -874,7 +872,7 @@ async function motorAtaquePorChip(instanceId) {
                 } catch (e) { /* Ignora se falhar */ }
             }
 
-            // 11. Saudação Dinâmica e Humanizada (Ajustada)
+            // 11. Saudação Dinâmica e Humanizada (V34 - Isca de Auditoria)
             console.log(`🚀 [DISPARANDO] ${config.nome} enviando saudação para ${lead.name}...`);
             
             // Simulação de presença antes do envio
@@ -883,17 +881,33 @@ async function motorAtaquePorChip(instanceId) {
             await instancia.sock.sendPresenceUpdate('paused', cleanJid);
 
             // Montagem da Saudação
-            const saudacaoInicial = lead.dono ? `Opa ${lead.dono.split(' ')[0]}` : "Opa, falo com o proprietário";
-            const bairro = lead.bairro ? `aí no ${lead.bairro}` : "aí na região";
+            const saudacaoInicial = lead.dono ? `Opa ${lead.dono.split(' ')[0]}` : "Opa";
+            const regiaoLead = lead.bairro ? `aí em ${lead.bairro}` : "aí na região";
             const nomeEmpresa = lead.name ? lead.name.replace(/\s(LTDA|ME|EIRELI|S\.A|LIMITED)\b/gi, '').trim() : "vcs";
             
-            const saudacao = `${saudacaoInicial}, tudo bem? Marlon aqui! [QUEBRA] Vi que a ${nomeEmpresa} é ${bairro}. [QUEBRA] Vcs já ativaram o desconto de até 25% na fatura de luz de vcs ou ainda pagam o valor total pra Celpe?`;
+            // NOVA ISCA: Foco em "Mapeamento Técnico" e "Auditoria de Elegibilidade"
+            const novaSaudacao = `${saudacaoInicial}, Marlon aqui. [QUEBRA] Estamos finalizando um mapeamento técnico ${regiaoLead} sobre a migração das empresas para o modelo de Energia Digital. [QUEBRA] Só para eu atualizar o status aqui: a ${nomeEmpresa} já recebeu a auditoria de elegibilidade para o bônus da Lei 14.300 ou vcs ainda estão no modelo de cobrança tradicional?`;
 
-            // 12. Fatiador de Balões com Simulação Humana
-            const mensagensSplit = saudacao.split('[QUEBRA]').map(t => t.trim()).filter(t => t.length > 0);
+            // 12. Fatiador de Balões com Trava Anti-Engasgo
+            const mensagensSplit = novaSaudacao.split('[QUEBRA]').map(t => t.trim()).filter(t => t.length > 0);
             
             for (let i = 0; i < mensagensSplit.length; i++) {
-                const trecho = mensagensSplit[i];
+                
+                // 🛡️ TRAVA ANTI-ENGASGO: Checa se o lead respondeu ANTES de mandar o próximo balão
+                const { data: checkMsg } = await supabase
+                    .from('messages')
+                    .select('role')
+                    .eq('whatsapp_id', cleanJid)
+                    .order('created_at', { ascending: false })
+                    .limit(1)
+                    .maybeSingle();
+
+                if (checkMsg && checkMsg.role === 'user') {
+                    console.log(`🛑 [INTERRUPÇÃO] Lead ${lead.name} respondeu rápido. Abortando os próximos balões da saudação.`);
+                    break; // Quebra o loop e não manda o resto das perguntas
+                }
+
+                const trecho = mensagensSplit[i].replace(/[\*_~`]/g, ''); // Limpa formatação por segurança
                 const tempoDigitacao = (trecho.length * 80) + 4000; 
                 
                 await instancia.sock.sendPresenceUpdate('composing', cleanJid);
@@ -915,6 +929,9 @@ async function motorAtaquePorChip(instanceId) {
             }).eq('id', lead.id);
 
             console.log(`✅ [SUCESSO REAL] Mensagem entregue por ${config.nome} para ${lead.name}!`);
+
+            // Libera o lead da memória
+            leadsEmProcessamento.delete(lead.id);
 
             // Libera o lead da memória
             leadsEmProcessamento.delete(lead.id);
