@@ -82,7 +82,7 @@ async function iniciarVarredura(params, onProgress) {
     termos = [...new Set(termos)];
 
     const browser = await puppeteer.launch({
-        headless: false,
+        headless: true,
         args: ['--start-maximized', '--no-sandbox']
     });
 

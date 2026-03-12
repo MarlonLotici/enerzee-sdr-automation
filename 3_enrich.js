@@ -44,7 +44,7 @@ async function enriquecerLeadIndividual(lead) {
     
     // MODO VISUAL LIGADO
     const browser = await puppeteer.launch({ 
-        headless: false, 
+        headless: true, 
         defaultViewport: null,
         args: ['--start-maximized', '--no-sandbox', '--disable-setuid-sandbox'] 
     });

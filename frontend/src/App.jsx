@@ -7,13 +7,13 @@ import { Label } from "@/components/ui/label"
 import { Badge } from "@/components/ui/badge"
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogDescription, DialogFooter, DialogTrigger } from "@/components/ui/dialog"
 import { NicheSelect } from "@/components/NicheSelect"
-
+import Dashboard from './Dashboard'
 // --- ÍCONES (FULL SET 2026) ---
 import { 
     Rocket, MapPin, LayoutDashboard, MessageSquare, Phone, Play, LocateFixed, Send, 
     BrainCircuit, Search, Download, X, CheckSquare, Square, Users, StopCircle, 
     Map as MapIcon, Loader2, Edit2, Trash2, Crosshair, Zap, Star, ShieldCheck, 
-    DollarSign, Briefcase, Building2, ArrowRight, ShieldAlert, Trash, Check
+    DollarSign, Briefcase, Building2, ArrowRight, ShieldAlert, Trash, Check, BarChart2
 } from 'lucide-react'
 
 // --- MAPAS E SOCKET ---
@@ -318,6 +318,7 @@ const handleStartSDR = () => {
                             <TabsTrigger value="search" className="data-[state=active]:bg-blue-600 data-[state=active]:text-white text-slate-400 px-10 py-4 rounded-2xl font-black uppercase text-[11px] transition-all"><MapPin className="mr-2 h-4 w-4" /> Radar</TabsTrigger>
                             <TabsTrigger value="crm" className="data-[state=active]:bg-blue-600 data-[state=active]:text-white text-slate-400 px-10 py-4 rounded-2xl font-black uppercase text-[11px] transition-all"><LayoutDashboard className="mr-2 h-4 w-4" /> CRM War Room</TabsTrigger>
                             <TabsTrigger value="connections" className="data-[state=active]:bg-blue-600 data-[state=active]:text-white text-slate-400 px-10 py-4 rounded-2xl font-black uppercase text-[11px] transition-all"><MessageSquare className="mr-2 h-4 w-4" /> Central WhatsApp</TabsTrigger>
+                            <TabsTrigger value="dashboard" className="data-[state=active]:bg-blue-600 data-[state=active]:text-white text-slate-400 px-10 py-4 rounded-2xl font-black uppercase text-[11px] transition-all"><BarChart2 className="mr-2 h-4 w-4" /> Analytics</TabsTrigger>                        
                         </TabsList>
                         
                         {/* BULK ACTIONS BAR */}
@@ -519,6 +520,10 @@ const handleStartSDR = () => {
         )}
     </div>
 </TabsContent>
+                            <TabsContent value="dashboard" className="flex-1 overflow-hidden m-0">
+                                <Dashboard />
+                                      </TabsContent>
+                        
                 </Tabs>
             </main>
 
