@@ -17,6 +17,10 @@
   "author": "Marlon Lotici",
   "license": "ISC",
   "dependencies": {
+    "vite": "^6.0.0",
+  "@vitejs/plugin-react": "^4.0.0",
+  "react": "^18.2.0",
+  "react-dom": "^18.2.0",
     "@supabase/supabase-js": "^2.90.1",
     "@whiskeysockets/baileys": "^7.0.0-rc.9",
     "@wppconnect-team/wppconnect": "^1.35.2",
