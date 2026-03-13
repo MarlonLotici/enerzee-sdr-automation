@@ -18,5 +18,6 @@ export default defineConfig({
     // 📂 Onde o build final será jogado (o server.js vai ler daqui)
     outDir: 'dist',
     emptyOutDir: true,
+    minify: false
   }
 })

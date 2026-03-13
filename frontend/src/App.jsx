@@ -13,7 +13,7 @@ import {
     Rocket, MapPin, LayoutDashboard, MessageSquare, Phone, Play, LocateFixed, Send, 
     BrainCircuit, Search, Download, X, CheckSquare, Square, Users, StopCircle, 
     Map as MapIcon, Loader2, Edit2, Trash2, Crosshair, Zap, Star, ShieldCheck, 
-    DollarSign, Briefcase, Building2, ArrowRight, ShieldAlert, Trash, Check, BarChart2
+    DollarSign, Briefcase, Building2, ArrowRight, ShieldAlert, Trash, Check, BarChart2, Flame
 } from 'lucide-react'
 
 // --- MAPAS E SOCKET ---
@@ -33,8 +33,10 @@ import { createClient } from '@supabase/supabase-js'
 
 // --- CONFIGURAÇÃO ---
 const supabase = createClient("https://vptfedhzynyhvhrlcfqd.supabase.co", "sb_publishable_T0-4c2bm3I5lNTw7tUGmcg_xVInIQKR")
-const socket = io('http://localhost:3001', { autoConnect: false });
-
+const socketUrl = typeof window !== 'undefined' && window.location.hostname === 'localhost' 
+    ? 'http://localhost:3001' 
+    : '/';
+const socket = io(socketUrl, { autoConnect: false, transparency: ['websocket'] });
 // --- COMPONENTES AUXILIARES DO MAPA ---
 function MapController({ center }) {
     const map = useMap();
@@ -82,6 +84,8 @@ const [botProgress, setBotProgress] = useState(0);
 const [botLogs, setBotLogs] = useState([]);
 
     // --- ESTADOS DE BUSCA E MAPA ---
+    const [messageInput, setMessageInput] = useState("");
+    const [sessionLeadsCount, setSessionLeadsCount] = useState(0);
     const [filterText, setFilterText] = useState("");
     const [selectedNiche, setSelectedNiche] = useState(null);
     const [locationName, setLocationName] = useState("");
@@ -116,26 +120,7 @@ const [botLogs, setBotLogs] = useState([]);
         };
         window.addEventListener('mousemove', handleMouseMove);
 
-        const handleClearLeads = () => {
-    if(confirm("Deseja limpar a base visual?")) {
-        setLeads([]);
-        setSelectedLeadIds(new Set());
-    }
-};
 
-const handleMyLocation = () => {
-    if (navigator.geolocation) {
-        navigator.geolocation.getCurrentPosition(
-            (p) => setMapCenter([p.coords.latitude, p.coords.longitude]),
-            () => alert("Ative o GPS para usar este recurso.")
-        );
-    }
-};
-
-const handleStartSDR = () => {
-    if(!isConnected) return alert("Conecte o WhatsApp primeiro!");
-    socket.emit('start_sdr');
-};
         return () => window.removeEventListener('mousemove', handleMouseMove);
     }, [activeTab]);
 
