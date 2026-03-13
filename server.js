@@ -1,6 +1,5 @@
 require('dotenv').config();
 
-
 /**
  * SERVER.JS - ORQUESTRADOR MESTRE MULTI-TENANCY 2026
  * Versão Final: Scraper + Clean + Enrich + SDR + Estabilidade
@@ -9,7 +8,7 @@ const express = require('express');
 const http = require('http');
 const { Server } = require('socket.io');
 const cors = require('cors');
-
+const path = require('path');
 const { iniciarVarredura } = require('./1_scraper');
 const { processarLimpeza } = require('./2_clean');
 const { enriquecerLeadIndividual } = require('./3_enrich');
@@ -24,14 +23,26 @@ const io = new Server(server, { cors: { origin: "*" } });
 // Variável global para controle de interrupção
 let shouldStop = false;
 
-// 1. INICIALIZAÇÃO DO SISTEMA
-server.listen(3001, async () => {
-    console.log('🚀 SISTEMA ENERZEE SDR MULTI-CHIP ONLINE');
+// ============================================================================
+// 👇 1. MOTOR DO FRONTEND (REACT/VITE) ADICIONADO AQUI 👇
+// Isso faz o backend entregar a tela visual do seu painel
+// ============================================================================
+app.use(express.static(path.join(__dirname, 'dist')));
+app.get('*', (req, res) => {
+    res.sendFile(path.join(__dirname, 'dist', 'index.html'));
+});
+// ============================================================================
+
+
+// 2. INICIALIZAÇÃO DO SISTEMA
+const PORT = process.env.PORT || 3001;
+server.listen(PORT, async () => {
+        console.log('🚀 SISTEMA ENERZEE SDR MULTI-CHIP ONLINE');
     // Inicia os chips 05:30 - 22:45 automaticamente conforme regras do 4_sdr.js
     await initMultiTenancy(io); 
 });
 
-// 2. BLOCO ÚNICO DE CONEXÃO SOCKET
+// 3. BLOCO ÚNICO DE CONEXÃO SOCKET
 io.on('connection', (socket) => {
     console.log(`🔌 Dashboard conectado: ${socket.id}`);
 

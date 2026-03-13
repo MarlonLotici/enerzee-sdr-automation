@@ -7,7 +7,7 @@ const {
     useMultiFileAuthState, 
     DisconnectReason, 
     delay, 
-    fetchLatestBaileysVersion,
+    fetchLatestBaileysVersion, 
     makeCacheableSignalKeyStore,
     downloadMediaMessage, 
     generateMessageID 
@@ -101,8 +101,11 @@ async function gerarRespostaIA(historico, contextoLead, instanceData) {
         .trim();
 
     const bairroLead = contextoLead.bairro || "sua região";
-    const donoChip = "Marlon"; ///"Especialista Enerzee"; 
     
+    // 🏢 SAAS: Lê a identidade do chip do banco de dados
+    const agentName = instanceData?.agent_name || "Marlon";
+    const companyName = instanceData?.company_name || "Enerzee";
+
     // Perfilamento Financeiro (High Ticket vs Mass Market)
     const isBigFish = (contextoLead.capital_social_numeric > 500000);
     
@@ -376,22 +379,21 @@ async function executarLeituraIA(buffer) {
 }
 
 async function transcreverAudioIA(buffer) {
+    const tempPath = `./temp_audio_${Date.now()}.ogg`;
     try {
-        const tempPath = `./temp_audio_${Date.now()}.ogg`;
         fs.writeFileSync(tempPath, buffer);
-
         const transcription = await groq.audio.transcriptions.create({
             file: fs.createReadStream(tempPath),
             model: "whisper-large-v3",
             language: "pt",
             response_format: "json",
         });
-
-        if (fs.existsSync(tempPath)) fs.unlinkSync(tempPath);
         return transcription.text;
     } catch (e) {
         console.error("❌ Erro na transcrição de áudio:", e.message);
         return null;
+    } finally {
+        if (fs.existsSync(tempPath)) fs.unlinkSync(tempPath);
     }
 }
 
@@ -478,7 +480,7 @@ async function startInstance(instanceId, instanceName) {
             if (remoteJid.includes('@g.us')) continue; // Ignora grupos
 
             const isFromMe = msg.key.fromMe;
-            const messageType = Object.keys(msg.message)[0];
+            const messageType = Object.keys(msg.message).find(k => k !== 'messageContextInfo' && k !== 'senderKeyDistributionMessage');
             const isMedia = ['audioMessage', 'imageMessage', 'documentMessage'].includes(messageType);
 
             // ⚡ VIA RÁPIDA: Se for VOCÊ digitando ou se o cliente mandou ÁUDIO/CONTA DE LUZ, processa na hora!
@@ -621,8 +623,8 @@ if (!lead && cleanJid.includes('@lid')) {
     // O Segredo: Se a gaveta mandou o texto juntado, usa ele. Se não, usa o original (para mídias)
     const texto = textoConsolidado || textoOriginal;
 
-    // 👇 AS DUAS LINHAS QUE FALTARAM 👇
-    const messageType = Object.keys(msg.message)[0];
+  // 👇 AS DUAS LINHAS QUE FALTARAM 👇
+    const messageType = Object.keys(msg.message).find(k => k !== 'messageContextInfo' && k !== 'senderKeyDistributionMessage') || Object.keys(msg.message)[0];
     let textoTranscrevido = null;
 
     // --- 👤 1. DETECÇÃO DE INTERVENÇÃO MANUAL ---
@@ -946,15 +948,7 @@ async function motorAtaquePorChip(instanceId) {
         console.log(`🌅 [NOVO DIA] Metas diárias zeradas. Chips acordados!`);
     }
 
-    // 🚀 CONFIGURAÇÃO DE LIMITES POR CHIP
-    const CONFIG_CHIPS = {
-        "2ff1fd4d-c3a4-4b2f-977b-8472eb9c80f1": { limite: 55, nome: "Chip 48 (respondendo)" },
-        "74905749-7b50-4b13-92e8-b12663c1d67d": { limite: 55, nome: "Chip 46 (modo ataque)" }
-    };
-
-    const config = CONFIG_CHIPS[instanceId] || { limite: 20, nome: `Chip-${instanceId.substring(0, 4)}` };
-    console.log(`🚀 [MOTOR] Iniciando turbina de ataque independente para: ${config.nome}`);
-
+   
     // 🛡️ CONTROLE DE CPU: Variável de Backoff Exponencial
     let falhasConsecutivas = 0; 
 
@@ -968,6 +962,20 @@ async function motorAtaquePorChip(instanceId) {
                 await delay(60000 * 5); 
                 continue;
             }
+
+            // 🌟 SAAS DATA: Puxa a identidade e os limites deste chip no banco de dados
+            const instanceData = await db.getInstanceRules(instanceId);
+            if (!instanceData) {
+                await delay(10000);
+                continue; // Aguarda o banco responder
+            }
+            
+            const config = {
+                nome: instanceData.name || `Chip-${instanceId.substring(0, 4)}`,
+                limite: instanceData.daily_limit || 50,
+                agente: instanceData.agent_name || "Marlon",
+                empresa: instanceData.company_name || "Enerzee"
+            };
 
             // 2. Busca 1 lead 'new' que pertença EXCLUSIVAMENTE a este chip
             const { data: lead, error } = await supabase
@@ -1079,25 +1087,24 @@ async function motorAtaquePorChip(instanceId) {
             await delay(Math.random() * 4000 + 4000); 
             await instancia.sock.sendPresenceUpdate('paused', cleanJid);
 
-            // 1. VARIÁVEIS DINÂMICAS (Blindadas contra erro de português e dados brutos)
+          // 1. VARIÁVEIS DINÂMICAS (Agora usa os dados do banco SaaS)
             let primeiroNomeDono = null;
             if (lead.dono && lead.dono.trim().length > 2) {
-                // Extrai o primeiro nome e garante que apenas a 1ª letra é maiúscula
                 const nomeSujo = lead.dono.trim().split(' ')[0].toLowerCase();
                 primeiroNomeDono = nomeSujo.charAt(0).toUpperCase() + nomeSujo.slice(1);
             }
             
-            const saudacaoInicial = primeiroNomeDono ? `Opa ${primeiroNomeDono}` : "Opa";
-            const bairroLead = lead.bairro ? `aí no bairro ${lead.bairro}` : "aí na região";
+            const bairroLead = lead.bairro ? `no bairro ${lead.bairro}` : "aí na região";
             const nomeEmpresa = lead.name ? lead.name.replace(/\s(LTDA|ME|EIRELI|S\.A|LIMITED)\b/gi, '').trim() : "sua empresa";
 
-            // 2. VARIÁVEIS DE PERSONALIZAÇÃO DA ISCA
-            const nichoLead = lead.niche ? lead.niche.toLowerCase() : "estabelecimento";
-            const contaEstimada = (lead.capital_social_numeric > 300000) ? "R$3.000" : "R$500";
+            // 2. GATILHO DE ABORDAGEM INFALÍVEL
+            // Se não soubermos o nome do dono (Lead MEI ou sem QSA), chama o "responsável" com autoridade.
+            const saudacaoInicial = primeiroNomeDono 
+                ? `Opa ${primeiroNomeDono}, tudo bem? Aqui é o ${config.agente} da ${config.empresa}.` 
+                : `Opa, tudo bem? Falo com o responsável pela ${nomeEmpresa}? Aqui é o ${config.agente} da ${config.empresa}.`;
 
-            // 3. A ISCA: Diagnóstico primeiro, produto depois.
-            const novaSaudacao = `${saudacaoInicial}! Sou o Marlon, consultor de energia. Pergunta direta: a ${nomeEmpresa} já tem algum desconto fixo na conta de luz todo mês? [QUEBRA] Pergunto porque tô mapeando os estabelecimentos ${bairroLead} que ainda não migraram — e a maioria tá pagando em torno de ${contaEstimada}/mês a mais do que deveria.`;
-
+            // 3. A NOVA ISCA ANTIX (Fofoca de Bairro + Perda de Dinheiro + Solução Fácil)
+            const novaSaudacao = `${saudacaoInicial} [QUEBRA] Tô passando rápido porque estamos liberando um lote de desconto nas contas de luz de alguns comércios ${bairroLead}. A maioria do pessoal aqui já tá economizando com as nossas usinas parceiras, sem precisar instalar placa nenhuma. A ${nomeEmpresa} já ativou esse bônus ou vcs ainda pagam a conta cheia pra concessionária?`;
 
 
             // 12. Fatiador de Balões com Trava Anti-Engasgo e Limite de 2 Balões

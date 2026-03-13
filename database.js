@@ -1,6 +1,6 @@
 /**
- * DATABASE.JS - CAMADA DE DADOS SUPABASE (CERTIFIED V2)
- * Otimizado para SPIN Selling e Multi-Instância.
+ * DATABASE.JS - CAMADA DE DADOS SUPABASE (SaaS ANTIX V3)
+ * Otimizado para Multi-Tenancy, White-label e Prompts Dinâmicos.
  */
 
 const { createClient } = require('@supabase/supabase-js');
@@ -9,31 +9,45 @@ require('dotenv').config();
 // Inicialização com a Service Role Key para ignorar travas de RLS no backend
 const supabase = createClient(process.env.SUPABASE_URL, process.env.SUPABASE_KEY);
 
-// ... código anterior (imports e inicialização do supabase)
-
 const db = {
     // ========================================================================
-    // 🏢 GESTÃO DE INSTÂNCIAS (CHIPS/EMPRESAS)
+    // 🏢 GESTÃO DE INSTÂNCIAS (CHIPS/CLIENTES DO SAAS)
     // ========================================================================
 
- getActiveInstances: async () => {
-    const { data, error } = await supabase
-        .from('instances')
-        .select('*')
-        // 🛡️ NOVO FILTRO: Pega quem está CONNECTED ou DISCONNECTED, mas ignora o que for NULL ou 'BANNED'
-        .neq('whatsapp_status', 'BANNED') 
-        .order('created_at', { ascending: true });
-    
-    if (error) console.error('[DB] Erro ao buscar instâncias:', error.message);
-    return data || [];
-},
-
-    getInstanceRules: async (instanceId) => {
-        const { data } = await supabase
+    getActiveInstances: async () => {
+        const { data, error } = await supabase
             .from('instances')
-            .select('regional_rules, name, owner_phone')
+            .select('*')
+            // Pega quem está conectado/desconectado, ignora banidos ou null
+            .neq('whatsapp_status', 'BANNED') 
+            .order('created_at', { ascending: true });
+        
+        if (error) console.error('[DB] Erro ao buscar instâncias:', error.message);
+        return data || [];
+    },
+
+    // 🚀 A GRANDE MUDANÇA ANTIX: Puxando o "Cérebro" do cliente do banco
+    getInstanceRules: async (instanceId) => {
+        const { data, error } = await supabase
+            .from('instances')
+            .select(`
+                id,
+                name, 
+                owner_phone,
+                whatsapp_status,
+                regional_rules,
+                agent_name,
+                company_name,
+                system_prompt,
+                daily_limit
+            `)
             .eq('id', instanceId)
             .single();
+            
+        if (error) {
+            console.error(`[DB] Erro ao puxar regras da instância ${instanceId}:`, error.message);
+            return null;
+        }
         return data;
     },
 
@@ -44,7 +58,6 @@ const db = {
             .eq('id', instanceId);
     },
 
-    // 🌟 NOVA FUNÇÃO INSERIDA AQUI:
     getDailyContactCount: async (instanceId) => {
         const hoje = new Date().toISOString().split('T')[0]; // Pega apenas a data YYYY-MM-DD
         
@@ -57,18 +70,13 @@ const db = {
 
         if (error) {
             console.error(`[DB] Erro ao contar envios do chip ${instanceId}:`, error.message);
-            return 999; // Trava por segurança se der erro na busca
+            return 999; // Trava por segurança se der erro na busca para não banir o chip
         }
         return count || 0;
     },
 
     // ========================================================================
-    // 👥 GESTÃO DE LEADS (ANTI-DUPLICIDADE)
-    // ========================================================================
-    
-    // ... restante do seu código (saveLead, updateLeadStatus, etc)
-    // ========================================================================
-    // 👥 GESTÃO DE LEADS (ANTI-DUPLICIDADE)
+    // 👥 GESTÃO DE LEADS (ANTI-DUPLICIDADE E PERSISTÊNCIA)
     // ========================================================================
 
     saveLead: async (lead, instanceId) => {
@@ -81,7 +89,7 @@ const db = {
             instance_id: instanceId,
             name: (lead.name || "Sem Nome").replace(/['"“”]/g, ""), // Limpa caracteres que quebram prompt
             phone: phonePuro,
-            niche: lead.niche || "Padaria",
+            niche: lead.niche || "Empresa",
             cnpj: lead.cnpj || null,
             dono: lead.dono || null,
             endereco_fiscal: lead.endereco_fiscal || lead.address || null,
@@ -123,7 +131,7 @@ const db = {
     },
 
     // ========================================================================
-    // 💬 GESTÃO DE MENSAGENS (O CÉREBRO DA IA)
+    // 💬 GESTÃO DE MENSAGENS (MEMÓRIA NEURAL)
     // ========================================================================
 
     saveMessage: async (zapId, role, content, instanceId) => {

@@ -64,3 +64,4 @@ wpp_sessions/
 temp_audio_*
 *.ogg
 *.mp3
+!assets/*.ogg
