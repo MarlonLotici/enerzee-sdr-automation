@@ -73,8 +73,8 @@ export default function App() {
     const [viewingLeadDetail, setViewingLeadDetail] = useState(null);
     const [editingLead, setEditingLead] = useState(null);
     const [selectedLeadIds, setSelectedLeadIds] = useState(new Set());
-     [messageInput, setMessageInput] = useState("");
-     [sessionLeadsCount, setSessionLeadsCount] = useState(0);
+    const [messageInput, setMessageInput] = useState("");
+    const [sessionLeadsCount, setSessionLeadsCount] = useState(0);
 
     // --- ESTADOS DO MOTOR IA (MULTI-INSTÂNCIA 2026) ---
 const [isConnected, setIsConnected] = useState(false);
@@ -86,8 +86,6 @@ const [botProgress, setBotProgress] = useState(0);
 const [botLogs, setBotLogs] = useState([]);
 
     // --- ESTADOS DE BUSCA E MAPA ---
-    const [messageInput, setMessageInput] = useState("");
-    const [sessionLeadsCount, setSessionLeadsCount] = useState(0);
     const [filterText, setFilterText] = useState("");
     const [selectedNiche, setSelectedNiche] = useState(null);
     const [locationName, setLocationName] = useState("");
