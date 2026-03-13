@@ -28,7 +28,9 @@ let shouldStop = false;
 // Isso faz o backend entregar a tela visual do seu painel
 // ============================================================================
 app.use(express.static(path.join(__dirname, 'dist')));
-app.get('/(.*)', (req, res) => {
+// A ÚNICA forma aceita no Express 5 para capturar todas as rotas (wildcard)
+// [BLINDAGEM] Catch-all Universal: Funciona em qualquer versão do Express
+app.use((req, res, next) => {
     res.sendFile(path.join(__dirname, 'dist', 'index.html'));
 });
 // ============================================================================
