@@ -17,7 +17,7 @@ import {
 } from "@/components/ui/popover"
 import { NICHE_DATA } from "@/data/niche-data"
 
-export function NicheSelect({ onNicheSelect }) {
+export default function NicheSelect({ onNicheSelect }){
   const [open, setOpen] = React.useState(false)
   const [value, setValue] = React.useState("")
 
