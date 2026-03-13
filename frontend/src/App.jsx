@@ -377,7 +377,7 @@ const [botLogs, setBotLogs] = useState([]);
                             <div className="space-y-4">
                                 <Label className="text-blue-400 font-black text-xs uppercase tracking-[0.4em] flex items-center gap-3"><Zap className="h-5 w-5 text-blue-500 animate-pulse"/> 1. Segmento Estratégico</Label>
                                 <div className="relative z-[100] glass-card bg-slate-950 p-2 rounded-2xl border-blue-500/20">
-                                <div className="text-white p-4 font-bold">NicheSelect Desativado para Teste</div>
+                                    <NicheSelect onNicheSelect={setSelectedNiche} />
                                 </div>
                             </div>
                             <div className="space-y-4 relative z-50">
@@ -401,9 +401,14 @@ const [botLogs, setBotLogs] = useState([]);
                             <Button onClick={startScraping} className="w-full h-20 bg-blue-600 hover:bg-blue-500 font-black text-2xl rounded-3xl shadow-neon-blue mt-10 transition-transform active:scale-95 uppercase tracking-tighter italic">Ativar Radar Neural <ArrowRight className="ml-3 h-8 w-8"/></Button>
                         </div>
                         <div className="flex-1 relative">
-                            <div className="w-full h-full bg-slate-800 flex items-center justify-center text-white text-2xl font-black">
-    Mapa Desativado para Teste
-</div>
+                            <MapContainer center={mapCenter} zoom={13} style={{ height: "100%", width: "100%" }} className="leaflet-map-dark">
+                        
+                        <MapController center={mapCenter} />
+                 <MapClickHandler setCenter={setMapCenter} setLocationName={setLocationName} setSearchMode={null} />
+                 <TileLayer url="https://{s}.basemaps.cartocdn.com/dark_all/{z}/{x}/{y}{r}.png" />
+                 <Circle center={mapCenter} radius={searchRadius * 1000} pathOptions={{ color: '#3b82f6', weight: 4, fillOpacity: 0.15, className: 'radar-active' }} />
+                        </MapContainer>
+                         
                             <Button onClick={handleMyLocation} className="absolute top-12 right-12 z-[400] glass-card px-10 h-20 border-2 border-blue-500/30 text-white font-black text-xs uppercase tracking-[0.3em] shadow-2xl hover:bg-blue-600 transition-all flex items-center gap-4"><LocateFixed className="h-8 w-8 text-blue-400" /> Meu GPS</Button>
                         </div>
                     </TabsContent>
