@@ -502,10 +502,10 @@ const [botLogs, setBotLogs] = useState([]);
         )}
     </div>
 </TabsContent>
-                            <TabsContent value="dashboard" className="flex-1 overflow-hidden m-0">
-                                <Dashboard />
-                                      </TabsContent>
-                        
+                           <TabsContent value="dashboard" className="flex-1 overflow-hidden m-0">
+    <div className="text-white text-2xl p-10 font-black">Área de Analytics em Construção...</div>
+</TabsContent>
+
                 </Tabs>
             </main>
 
