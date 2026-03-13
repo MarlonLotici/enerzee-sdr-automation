@@ -24,11 +24,6 @@ import { MapContainer, TileLayer, Circle, useMap, useMapEvents } from 'react-lea
 import 'leaflet/dist/leaflet.css'
 import L from 'leaflet';
 
-// --- CORREÇÃO DE ÍCONES DO LEAFLET ---
-import icon from 'leaflet/dist/images/marker-icon.png';
-import iconShadow from 'leaflet/dist/images/marker-shadow.png';
-let DefaultIcon = L.icon({ iconUrl: icon, shadowUrl: iconShadow, iconSize: [25, 41], iconAnchor: [12, 41] });
-L.Marker.prototype.options.icon = DefaultIcon;
 
 import { createClient } from '@supabase/supabase-js'
 
@@ -407,7 +402,7 @@ const [botLogs, setBotLogs] = useState([]);
         <MapController center={mapCenter} />
         <MapClickHandler setCenter={setMapCenter} setLocationName={setLocationName} setSearchMode={null} />
         <TileLayer url="https://{s}.basemaps.cartocdn.com/dark_all/{z}/{x}/{y}{r}.png" />
-        <Circle center={mapCenter} radius={searchRadius * 1000} pathOptions={{ color: '#3b82f6', weight: 4, fillOpacity: 0.15 }} />
+        <Circle center={mapCenter} radius={Number(searchRadius) * 1000} pathOptions={{ color: '#3b82f6', weight: 4, fillOpacity: 0.15 }} />
     </MapContainer>
     <Button onClick={handleMyLocation} className="absolute top-12 right-12 z-[400] glass-card px-10 h-20 border-2 border-blue-500/30 text-white font-black text-xs uppercase tracking-[0.3em] shadow-2xl hover:bg-blue-600 transition-all flex items-center gap-4">
         <LocateFixed className="h-8 w-8 text-blue-400" /> Meu GPS
