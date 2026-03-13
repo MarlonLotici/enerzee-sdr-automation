@@ -401,13 +401,9 @@ const [botLogs, setBotLogs] = useState([]);
                             <Button onClick={startScraping} className="w-full h-20 bg-blue-600 hover:bg-blue-500 font-black text-2xl rounded-3xl shadow-neon-blue mt-10 transition-transform active:scale-95 uppercase tracking-tighter italic">Ativar Radar Neural <ArrowRight className="ml-3 h-8 w-8"/></Button>
                         </div>
                         <div className="flex-1 relative">
-                            <MapContainer center={mapCenter} zoom={13} style={{ height: "100%", width: "100%" }} className="leaflet-map-dark">
-                        
-                        <MapController center={mapCenter} />
-                 <MapClickHandler setCenter={setMapCenter} setLocationName={setLocationName} setSearchMode={null} />
-                 <TileLayer url="https://{s}.basemaps.cartocdn.com/dark_all/{z}/{x}/{y}{r}.png" />
-                 <Circle center={mapCenter} radius={searchRadius * 1000} pathOptions={{ color: '#3b82f6', weight: 4, fillOpacity: 0.15, className: 'radar-active' }} />
-                        </MapContainer>
+                           <div className="w-full h-full bg-slate-900 flex items-center justify-center border-2 border-dashed border-blue-500/50 rounded-3xl">
+    <p className="text-blue-400 font-black tracking-widest uppercase animate-pulse">Mapa em Auditoria...</p>
+</div>
                          
                             <Button onClick={handleMyLocation} className="absolute top-12 right-12 z-[400] glass-card px-10 h-20 border-2 border-blue-500/30 text-white font-black text-xs uppercase tracking-[0.3em] shadow-2xl hover:bg-blue-600 transition-all flex items-center gap-4"><LocateFixed className="h-8 w-8 text-blue-400" /> Meu GPS</Button>
                         </div>
