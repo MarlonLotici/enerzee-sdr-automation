@@ -33,6 +33,14 @@ const mapaRastreioLID = new Map();
 const gavetaDeMensagens = new Map(); // 🧠 OUVIDO PACIENTE: Gaveta temporária de mensagens
 if (!fs.existsSync('./wpp_sessions')) fs.mkdirSync('./wpp_sessions');
 
+// 🧹 LIXEIRO AUTOMÁTICO (Evita que o servidor trave por falta de memória RAM)
+// Limpa a memória viva uma vez por dia de forma global e eficiente
+setInterval(() => {
+    mensagensEnviadasPelaIA.clear();
+    mapaRastreioLID.clear();
+    console.log("🧹 [SISTEMA] Limpeza de memória viva concluída (Blindagem Anti-Crash).");
+}, 1000 * 60 * 60 * 24);
+
 const sessions = new Map(); 
 const instanciasLigando = new Set();
 let ioSocket = null;
@@ -125,8 +133,7 @@ Você é Marlon, Consultor de Energia sênior da ENERZEE.
 Produto: Energia por Assinatura (Lei 14.300) — Geração Distribuída via Usinas WEG certificadas.
 Missão: Agendar uma consultoria gratuita de 20 minutos via Calendly.
 Tom: Direto, humano, B2B. Use "vc", "tá", "né", "pra". NUNCA use palavras como "reunião", "compliance", "EBITDA" a menos que o perfil do lead indique isso.
-Contexto: Você já perguntou se a empresa tem desconto fixo na conta de luz
-e o cliente respondeu.
+Contexto: Você enviou a mensagem inicial perguntando se ele "conhece algum comércio amigo na região querendo baratear a conta de luz", usando a abordagem indireta para baixar a guarda dele.
 ---
 
 ### 👤 DADOS DO LEAD (USE PARA PERSONALIZAR CADA MENSAGEM)
@@ -177,21 +184,14 @@ sinais, retorne APENAS a tag [ROBO]. Nada mais.
 
 ANTES de escrever qualquer resposta, leia o histórico e identifique em qual estágio a conversa está. Avance APENAS UM estágio por vez. NUNCA pule etapas.
 
-[ESTÁGIO 1 — SITUAÇÃO]
-Gatilho: Lead respondeu a isca com qualquer coisa.
-Ação: 1 frase curta sobre o benefício (até 25% de desconto, zero obra, zero investimento).
-[QUEBRA] 1 pergunta sobre o valor da conta de luz mensal.
-ATENÇÃO: Se o lead confirmou que NÃO tem desconto ("não tenho", "pago normal"),
-use isso como gancho: "É exatamente esse caso que a gente resolve" + benefício + pergunta sobre valor da conta.
-Tom: casual, direto. Máximo 12 palavras por balão.
-ATENÇÃO 2: Se o lead disser que JÁ TEM algum desconto na energia, responda APENAS:
-"Que desconto é esse? É fixo todo mês ou varia conforme a bandeira tarifária?"
-— Se a resposta indicar outra empresa de assinatura/solar → aplique KNOCK-OUT da Regra 3.
-— Se for desconto variável, de bandeira ou impreciso → trate como lead quente e continue o SPIN normalmente.
-ATENÇÃO 3: Se o lead já informou o valor da conta na primeira resposta
-(ex: "aqui sai uns R$2.000", "pago em torno de R$800 por mês"),
-PULE direto para o ESTÁGIO 3 usando esse valor no cálculo de perda.
-Não faça a pergunta sobre o valor — ele já respondeu.
+[ESTÁGIO 1 — SITUAÇÃO / TRANSIÇÃO DA ISCA INDIRETA]
+Gatilho: Lead respondeu à isca demonstrando interesse próprio ("eu mesmo quero", "nós queremos", "como funciona?", "depende") ou indicando alguém.
+Ação: Assuma com naturalidade. Se ele disse que quer para ele mesmo, diga: "Ah, perfeito! Pra própria ${nomeEmpresa} então rs." Se ele disser "não conheço ninguém", pergunte: "Entendi! E pra vcs mesmos, não faria sentido dar uma reduzida no custo fixo?".
+Em seguida, dê 1 frase curta sobre o benefício (até 25% de desconto, zero obra, zero investimento).
+[QUEBRA] 1 pergunta direta sobre qual é o custo médio mensal da conta de luz deles hoje.
+Tom: direto. Máximo 12 palavras por balão.
+ATENÇÃO: Se ele responder que já tem placa ou desconto, aplique o KNOCK-OUT da Regra 3 ou pergunte se é desconto fixo/variável.
+ATENÇÃO 2: Se ele já disser o valor da conta logo de cara, PULE direto para o ESTÁGIO 3 fazendo o cálculo.
 
 [ESTÁGIO 2 — PROBLEMA / DOR]
 Gatilho: Lead demonstrou curiosidade com perguntas como "que usinas são essas?",
@@ -379,7 +379,7 @@ async function executarLeituraIA(buffer) {
 }
 
 async function transcreverAudioIA(buffer) {
-    const tempPath = `./temp_audio_${Date.now()}.ogg`;
+    const tempPath = `./temp_audio_${Date.now()}_${Math.floor(Math.random() * 10000)}.ogg`;
     try {
         fs.writeFileSync(tempPath, buffer);
         const transcription = await groq.audio.transcriptions.create({
@@ -537,11 +537,7 @@ async function enviarMensagemIA(sock, jid, content) {
             mensagensEnviadasPelaIA.add(sentMsg.key.id); 
             mapaRastreioLID.set(sentMsg.key.id, jid); // 🔗 O Fio de Ariadne está a salvo aqui!
             
-            // Limpa da memória após 24h para não lotar a RAM
-            setTimeout(() => {
-                mensagensEnviadasPelaIA.delete(sentMsg.key.id);
-                mapaRastreioLID.delete(sentMsg.key.id);
-            }, 86400000); 
+    
         }
         return sentMsg;
     } catch (err) {
@@ -895,16 +891,17 @@ if (memoriaHistorico.includes('<<Áudio Obras/Placas Enviado>>') && /\[AUDIO[_\w
             // ========================================================================
 
 
-
-// ========================================================================
+            // ========================================================================
             // 🌟 O NOVO FATIADOR DE BALÕES (TRUQUE DA [QUEBRA])
             // ========================================================================
             const mensagensSplit = resposta.split('[QUEBRA]')
                 .map(t => t.trim())
                 .filter(t => t.length > 0)
                 .slice(0, 2); 
-for (let i = 0; i < mensagensSplit.length; i++) {
+            
+            for (let i = 0; i < mensagensSplit.length; i++) {
                 const trecho = mensagensSplit[i];
+
                 // 🔥 NOVO CALCULO: Mais lento (80ms por letra + 4seg de base)
                 const tempoDigitacao = (trecho.length * 80) + 4000; 
                 
@@ -1097,15 +1094,13 @@ async function motorAtaquePorChip(instanceId) {
             const bairroLead = lead.bairro ? `no bairro ${lead.bairro}` : "aí na região";
             const nomeEmpresa = lead.name ? lead.name.replace(/\s(LTDA|ME|EIRELI|S\.A|LIMITED)\b/gi, '').trim() : "sua empresa";
 
-            // 2. GATILHO DE ABORDAGEM INFALÍVEL
-            // Se não soubermos o nome do dono (Lead MEI ou sem QSA), chama o "responsável" com autoridade.
+           // 2. GATILHO DE ABORDAGEM INDIRETA (Aumenta a taxa de resposta baixando a guarda)
             const saudacaoInicial = primeiroNomeDono 
-                ? `Opa ${primeiroNomeDono}, tudo bem? Aqui é o ${config.agente} da ${config.empresa}.` 
-                : `Opa, tudo bem? Falo com o responsável pela ${nomeEmpresa}? Aqui é o ${config.agente} da ${config.empresa}.`;
+                ? `Opa ${primeiroNomeDono}, tudo bem?` 
+                : `Opa, tudo bem? Falo com o responsável pela ${nomeEmpresa}?`;
 
-            // 3. A NOVA ISCA ANTIX (Fofoca de Bairro + Perda de Dinheiro + Solução Fácil)
-            const novaSaudacao = `${saudacaoInicial} [QUEBRA] Tô passando rápido porque estamos liberando um lote de desconto nas contas de luz de alguns comércios ${bairroLead}. A maioria do pessoal aqui já tá economizando com as nossas usinas parceiras, sem precisar instalar placa nenhuma. A ${nomeEmpresa} já ativou esse bônus ou vcs ainda pagam a conta cheia pra concessionária?`;
-
+            // 3. A NOVA ISCA (Gatilho da Indicação: "Dando" energia e perguntando de terceiros)
+            const novaSaudacao = `${saudacaoInicial} [QUEBRA] Aqui é o ${config.agente}. Tô passando rápido porque a gente tá liberando umas cotas gratuitas de energia por assinatura com desconto aí ${bairroLead}. Vc sabe de algum comércio amigo aí na região que esteja querendo dar uma barateada na conta de luz?`;
 
             // 12. Fatiador de Balões com Trava Anti-Engasgo e Limite de 2 Balões
             const mensagensSplit = novaSaudacao.split('[QUEBRA]')
