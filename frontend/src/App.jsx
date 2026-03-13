@@ -399,11 +399,9 @@ const [botLogs, setBotLogs] = useState([]);
                         <div className="flex-1 relative">
                            <div className="flex-1 relative z-0 min-h-[400px]">
     <MapContainer center={mapCenter} zoom={13} style={{ height: "100%", width: "100%", position: "absolute", top: 0, left: 0 }} className="leaflet-map-dark">
-        <MapController center={mapCenter} />
-        <MapClickHandler setCenter={setMapCenter} setLocationName={setLocationName} setSearchMode={null} />
-        <TileLayer url="https://{s}.basemaps.cartocdn.com/dark_all/{z}/{x}/{y}{r}.png" />
-        <Circle center={mapCenter} radius={Number(searchRadius) * 1000} pathOptions={{ color: '#3b82f6', weight: 4, fillOpacity: 0.15 }} />
-    </MapContainer>
+    <TileLayer url="https://{s}.basemaps.cartocdn.com/dark_all/{z}/{x}/{y}{r}.png" />
+</MapContainer>
+
     <Button onClick={handleMyLocation} className="absolute top-12 right-12 z-[400] glass-card px-10 h-20 border-2 border-blue-500/30 text-white font-black text-xs uppercase tracking-[0.3em] shadow-2xl hover:bg-blue-600 transition-all flex items-center gap-4">
         <LocateFixed className="h-8 w-8 text-blue-400" /> Meu GPS
     </Button>
