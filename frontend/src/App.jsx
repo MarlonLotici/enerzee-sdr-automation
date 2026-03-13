@@ -6,7 +6,7 @@ import { Input } from "@/components/ui/input"
 import { Label } from "@/components/ui/label"
 import { Badge } from "@/components/ui/badge"
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogDescription, DialogFooter, DialogTrigger } from "@/components/ui/dialog"
-import { NicheSelect } from "@/components/NicheSelect"
+import NicheSelect from "@/components/NicheSelect"
 import Dashboard from './Dashboard'
 // --- ÍCONES (FULL SET 2026) ---
 import { 
@@ -36,7 +36,7 @@ const supabase = createClient("https://vptfedhzynyhvhrlcfqd.supabase.co", "sb_pu
 const socketUrl = typeof window !== 'undefined' && window.location.hostname === 'localhost' 
     ? 'http://localhost:3001' 
     : '/';
-const socket = io(socketUrl, { autoConnect: false, transparency: ['websocket'] });
+const socket = io(socketUrl, { autoConnect: false, transports: ['websocket'] });
 // --- COMPONENTES AUXILIARES DO MAPA ---
 function MapController({ center }) {
     const map = useMap();
@@ -537,16 +537,7 @@ const [botLogs, setBotLogs] = useState([]);
                 </DialogContent>
             </Dialog>
 
-            {/* MODAL DETALHES GIGANTE (MANTIDO) */}
-            <Dialog open={!!viewingLeadDetail} onOpenChange={() => setViewingLeadDetail(null)}>
-                {/* ... seu código do dossiê que já funciona ... */}
-            </Dialog>
-
-            {/* MODAL EDIÇÃO (MANTIDO) */}
-            <Dialog open={!!editingLead} onOpenChange={() => setEditingLead(null)}>
-                {/* ... seu código de edição que já funciona ... */}
-            </Dialog>
-
+            
           {/* --- MODAL DETALHES GIGANTE: O DOSSIÊ DE INTELIGÊNCIA --- */}
 {/* --- MODAL DETALHES GIGANTE: O DOSSIÊ DE INTELIGÊNCIA --- */}
 <Dialog open={!!viewingLeadDetail} onOpenChange={() => setViewingLeadDetail(null)}>
