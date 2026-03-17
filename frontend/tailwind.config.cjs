@@ -1,9 +1,15 @@
-
-	/** @type {import('tailwindcss').Config} */
+/** @type {import('tailwindcss').Config} */
 module.exports = {
   darkMode: ["class"],
   content: [
-    "./**/*.{html,js,jsx,ts,tsx}" 
+    // Rotas físicas exatas do servidor Railway:
+    "/app/frontend/index.html",
+    "/app/frontend/src/**/*.{js,jsx,ts,tsx}",
+    "/app/frontend/src/components/**/*.{js,jsx,ts,tsx}",
+    
+    // Rotas de segurança para rodar no seu PC:
+    "./index.html",
+    "./src/**/*.{js,jsx,ts,tsx}"
   ],
   theme: {
     extend: {
