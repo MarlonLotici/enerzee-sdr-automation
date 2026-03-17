@@ -1,5 +1,4 @@
 import React, { useState, useEffect, useRef, useMemo } from 'react'
-import './index.css'
 // --- IMPORTAÇÕES DE UI ---
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs"
 import { Button } from "@/components/ui/button"
