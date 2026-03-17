@@ -8,21 +8,26 @@ const qrcode = require('qrcode-terminal');
 const { iniciarVarredura } = require('./1_scraper'); 
 const db = require('./database'); 
 
+const path = require('path');
+
 const app = express();
-const server = http.createServer(app); 
+const server = http.createServer(app);
 
 // Configuração do Socket.io
-const io = new Server(server, { 
-    cors: { 
-        origin: "*", 
+const io = new Server(server, {
+    cors: {
+        origin: "*",
         methods: ["GET", "POST"]
-    } 
+    }
 });
 
-const PORT = 3001; 
+const PORT = process.env.PORT || 3001;
 
 app.use(cors());
 app.use(express.json());
+
+// Servir frontend buildado (produção / Railway)
+app.use(express.static(path.join(__dirname, 'frontend', 'dist')));
 
 app.post('/webhook/calendly', (req, res) => {
     const payload = req.body?.payload || {};
@@ -43,13 +48,32 @@ try {
 // =======================================================
 // 1. CONFIGURAÇÃO DO WHATSAPP (whatsapp-web.js)
 // =======================================================
-console.log('🔄 Inicializando Cliente WhatsApp...');
+const fs = require('fs');
+
+function findChromePath() {
+    // 1. Variável de ambiente (Railway, Docker, CI)
+    if (process.env.PUPPETEER_EXECUTABLE_PATH) return process.env.PUPPETEER_EXECUTABLE_PATH;
+
+    // 2. Caminhos conhecidos por OS
+    const candidates = process.platform === 'darwin'
+        ? ['/Applications/Google Chrome.app/Contents/MacOS/Google Chrome']
+        : ['/usr/bin/google-chrome-stable', '/usr/bin/google-chrome', '/usr/bin/chromium-browser', '/usr/bin/chromium'];
+
+    for (const p of candidates) {
+        if (fs.existsSync(p)) return p;
+    }
+    return undefined; // deixa o puppeteer tentar o Chrome bundled
+}
+
+const chromePath = findChromePath();
+console.log(`🔄 Inicializando Cliente WhatsApp... (Chrome: ${chromePath || 'bundled'})`);
 
 const client = new Client({
     authStrategy: new LocalAuth(),
     puppeteer: {
         args: ['--no-sandbox', '--disable-setuid-sandbox'],
-        headless: true 
+        headless: true,
+        ...(chromePath && { executablePath: chromePath })
     }
 });
 
@@ -228,6 +252,11 @@ io.on('connection', (socket) => {
             socket.emit('notification', 'Erro no enriquecimento');
         });
     });
+});
+
+// Fallback SPA — qualquer rota não-API devolve o index.html
+app.get('{*path}', (req, res) => {
+    res.sendFile(path.join(__dirname, 'frontend', 'dist', 'index.html'));
 });
 
 server.listen(PORT, () => {

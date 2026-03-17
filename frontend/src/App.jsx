@@ -22,7 +22,8 @@ let DefaultIcon = L.icon({ iconUrl: icon, shadowUrl: iconShadow, iconSize: [25, 
 L.Marker.prototype.options.icon = DefaultIcon;
 
 // Conexão Socket
-const socket = io('http://localhost:3001', { autoConnect: false });
+const SOCKET_URL = import.meta.env.DEV ? 'http://localhost:3001' : window.location.origin;
+const socket = io(SOCKET_URL, { autoConnect: false });
 
 // Som de notificação
 const playNotificationSound = () => {
