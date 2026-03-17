@@ -6,9 +6,10 @@ export default defineConfig({
   plugins: [react()],
   resolve: {
     alias: {
-      // 🎯 Correção: Caminho direto para o src
-      "@": path.resolve(__dirname, "./src"),
+      // 🎯 Devolvendo a rota absoluta para o Railway achar o Shadcn
+      "@": path.resolve(__dirname, "./frontend/src"),
     },
+    // ✅ Mantendo sua segurança contra duplicatas do React
     dedupe: ['react', 'react-dom'],
   },
 
