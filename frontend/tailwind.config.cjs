@@ -1,6 +1,6 @@
 
 	/** @type {import('tailwindcss').Config} */
-export default {
+module.exports = {
   darkMode: ["class"],
   content: [
     "./index.html",
@@ -11,7 +11,6 @@ export default {
     "./frontend/src/components/**/*.{js,ts,jsx,tsx}"
   ],
   theme: {
-// ... resto do arquivo
     extend: {
         colors: {
             border: 'hsl(var(--border))',
