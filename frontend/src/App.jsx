@@ -7,7 +7,7 @@ import { Input } from "@/components/ui/input"
 import { Label } from "@/components/ui/label"
 import { Badge } from "@/components/ui/badge"
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogDescription, DialogFooter, DialogTrigger } from "@/components/ui/dialog"
-import NicheSelect from "@/components/NicheSelect"
+import { NicheSelect } from "@/components/NicheSelect"
 import Dashboard from './Dashboard'
 // --- ÍCONES (FULL SET 2026) ---
 import { 
@@ -398,21 +398,14 @@ const [botLogs, setBotLogs] = useState([]);
                             <Button onClick={startScraping} className="w-full h-20 bg-blue-600 hover:bg-blue-500 font-black text-2xl rounded-3xl shadow-neon-blue mt-10 transition-transform active:scale-95 uppercase tracking-tighter italic">Ativar Radar Neural <ArrowRight className="ml-3 h-8 w-8"/></Button>
                         </div>
 
-                                <div className="flex-1 relative p-4">
-                            <div className="w-full h-full relative z-0 min-h-[400px] rounded-[2rem] overflow-hidden border border-white/10 shadow-2xl">
-                                <MapContainer center={mapCenter} zoom={13} style={{ height: "100%", width: "100%", position: "absolute", top: 0, left: 0 }} className="leaflet-map-dark">
-                                    <MapController center={mapCenter} />
-                                    <MapClickHandler setCenter={setMapCenter} setLocationName={setLocationName} setSearchMode={null} />
-                                    <TileLayer url="https://{s}.basemaps.cartocdn.com/dark_all/{z}/{x}/{y}{r}.png" />
-                                    <Circle center={mapCenter} radius={Number(searchRadius) * 1000} pathOptions={{ color: '#3b82f6', weight: 4, fillOpacity: 0.15, className: 'radar-active' }} />
-                                </MapContainer>
-                                <Button onClick={handleMyLocation} className="absolute top-8 right-8 z-[400] glass-card px-8 h-16 border-2 border-blue-500/30 text-white font-black text-xs uppercase tracking-[0.3em] shadow-2xl hover:bg-blue-600 transition-all flex items-center gap-3">
-                                    <LocateFixed className="h-6 w-6 text-blue-400" /> Meu GPS
-                                </Button>
+                               <div className="flex-1 relative p-4">
+                            <div className="w-full h-full bg-slate-900 flex items-center justify-center rounded-[2rem] border-2 border-dashed border-blue-500/50 shadow-neon-blue">
+                                <h2 className="text-3xl font-black text-blue-400 uppercase tracking-widest animate-pulse">
+                                    Mapa Desativado (Teste de Motor)
+                                </h2>
                             </div>
                         </div>
                     </TabsContent>
-
 
 
                     {/* ABA 3: WHATSAPP (MANTIDA) */}
