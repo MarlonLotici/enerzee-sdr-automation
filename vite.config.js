@@ -6,12 +6,12 @@ export default defineConfig({
   plugins: [react()],
   resolve: {
     alias: {
-      // 🎯 Aqui está a correção: O "@" agora aponta para o lugar certo
-      "@": path.resolve(__dirname, "./frontend/src"),
+      // 🎯 Correção: Caminho direto para o src
+      "@": path.resolve(__dirname, "./src"),
     },
-    // ✅ Mantendo sua segurança contra duplicatas do React
     dedupe: ['react', 'react-dom'],
   },
+
   // 📍 Indica que o index.html está aqui na raiz
   root: '.',
   build: {
