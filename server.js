@@ -8,43 +8,128 @@ const express = require('express');
 const http = require('http');
 const { Server } = require('socket.io');
 const cors = require('cors');
+const { Client, LocalAuth } = require('whatsapp-web.js');
+const { spawn } = require('child_process');
+const qrcode = require('qrcode-terminal'); 
+const { iniciarVarredura } = require('./1_scraper'); 
+const db = require('./database'); 
+
 const path = require('path');
-const { iniciarVarredura } = require('./1_scraper');
-const { processarLimpeza } = require('./2_clean');
-const { enriquecerLeadIndividual } = require('./3_enrich');
-const { initMultiTenancy, criarNovaInstancia } = require('./4_sdr');
-const db = require('./database');
 
 const app = express();
-app.use(cors());
 const server = http.createServer(app);
-const io = new Server(server, { cors: { origin: "*" } });
+
+// Configuração do Socket.io
+const io = new Server(server, {
+    cors: {
+        origin: "*",
+        methods: ["GET", "POST"]
+    }
+});
+
+const PORT = process.env.PORT || 3001;
+
+app.use(cors());
+app.use(express.json());
+
+// Servir frontend buildado (produção / Railway)
+app.use(express.static(path.join(__dirname, 'frontend', 'dist')));
+
+app.post('/webhook/calendly', (req, res) => {
+    const payload = req.body?.payload || {};
+    const name = payload?.invitee?.name || req.body?.name || '';
+    const email = payload?.invitee?.email || req.body?.email || '';
+    const phone = req.body?.phone || '';
+    io.emit('lead_prebooked', { name, email, phone });
+    res.json({ ok: true });
+});
 
 // Variável global para controle de interrupção
 let shouldStop = false;
 
-// ============================================================================
-// 👇 1. MOTOR DO FRONTEND (REACT/VITE) ADICIONADO AQUI 👇
-// Isso faz o backend entregar a tela visual do seu painel
-// ============================================================================
-app.use(express.static(path.join(__dirname, 'dist')));
-// A ÚNICA forma aceita no Express 5 para capturar todas as rotas (wildcard)
-// [BLINDAGEM] Catch-all Universal: Funciona em qualquer versão do Express
-app.use((req, res, next) => {
-    res.sendFile(path.join(__dirname, 'dist', 'index.html'));
+// =======================================================
+// 1. CONFIGURAÇÃO DO WHATSAPP (whatsapp-web.js)
+// =======================================================
+const fs = require('fs');
+
+function findChromePath() {
+    // 1. Variável de ambiente (Railway, Docker, CI)
+    if (process.env.PUPPETEER_EXECUTABLE_PATH) return process.env.PUPPETEER_EXECUTABLE_PATH;
+
+    // 2. Caminhos conhecidos por OS
+    const candidates = process.platform === 'darwin'
+        ? ['/Applications/Google Chrome.app/Contents/MacOS/Google Chrome']
+        : ['/usr/bin/google-chrome-stable', '/usr/bin/google-chrome', '/usr/bin/chromium-browser', '/usr/bin/chromium'];
+
+    for (const p of candidates) {
+        if (fs.existsSync(p)) return p;
+    }
+    return undefined; // deixa o puppeteer tentar o Chrome bundled
+}
+
+const chromePath = findChromePath();
+console.log(`🔄 Inicializando Cliente WhatsApp... (Chrome: ${chromePath || 'bundled'})`);
+
+const client = new Client({
+    authStrategy: new LocalAuth(),
+    puppeteer: {
+        args: ['--no-sandbox', '--disable-setuid-sandbox'],
+        headless: true,
+        ...(chromePath && { executablePath: chromePath })
+    }
 });
-// ============================================================================
 
-
-// 2. INICIALIZAÇÃO DO SISTEMA
-const PORT = process.env.PORT || 3001;
-server.listen(PORT, async () => {
-        console.log('🚀 SISTEMA ENERZEE SDR MULTI-CHIP ONLINE');
-    // Inicia os chips 05:30 - 22:45 automaticamente conforme regras do 4_sdr.js
-    await initMultiTenancy(io); 
+client.on('qr', (qr) => {
+    console.log('📲 QR Code gerado!');
+    qrcode.generate(qr, { small: true });
+    io.emit('qr_code', qr); 
 });
 
-// 3. BLOCO ÚNICO DE CONEXÃO SOCKET
+client.on('ready', async () => {
+    console.log('✅ WhatsApp Conectado!');
+    io.emit('whatsapp_status', 'CONNECTED');
+    
+    // Carrega histórico recente
+    try {
+        const chats = await client.getChats();
+        const formattedChats = chats.map(c => ({
+            id: c.id._serialized,
+            name: c.name || c.id.user,
+            lastMessage: c.lastMessage ? c.lastMessage.body : '',
+            lastTime: c.timestamp ? new Date(c.timestamp * 1000).toLocaleTimeString([], {hour: '2-digit', minute:'2-digit'}) : '',
+        })).slice(0, 15);
+        
+        io.emit('all_chats', formattedChats);
+    } catch (e) {
+        console.error("Erro ao carregar chats:", e);
+    }
+});
+
+// Listener de Status para atualizar o botão do Front
+client.on('disconnected', (reason) => {
+    console.log('❌ WhatsApp Desconectado:', reason);
+    io.emit('whatsapp_status', 'DISCONNECTED');
+});
+
+client.on('message', async msg => {
+    // Ignora mensagens de status
+    if(msg.from === 'status@broadcast') return;
+
+    console.log(`📩 Nova mensagem de ${msg.from}: ${msg.body}`);
+    
+    io.emit('message_received', {
+        chatId: msg.from,
+        body: msg.body,
+        fromMe: false,
+        timestamp: new Date().toLocaleTimeString()
+    });
+});
+
+client.initialize();
+
+// =======================================================
+// 2. SOCKET.IO (COMUNICAÇÃO REAL-TIME)
+// =======================================================
 io.on('connection', (socket) => {
     console.log(`🔌 Dashboard conectado: ${socket.id}`);
 
@@ -145,4 +230,13 @@ io.on('connection', (socket) => {
         console.log("🛑 Comando: Parar Radar.");
         shouldStop = true; 
     });
+});
+
+// Fallback SPA — qualquer rota não-API devolve o index.html
+app.get('{*path}', (req, res) => {
+    res.sendFile(path.join(__dirname, 'frontend', 'dist', 'index.html'));
+});
+
+server.listen(PORT, () => {
+    console.log(`\n🚀 SERVIDOR SDR RODANDO NA PORTA ${PORT}`);
 });

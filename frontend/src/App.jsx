@@ -23,6 +23,24 @@ import { MapContainer, TileLayer, Circle, useMap, useMapEvents } from 'react-lea
 import 'leaflet/dist/leaflet.css'
 import L from 'leaflet';
 
+// Fix Ícones Leaflet
+import icon from 'leaflet/dist/images/marker-icon.png';
+import iconShadow from 'leaflet/dist/images/marker-shadow.png';
+let DefaultIcon = L.icon({ iconUrl: icon, shadowUrl: iconShadow, iconSize: [25, 41], iconAnchor: [12, 41] });
+L.Marker.prototype.options.icon = DefaultIcon;
+
+// Conexão Socket
+const SOCKET_URL = import.meta.env.DEV ? 'http://localhost:3001' : window.location.origin;
+const socket = io(SOCKET_URL, { autoConnect: false });
+
+// Som de notificação
+const playNotificationSound = () => {
+    const audio = new Audio('https://assets.mixkit.co/active_storage/sfx/2869/2869-preview.mp3');
+    audio.volume = 0.5;
+    audio.play().catch(e => console.log("Audio play blocked", e));
+}
+
+// --- Componentes Mapa ---
 
 import { createClient } from '@supabase/supabase-js'
 
