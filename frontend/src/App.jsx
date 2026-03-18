@@ -6,7 +6,6 @@ import { Input } from "@/components/ui/input"
 import { Label } from "@/components/ui/label"
 import { Badge } from "@/components/ui/badge"
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogDescription, DialogFooter, DialogTrigger } from "@/components/ui/dialog"
-import { NicheSelect } from "@/components/NicheSelect"
 import Dashboard from './Dashboard'
 // --- ÍCONES (FULL SET 2026) ---
 import { 
@@ -46,10 +45,7 @@ import { createClient } from '@supabase/supabase-js'
 
 // --- CONFIGURAÇÃO ---
 const supabase = createClient("https://vptfedhzynyhvhrlcfqd.supabase.co", "sb_publishable_T0-4c2bm3I5lNTw7tUGmcg_xVInIQKR")
-const socketUrl = typeof window !== 'undefined' && window.location.hostname === 'localhost' 
-    ? 'http://localhost:3001' 
-    : '/';
-const socket = io(socketUrl, { autoConnect: false });
+
     // --- COMPONENTES AUXILIARES DO MAPA ---
 function MapController({ center }) {
     const map = useMap();
@@ -427,7 +423,7 @@ const [botLogs, setBotLogs] = useState([]);
 
                     {/* ABA 3: WHATSAPP (MANTIDA) */}
                  <TabsContent value="connections" className="h-[calc(100vh-160px)] flex flex-col overflow-hidden relative z-20 bg-slate-950/40 m-0">
-    <div className="flex-1 flex overflow-hidde n">
+    <div className="flex-1 flex overflow-hidden">
         
         {/* COLUNA 1: LISTA DE CHATS - COM GESTÃO DE CHIPS */}
 <div className="w-[280px] border-r border-white/5 overflow-y-auto bg-slate-900/40 custom-scrollbar flex flex-col h-full">
