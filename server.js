@@ -51,20 +51,32 @@ let shouldStop = false;
 // 1. CONFIGURAÇÃO DO WHATSAPP (whatsapp-web.js)
 // =======================================================
 const fs = require('fs');
+const { execSync } = require('child_process'); // 🎯 Ferramenta de radar adicionada
 
 function findChromePath() {
-    // 1. Variável de ambiente (Railway, Docker, CI)
+    // 1. Variável de ambiente forçada (caso precise no futuro)
     if (process.env.PUPPETEER_EXECUTABLE_PATH) return process.env.PUPPETEER_EXECUTABLE_PATH;
 
-    // 2. Caminhos conhecidos por OS
+    // 2. Radar Ativo: Pergunta ao Linux (Railway) onde o Chrome está instalado
+    try {
+        const dynPath = execSync('which google-chrome-stable').toString().trim();
+        if (fs.existsSync(dynPath)) return dynPath;
+    } catch (e) {}
+
+    try {
+        const dynPath = execSync('which google-chrome').toString().trim();
+        if (fs.existsSync(dynPath)) return dynPath;
+    } catch (e) {}
+
+    // 3. Fallback Local (Para rodar no seu PC)
     const candidates = process.platform === 'darwin'
         ? ['/Applications/Google Chrome.app/Contents/MacOS/Google Chrome']
-        : ['/usr/bin/google-chrome-stable', '/usr/bin/google-chrome', '/usr/bin/chromium-browser', '/usr/bin/chromium'];
+        : ['/usr/bin/google-chrome-stable', '/usr/bin/google-chrome', 'C:\\Program Files\\Google\\Chrome\\Application\\chrome.exe'];
 
     for (const p of candidates) {
         if (fs.existsSync(p)) return p;
     }
-    return undefined; // deixa o puppeteer tentar o Chrome bundled
+    return undefined; // Deixa o Puppeteer tentar se virar
 }
 
 const chromePath = findChromePath();
