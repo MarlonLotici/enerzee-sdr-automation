@@ -173,11 +173,19 @@ const db = {
         return data && data.length > 0;
     },
 
-    removeInstance: async (instanceId) => {
+   removeInstance: async (instanceId) => {
+        // Primeiro desvincula os leads deste chip (seta instance_id para null)
+        await supabase
+            .from('leads')
+            .update({ instance_id: null })
+            .eq('instance_id', instanceId);
+
+        // Agora deleta o chip sem violar a foreign key
         const { error } = await supabase
             .from('instances')
             .delete()
             .eq('id', instanceId);
+
         if (error) console.error('[DB] Erro ao remover instância:', error.message);
         return { error };
     }
