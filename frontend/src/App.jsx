@@ -520,10 +520,38 @@ const [botLogs, setBotLogs] = useState([]);
     <div className="flex flex-1 min-h-0 bg-slate-950/40">                    
         {/* COLUNA 1 — Chips + Conversas */}
         <div className="w-[360px] shrink-0 border-r border-white/5 bg-slate-900/40 flex flex-col overflow-hidden">
-            {/* ChipStatus: altura fixa, scroll interno */}
-            <div className="shrink-0 overflow-y-auto p-3 border-b border-white/5" style={{ maxHeight: '216px' }}>
-                <ChipStatus instances={instances} socket={socket} />
-            </div>
+            {/* Seletor de chip ativo + adicionar */}
+<div className="shrink-0 p-3 border-b border-white/5 space-y-2">
+    <p className="text-blue-300 text-[9px] font-black uppercase tracking-[0.2em]">Chip para Varredura</p>
+    <select
+        value={selectedInstanceId || ''}
+        onChange={(e) => setSelectedInstanceId(e.target.value)}
+        className="w-full h-10 bg-black/40 border border-white/10 rounded-xl text-[11px] text-white font-bold px-3 outline-none focus:border-blue-500 transition-all"
+    >
+        <option value="">Selecione um chip...</option>
+        {instances.map(inst => (
+            <option key={inst.id} value={inst.id}>
+                {inst.whatsapp_status === 'CONNECTED' ? '🟢' : '🔴'} {inst.name}
+            </option>
+        ))}
+    </select>
+    <Button
+        onClick={() => {
+            const nome = prompt("Nome da nova unidade (Ex: Chip Claro 02):");
+            if (nome) socket.emit('create_instance', { name: nome });
+        }}
+        className="w-full h-7 text-[8px] uppercase font-black bg-blue-600/20 text-blue-400 border border-blue-500/30 hover:bg-blue-600/40"
+    >
+        + Adicionar Unidade
+    </Button>
+</div>
+
+                {/* ChipStatus: altura fixa, scroll interno */}
+                <div className="shrink-0 overflow-y-auto p-3 border-b border-white/5" style={{ maxHeight: '216px' }}>
+                 <ChipStatus instances={instances} socket={socket} />
+                </div>
+
+
             {/* ConversaList: preenche o resto com scroll */}
             <div className="flex-1 overflow-y-auto min-h-0">
                 <ConversaList
