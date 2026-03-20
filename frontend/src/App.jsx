@@ -6,7 +6,10 @@ import { Input } from "@/components/ui/input"
 import { Label } from "@/components/ui/label"
 import { Badge } from "@/components/ui/badge"
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogDescription, DialogFooter, DialogTrigger } from "@/components/ui/dialog"
-import Dashboard from './Dashboard'
+import NicheSelect from './components/NicheSelect'
+import VisualAnalytics from "@/components/VisualAnalytics"
+import ChipStatus from "./components/Chipstatus"
+import ConversaList from './components/ConversaList'
 // --- ÍCONES (FULL SET 2026) ---
 import { 
     Rocket, MapPin, LayoutDashboard, MessageSquare, Phone, Play, LocateFixed, Send, 
@@ -18,7 +21,7 @@ import {
 // --- MAPAS E SOCKET ---
 import { io } from 'socket.io-client'
 import { QRCodeSVG } from 'qrcode.react'
-import { MapContainer, TileLayer, Circle, useMap, useMapEvents } from 'react-leaflet'
+import { MapContainer, TileLayer, Circle, Marker, useMap, useMapEvents } from 'react-leaflet'
 import 'leaflet/dist/leaflet.css'
 import L from 'leaflet';
 
@@ -94,7 +97,7 @@ const [isBotRunning, setIsBotRunning] = useState(false);
 const [botProgress, setBotProgress] = useState(0);
 const [botLogs, setBotLogs] = useState([]);
 
-    // --- ESTADOS DE BUSCA E MAPA ---
+// --- ESTADOS DE BUSCA E MAPA ---
     const [filterText, setFilterText] = useState("");
     const [selectedNiche, setSelectedNiche] = useState(null);
     const [locationName, setLocationName] = useState("");
@@ -258,9 +261,9 @@ const [botLogs, setBotLogs] = useState([]);
     };
     
     return (
-<div className="min-h-screen w-full flex flex-col relative bg-[#020617] overflow-x-hidden">            
-{/* HEADER RETRÁTIL - VERSÃO COMPACTA 2026 */}
-            <header className="glass-panel border-b-0 px-8 py-3 shrink-0 z-50 relative overflow-hidden transition-all duration-700">
+        <div className="min-h-screen w-full flex flex-col relative bg-[#020617] overflow-x-hidden">
+        {/* HEADER RETRÁTIL - VERSÃO COMPACTA 2026 */}
+                <header className="glass-panel border-b-0 px-8 py-3 shrink-0 z-50 relative overflow-hidden">
                 <div className="absolute top-0 left-0 w-full h-[1px] bg-gradient-to-r from-transparent via-blue-500/50 to-transparent"></div>
                 <div className="flex justify-between items-center relative z-10">
                     <div className="flex items-center gap-4">
@@ -304,8 +307,8 @@ const [botLogs, setBotLogs] = useState([]);
                 </div>
             )}
 
-           <main className="flex-1 flex flex-col overflow-hidden relative z-30">
-    <Tabs value={activeTab} onValueChange={setActiveTab} className="flex-1 flex flex-col overflow-hidden">                    
+<main className="flex-1 flex flex-col overflow-hidden relative z-30 min-h-0">
+                    <Tabs value={activeTab} onValueChange={setActiveTab} className="flex-1 flex flex-col overflow-hidden min-h-0">
                     {/* TABS STICKY BAR */}
                     <div className="glass-panel border-b-0 px-8 py-4 sticky top-0 z-[60] backdrop-blur-3xl bg-[#020617]/90 shadow-2xl">
                         <TabsList className="bg-slate-900/40 border border-white/5 p-1 h-auto rounded-[2rem] gap-2 shadow-inner">
@@ -385,9 +388,7 @@ const [botLogs, setBotLogs] = useState([]);
                         <div className="w-[420px] glass-panel p-10 space-y-10 overflow-y-auto h-full shadow-2xl z-20 border-r border-white/5">
                             <div className="space-y-4">
                                 <Label className="text-blue-400 font-black text-xs uppercase tracking-[0.4em] flex items-center gap-3"><Zap className="h-5 w-5 text-blue-500 animate-pulse"/> 1. Segmento Estratégico</Label>
-                            <div className="text-white p-4 font-bold border rounded-xl border-white/20 bg-slate-900 text-center">
-    NicheSelect em Manutenção...
-</div>    
+                                <NicheSelect onNicheSelect={setSelectedNiche} />
                             
                             </div>
                             <div className="space-y-4 relative z-50">
@@ -411,67 +412,144 @@ const [botLogs, setBotLogs] = useState([]);
                             <Button onClick={startScraping} className="w-full h-20 bg-blue-600 hover:bg-blue-500 font-black text-2xl rounded-3xl shadow-neon-blue mt-10 transition-transform active:scale-95 uppercase tracking-tighter italic">Ativar Radar Neural <ArrowRight className="ml-3 h-8 w-8"/></Button>
                         </div>
 
-                               <div className="flex-1 relative p-4">
-                            <div className="w-full h-full bg-slate-900 flex items-center justify-center rounded-[2rem] border-2 border-dashed border-blue-500/50 shadow-neon-blue">
-                                <h2 className="text-3xl font-black text-blue-400 uppercase tracking-widest animate-pulse">
-                                    Mapa Desativado (Teste de Motor)
-                                </h2>
-                            </div>
-                        </div>
+                              <div className="flex-1 relative">
+
+                                {/* Botão minha localização */}
+<button
+    onClick={handleMyLocation}
+    className="absolute top-6 left-6 z-[999] glass-card border border-white/10 rounded-2xl px-4 py-2 flex items-center gap-2 hover:bg-white/10 transition-all active:scale-95"
+>
+    <LocateFixed className="h-4 w-4 text-blue-400" />
+    <span className="text-[10px] font-black text-white uppercase tracking-widest">Minha Localização</span>
+</button>
+    {/* Badge contador */}
+    <div className="absolute top-6 right-6 z-[999] bg-blue-600/90 backdrop-blur-md border border-blue-500/40 rounded-2xl px-4 py-2 shadow-lg">
+        <span className="text-[10px] font-black text-white uppercase tracking-widest">
+            📍 {leads.filter(l => l.lat && l.lng).length} leads mapeados
+        </span>
+    </div>
+
+    <MapContainer
+        center={mapCenter}
+        zoom={13}
+        style={{ width: '100%', height: '100%' }}
+        zoomControl={false}
+    >
+        <TileLayer
+            url="https://{s}.basemaps.cartocdn.com/dark_all/{z}/{x}/{y}{r}.png"
+            attribution='&copy; <a href="https://carto.com/">CARTO</a>'
+        />
+        <MapController center={mapCenter} />
+        <MapClickHandler
+            setCenter={setMapCenter}
+            setLocationName={setLocationName}
+            setSearchMode={() => {}}
+        />
+
+        {/* Círculo de raio de busca */}
+        <Circle
+            center={mapCenter}
+            radius={searchRadius * 1000}
+            pathOptions={{
+                color: '#3B82F6',
+                fillColor: '#3B82F6',
+                fillOpacity: 0.06,
+                weight: 1.5,
+                dashArray: '6 4',
+            }}
+        />
+
+        {/* Pins dos leads com coordenadas */}
+        {leads
+            .filter(l => l.lat && l.lng)
+            .map(lead => {
+                const color = lead.status === 'closed'        ? '#10B981'
+                            : lead.status === 'contact'       ? '#3B82F6'
+                            : lead.status === 'waiting_analysis' ? '#F59E0B'
+                            : lead.status === 'error'         ? '#F43F5E'
+                            : '#64748B'
+
+                const pinIcon = L.divIcon({
+                    className: '',
+                    html: `<div style="
+                        width:10px; height:10px; border-radius:50%;
+                        background:${color};
+                        border:2px solid rgba(255,255,255,0.6);
+                        box-shadow:0 0 8px ${color};
+                    "></div>`,
+                    iconSize: [10, 10],
+                    iconAnchor: [5, 5],
+                })
+
+                return (
+                    <Marker
+                        key={lead.id}
+                        position={[lead.lat, lead.lng]}
+                        icon={pinIcon}
+                        eventHandlers={{
+                            click: () => setViewingLeadDetail(lead)
+                        }}
+                    />
+                )
+            })
+        }
+    </MapContainer>
+
+    {/* Legenda */}
+    <div className="absolute bottom-6 left-6 z-[999] glass-card rounded-2xl px-4 py-3 border-white/10 space-y-1.5">
+        {[
+            { color: '#10B981', label: 'Agendado' },
+            { color: '#3B82F6', label: 'Em atendimento' },
+            { color: '#F59E0B', label: 'Auditoria' },
+            { color: '#F43F5E', label: 'Erro' },
+            { color: '#64748B', label: 'Novo' },
+        ].map(({ color, label }) => (
+            <div key={label} style={{ display: 'flex', alignItems: 'center', gap: 7 }}>
+                <div style={{ width: 8, height: 8, borderRadius: '50%', background: color, boxShadow: `0 0 5px ${color}` }} />
+                <span style={{ fontSize: 9, fontWeight: 700, color: 'rgba(255,255,255,0.45)', textTransform: 'uppercase', letterSpacing: '0.1em' }}>{label}</span>
+            </div>
+        ))}
+    </div>
+</div>
                     </TabsContent>
 
 
-                    {/* ABA 3: WHATSAPP (MANTIDA) */}
-                 <TabsContent value="connections" className="h-[calc(100vh-160px)] flex flex-col overflow-hidden relative z-20 bg-slate-950/40 m-0">
-    <div className="flex-1 flex overflow-hidden">
-        
-        {/* COLUNA 1: LISTA DE CHATS - COM GESTÃO DE CHIPS */}
-<div className="w-[280px] border-r border-white/5 overflow-y-auto bg-slate-900/40 custom-scrollbar flex flex-col h-full">
-    <div className="p-4 border-b border-white/5 space-y-4">
-        <div>
-            <p className="text-blue-300 text-[9px] font-black uppercase tracking-[0.2em] mb-2">Unidade Ativa</p>
-            <select 
-                value={selectedInstanceId || ''} 
-                onChange={(e) => setSelectedInstanceId(e.target.value)}
-                className="w-full h-10 bg-black/40 border border-white/10 rounded-xl text-[11px] text-white font-bold px-3 outline-none focus:border-blue-500 transition-all"
-            >
-                <option value="">Selecione um Chip...</option>
-                {instances.map(inst => (
-                    <option key={inst.id} value={inst.id}>
-                        {inst.whatsapp_status === 'CONNECTED' ? '🟢' : '🔴'} {inst.name}
-                    </option>
-                ))}
-            </select>
-            <Button 
-                onClick={() => {
-                    const nome = prompt("Nome da nova unidade (Ex: Chip Claro 02):");
-                    if(nome) socket.emit('create_instance', { name: nome });
-                }}
-                className="w-full mt-2 h-7 text-[8px] uppercase font-black bg-blue-600/20 text-blue-400 border border-blue-500/30 hover:bg-blue-600/40"
-            >
-                + Adicionar Unidade
-            </Button>
+                                {/* ABA 3: WHATSAPP */}
+
+            <TabsContent value="connections" className="m-0 p-0 flex-1 flex flex-col min-h-0 border-none">
+    <div className="flex flex-1 min-h-0 bg-slate-950/40">                    
+        {/* COLUNA 1 — Chips + Conversas */}
+        <div className="w-[360px] shrink-0 border-r border-white/5 bg-slate-900/40 flex flex-col overflow-hidden">
+            {/* ChipStatus: altura fixa, scroll interno */}
+            <div className="shrink-0 overflow-y-auto p-3 border-b border-white/5" style={{ maxHeight: '216px' }}>
+                <ChipStatus instances={instances} socket={socket} />
+            </div>
+            {/* ConversaList: preenche o resto com scroll */}
+            <div className="flex-1 overflow-y-auto min-h-0">
+                <ConversaList
+                    onSelect={setActiveChat}
+                    activeId={activeChat?.id}
+                    socket={socket}
+                />
+            </div>
         </div>
-        <div className="relative">
-            <Search className="absolute left-3 top-2.5 h-3.5 w-3.5 text-slate-500" />
-            <Input className="h-9 bg-black/40 border-white/5 pl-9 text-[11px] rounded-lg" placeholder="Pesquisar conversa..." />
-        </div>
-    </div>
-    
-</div>
-        {/* COLUNA 2: JANELA DE CHAT - Foco em Conteúdo */}
-        <div className="flex-1 flex flex-col bg-black/20 relative">
+
+        {/* COLUNA 2 — Chat */}
+        <div className="flex-1 flex flex-col overflow-hidden bg-black/20">
             {activeChat ? (
                 <>
-                    <div className="p-3 border-b border-white/5 flex items-center justify-between backdrop-blur-md bg-slate-900/40">
+                    <div className="shrink-0 p-3 border-b border-white/5 flex items-center justify-between backdrop-blur-md bg-slate-900/40">
                         <div className="flex items-center gap-3">
-                            <div className="h-8 w-8 bg-blue-600/20 rounded-lg border border-blue-500/30 flex items-center justify-center font-black text-blue-400 text-xs">{activeChat.name[0]}</div>
+                            <div className="h-8 w-8 bg-blue-600/20 rounded-lg border border-blue-500/30 flex items-center justify-center font-black text-blue-400 text-xs">
+                                {activeChat.name?.[0]}
+                            </div>
                             <h2 className="text-base font-black text-white tracking-tighter uppercase">{activeChat.name}</h2>
                         </div>
                         <Badge className="bg-emerald-500/10 text-emerald-400 border-emerald-500/20 text-[8px] font-black">AUDITORIA ATIVA</Badge>
                     </div>
-                    {/* Padding reduzido de 10 para 4 */}
-                    <div className="flex-1 p-4 overflow-y-auto custom-scrollbar flex flex-col gap-3">
+
+                    {/* Mensagens */}
+                    <div className="flex-1 overflow-y-auto p-4 custom-scrollbar flex flex-col gap-3 min-h-0">
                         <div className="max-w-[85%] bg-slate-800/60 p-3 rounded-xl rounded-tl-none border border-white/5 self-start">
                             <p className="text-xs text-slate-300">Olá, vi que você é proprietário da {activeChat.name}. Como está a economia de energia por aí?</p>
                         </div>
@@ -479,10 +557,18 @@ const [botLogs, setBotLogs] = useState([]);
                             <p className="text-xs font-medium">Assumindo controle manual da negociação...</p>
                         </div>
                     </div>
-                    {/* Input mais fino */}
-                    <div className="p-3 bg-slate-900/40 border-t border-white/5 flex gap-3">
-                        <Input className="h-10 rounded-lg bg-black/40 border-white/10 text-xs" placeholder="Digite para intervir..." value={messageInput} onChange={e => setMessageInput(e.target.value)} />
-                        <Button className="h-10 w-10 rounded-lg bg-blue-600 shadow-neon-blue px-0"><Send className="h-4 w-4" /></Button>
+
+                    {/* Input — sempre fixo no rodapé */}
+                    <div className="shrink-0 p-3 bg-slate-900/40 border-t border-white/5 flex gap-3">
+                        <Input
+                            className="h-10 rounded-lg bg-black/40 border-white/10 text-xs"
+                            placeholder="Digite para intervir..."
+                            value={messageInput}
+                            onChange={e => setMessageInput(e.target.value)}
+                        />
+                        <Button className="h-10 w-10 rounded-lg bg-blue-600 shadow-neon-blue px-0">
+                            <Send className="h-4 w-4" />
+                        </Button>
                     </div>
                 </>
             ) : (
@@ -493,30 +579,30 @@ const [botLogs, setBotLogs] = useState([]);
             )}
         </div>
 
-        {/* COLUNA 3: INTELIGÊNCIA LATERAL - Grid Compacto */}
+        {/* COLUNA 3 — Perfil lateral */}
         {activeChat && (
-            <div className="w-[260px] border-l border-white/5 bg-slate-900/60 p-4 space-y-4 hidden xl:block overflow-y-auto custom-scrollbar">
+            <div className="w-[260px] shrink-0 border-l border-white/5 bg-slate-900/60 p-4 space-y-4 hidden xl:flex xl:flex-col overflow-y-auto custom-scrollbar">
                 <p className="text-blue-400 text-[8px] font-black uppercase tracking-[0.2em]">Perfil do Decisor</p>
                 <div className="space-y-3">
                     <div className="bg-yellow-500/10 p-3 rounded-xl border border-yellow-500/20 shadow-inner">
                         <span className="text-[8px] text-yellow-600 uppercase font-black block mb-0.5 tracking-widest">Proprietário</span>
-                        <span className="text-sm font-black text-yellow-500 uppercase tracking-tighter">MARCOS ZANIOLO</span>
+                        <span className="text-sm font-black text-yellow-500 uppercase tracking-tighter">{activeChat.dono || 'Não identificado'}</span>
                     </div>
-                    <div className="bg-emerald-500/10 p-3 rounded-xl border border-emerald-500/20">
-                        <p className="text-[8px] text-emerald-400 font-black uppercase mb-0.5">Qualificação IA</p>
-                        <p className="text-xl font-black text-emerald-400 italic leading-none">9.8</p>
+                    <div className="bg-blue-500/10 p-3 rounded-xl border border-blue-500/20">
+                        <p className="text-[8px] text-blue-400 font-black uppercase mb-0.5">Nicho</p>
+                        <p className="text-sm font-black text-blue-300 italic leading-none">{activeChat.niche || '—'}</p>
                     </div>
                     <div className="space-y-1">
-                        <span className="text-[8px] text-slate-500 uppercase font-black block tracking-widest">Potencial de Fechamento</span>
-                        <span className="text-lg font-black text-white italic leading-none">R$ 150k</span>
+                        <span className="text-[8px] text-slate-500 uppercase font-black block tracking-widest">Telefone</span>
+                        <span className="text-sm font-black text-white font-mono">{activeChat.phone || '—'}</span>
                     </div>
                 </div>
             </div>
         )}
     </div>
 </TabsContent>
-                           <TabsContent value="dashboard" className="flex-1 overflow-hidden m-0">
-    <div className="text-white text-2xl p-10 font-black">Área de Analytics em Construção...</div>
+                            <TabsContent value="dashboard" className="flex-1 overflow-auto m-0">
+    <VisualAnalytics />
 </TabsContent>
 
                 </Tabs>
@@ -678,8 +764,8 @@ function KanbanColumn({ title, count, color, children, icon, isActive }) {
         /* min-h-screen garante que a coluna encoste no final da página */
         <div className={`min-w-[310px] w-[310px] glass-panel rounded-3xl flex flex-col mb-10 overflow-hidden border relative transition-all duration-500 
             ${isActive ? 'border-blue-500/40 bg-blue-900/10 shadow-neon-blue' : 'border-white/5'} 
-            min-h-screen h-fit`}> 
-            
+
+            min-h-screen h-fit`}>
             <div className={`p-4 border-b border-white/10 flex justify-between items-center bg-gradient-to-r ${color} shrink-0 sticky top-0 z-20`}>
                  <div className="flex items-center gap-3 relative z-10">
                     <div className="bg-white/10 p-2 rounded-xl backdrop-blur-md border border-white/5 shadow-sm">{icon}</div>

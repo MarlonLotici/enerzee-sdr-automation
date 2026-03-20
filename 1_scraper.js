@@ -132,17 +132,22 @@ async function iniciarVarredura(params, onProgress) {
                             let endereco = "Não identificado";
                             const btnEnd = document.querySelector('button[data-item-id="address"]');
                             if (btnEnd) endereco = btnEnd.innerText;
+                            // Extrai lat/lng direto da URL — formato /@lat,lng,zoom
+const coordMatch = urlLead.match(/@(-?\d+\.\d+),(-?\d+\.\d+)/);
 
-                            return {
-                                name: nome,
-                                niche: termoRef,
-                                phone: matchTel[0],
-                                address: endereco,
-                                city: cidadeRef,
-                                bairro: zonaRef.split(',')[0],
-                                link: urlLead,
-                                valido: true
-                            };
+return {
+    name: nome,
+    niche: termoRef,
+    phone: matchTel[0],
+    address: endereco,
+    city: cidadeRef,
+    bairro: zonaRef.split(',')[0],
+    link: urlLead,
+    lat: coordMatch ? parseFloat(coordMatch[1]) : null,
+    lng: coordMatch ? parseFloat(coordMatch[2]) : null,
+    valido: true
+};
+
                         }, linksLeads[i], termo, city, zona);
 
                         // 🛡️ ANTI-REPETIÇÃO: Só salva se o nome for diferente do anterior

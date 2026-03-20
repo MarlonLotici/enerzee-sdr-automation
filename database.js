@@ -97,6 +97,8 @@ const db = {
             cep: lead.cep || null,
             porte: lead.porte || null,
             capital_social_numeric: lead.capital_social_numeric || 0,
+            lat: lead.lat || null,
+            lng: lead.lng || null,
             status: lead.status || 'new',
             updated_at: new Date()
         };

@@ -77,3 +77,7 @@ body {
     100% { box-shadow: 0 0 0 50px rgba(59, 130, 246, 0); opacity: 0; }
 }
 .radar-active { animation: radar-ping 2s infinite cubic-bezier(0, 0, 0.2, 1); }
+
+[data-state="inactive"][role="tabpanel"] {
+    display: none !important;
+}
