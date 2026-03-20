@@ -132,10 +132,11 @@ io.on('connection', (socket) => {
         shouldStop = true; 
     });
     
-    socket.on('remove_instance', async (instanceId) => {
+   socket.on('remove_instance', async (instanceId) => {
+    sdr.encerrarInstancia(instanceId);
     await db.removeInstance(instanceId);
     await atualizarListaInstancias();
-    console.log(`🗑️ Chip ${instanceId} removido.`);
+    console.log(`🗑️ Chip ${instanceId} removido e sessão encerrada.`);
 });
 });
 

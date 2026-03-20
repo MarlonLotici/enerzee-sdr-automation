@@ -46,17 +46,18 @@ const instanciasLigando = new Set();
 let ioSocket = null;
 
 
-
-// 🕒 SEGURANÇA: HORÁRIO COMERCIAL (05:30 - 22:45)
-// ============================================================================
-// 🕒 SEGURANÇA: HORÁRIO COMERCIAL CORRIGIDO (05:30 - 22:45)
+// 🕒 SEGURANÇA: HORÁRIO COMERCIAL — ATENDIMENTO (05:30 - 22:45)
 function dentroDoExpediente() {
     const agora = new Date();
-    const tempoAtual = agora.getHours() * 60 + agora.getMinutes();
-    
-    // 05:30 = (5 * 60) + 30 = 330
-    // 22:45 = (22 * 60) + 45 = 1365
-    return tempoAtual >= 330 && tempoAtual <= 1365;
+    const t = agora.getHours() * 60 + agora.getMinutes();
+    return t >= 330 && t <= 1365; // Responde leads o dia todo
+}
+
+// 🕒 SEGURANÇA: JANELA DE DISPARO — APENAS HORÁRIO COMERCIAL (08:00 - 18:00)
+function dentroDaJanelaDeDisparo() {
+    const agora = new Date();
+    const t = agora.getHours() * 60 + agora.getMinutes();
+    return t >= 480 && t <= 1080; // Só dispara em horário de trabalho
 }
 // ============================================================================
 // 🧠 NÚCLEO IA: INTENÇÃO E RESPOSTA (SEU "CLOSER V11" INTEGRAL)
@@ -955,11 +956,10 @@ async function motorAtaquePorChip(instanceId) {
 
         try {
             // 1. Trava de Horário (Segurança Anti-Ban)
-            if (!dentroDoExpediente()) {
-                await delay(60000 * 5); 
-                continue;
-            }
-
+            if (!dentroDaJanelaDeDisparo()) {
+    await delay(60000 * 5); 
+    continue;
+}
             // 🌟 SAAS DATA: Puxa a identidade e os limites deste chip no banco de dados
             const instanceData = await db.getInstanceRules(instanceId);
             if (!instanceData) {
@@ -1020,7 +1020,7 @@ async function motorAtaquePorChip(instanceId) {
             leadsEmProcessamento.add(lead.id);
 
             // 6. Jitter Sequencial (Espera Humana entre 2 e 4 minutos)
-            const jitter = Math.random() * 120000 + 120000;
+            const jitter = Math.random() * 180000 + 180000;
             console.log(`🎯 [${config.nome}] Mirando em: ${lead.name} (${enviosHoje + 1}/${config.limite}). Aguardando ${Math.round(jitter/1000)}s...`);
             await delay(jitter);
 
@@ -1100,8 +1100,7 @@ async function motorAtaquePorChip(instanceId) {
                 : `Opa, tudo bem? Falo com o responsável pela ${nomeEmpresa}?`;
 
             // 3. A NOVA ISCA (Gatilho da Indicação: "Dando" energia e perguntando de terceiros)
-            const novaSaudacao = `${saudacaoInicial} [QUEBRA] Aqui é o ${config.agente}. Tô passando rápido porque a gente tá liberando umas cotas gratuitas de energia por assinatura com desconto aí ${bairroLead}. Vc sabe de algum comércio amigo aí na região que esteja querendo dar uma barateada na conta de luz?`;
-
+            const novaSaudacao = `${saudacaoInicial} [QUEBRA] Aqui é o ${config.agente}. Peguei o contato da ${nomeEmpresa} num levantamento que a gente fez — identifiquei um dado aqui que queria confirmar contigo antes de fechar o relatório. É rapidinho, consegue me dar um retorno?`;
             // 12. Fatiador de Balões com Trava Anti-Engasgo e Limite de 2 Balões
             const mensagensSplit = novaSaudacao.split('[QUEBRA]')
                 .map(t => t.trim())
@@ -1434,7 +1433,16 @@ module.exports = {
         // Motor 2: Conversas Pendentes (Mantém como estava)
         loopRecuperacaoConversas(); 
     },
-    enviarMensagemSDR: async () => {}, 
+    enviarMensagemSDR: async () => {},
+    encerrarInstancia: (instanceId) => {
+        const instancia = sessions.get(instanceId);
+        if (instancia?.sock) {
+            try { instancia.sock.end(); } catch(e) {}
+        }
+        sessions.delete(instanceId);
+        instanciasLigando.delete(instanceId);
+        console.log(`🔌 [SDR] Sessão ${instanceId} encerrada da memória.`);
+    },
     criarNovaInstancia: async (n, t) => {
         const { data } = await supabase.from('instances').insert([{ name: n, owner_phone: t }]).select().single(); 
         if (data) startInstance(data.id, data.name); 
