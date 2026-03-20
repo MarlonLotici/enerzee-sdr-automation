@@ -97,8 +97,7 @@ async function iniciarVarredura(params, onProgress) {
                 const query = `${termo}${zona.includes('📍') ? "" : ` em ${zona}`}`;
                 console.log(`📡 [RADAR] Alvo: ${query}`);
                 
-                await page.goto(`https://www.google.com.br/maps/search/${encodeURIComponent(query)}?hl=pt-BR`, { waitUntil: 'networkidle2' });
-                
+                await page.goto(`https://www.google.com.br/maps/search/${encodeURIComponent(query)}?hl=pt-BR`, { waitUntil: 'networkidle2', timeout: 60000 });                
                 try {
                     await page.waitForSelector('div[role="feed"]', { timeout: 10000 });
                     await humanScroll(page);
@@ -115,7 +114,7 @@ async function iniciarVarredura(params, onProgress) {
                 for (let i = 0; i < linksLeads.length; i++) {
                     try {
                         // 🚀 EVOLUÇÃO: Navega direto para o link. Zero falhas de clique.
-                        await page.goto(linksLeads[i], { waitUntil: 'networkidle2', timeout: 30000 });
+                        await page.goto(linksLeads[i], { waitUntil: 'networkidle2', timeout: 60000 });
                         await delay(2000); 
 
                         const leadInfo = await page.evaluate((urlLead, termoRef, cidadeRef, zonaRef) => {
