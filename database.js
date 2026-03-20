@@ -171,6 +171,15 @@ const db = {
             .eq('whatsapp_id', zapId)
             .limit(1);
         return data && data.length > 0;
+    },
+
+    removeInstance: async (instanceId) => {
+        const { error } = await supabase
+            .from('instances')
+            .delete()
+            .eq('id', instanceId);
+        if (error) console.error('[DB] Erro ao remover instância:', error.message);
+        return { error };
     }
 };
 

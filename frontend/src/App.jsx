@@ -171,6 +171,7 @@ const [botLogs, setBotLogs] = useState([]);
         });
 
         socket.on('notification', (m) => setBotLogs(prev => [...prev, `[IA] ${m}`]));
+        socket.on('scraping_stopped', () => setIsBotRunning(false));
         
         return () => socket.disconnect();
     }, []);
@@ -535,15 +536,29 @@ const [botLogs, setBotLogs] = useState([]);
             </option>
         ))}
     </select>
+    <div className="flex gap-2">
     <Button
         onClick={() => {
             const nome = prompt("Nome da nova unidade (Ex: Chip Claro 02):");
             if (nome) socket.emit('create_instance', { name: nome });
         }}
-        className="w-full h-7 text-[8px] uppercase font-black bg-blue-600/20 text-blue-400 border border-blue-500/30 hover:bg-blue-600/40"
+        className="flex-1 h-7 text-[8px] uppercase font-black bg-blue-600/20 text-blue-400 border border-blue-500/30 hover:bg-blue-600/40"
     >
-        + Adicionar Unidade
+        + Adicionar
     </Button>
+    <Button
+        onClick={() => {
+            if (!selectedInstanceId) return alert("Selecione um chip primeiro.");
+            const inst = instances.find(i => i.id === selectedInstanceId);
+            if (!confirm(`Remover o chip "${inst?.name}"? Isso desconecta o WhatsApp vinculado.`)) return;
+            socket.emit('remove_instance', selectedInstanceId);
+            setSelectedInstanceId(null);
+        }}
+        className="h-7 px-3 text-[8px] uppercase font-black bg-red-600/20 text-red-400 border border-red-500/30 hover:bg-red-600/40"
+    >
+        Remover
+    </Button>
+</div>
 </div>
 
                 {/* ChipStatus: altura fixa, scroll interno */}

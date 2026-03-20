@@ -123,6 +123,7 @@ io.on('connection', (socket) => {
         } catch (err) {
             console.error("🔥 Crash no processo de varredura:", err.message);
             socket.emit('notification', '❌ O Radar parou devido a uma falha de conexão.');
+            socket.emit('scraping_stopped');
         }
     });
 
@@ -130,6 +131,12 @@ io.on('connection', (socket) => {
         console.log("🛑 Comando: Parar Radar.");
         shouldStop = true; 
     });
+    
+    socket.on('remove_instance', async (instanceId) => {
+    await db.removeInstance(instanceId);
+    await atualizarListaInstancias();
+    console.log(`🗑️ Chip ${instanceId} removido.`);
+});
 });
 
 app.get('{*path}', (req, res) => {
