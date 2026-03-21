@@ -56,9 +56,12 @@ function dentroDoExpediente() {
 // 🕒 SEGURANÇA: JANELA DE DISPARO — APENAS HORÁRIO COMERCIAL (08:00 - 18:00)
 function dentroDaJanelaDeDisparo() {
     const agora = new Date();
+    const diaSemana = agora.getDay(); // 0 = domingo, 6 = sábado
+    if (diaSemana === 0) return false; // Nunca dispara no domingo
     const t = agora.getHours() * 60 + agora.getMinutes();
-    return t >= 480 && t <= 1080; // Só dispara em horário de trabalho
+    return t >= 480 && t <= 1080; // 08:00 - 18:00
 }
+
 // ============================================================================
 // 🧠 NÚCLEO IA: INTENÇÃO E RESPOSTA (SEU "CLOSER V11" INTEGRAL)
 // ============================================================================
@@ -1095,13 +1098,19 @@ async function motorAtaquePorChip(instanceId) {
             const nomeEmpresa = lead.name ? lead.name.replace(/\s(LTDA|ME|EIRELI|S\.A|LIMITED)\b/gi, '').trim() : "sua empresa";
 
            // 2. GATILHO DE ABORDAGEM INDIRETA (Aumenta a taxa de resposta baixando a guarda)
-            const saudacaoInicial = primeiroNomeDono 
-                ? `Opa ${primeiroNomeDono}, tudo bem?` 
-                : `Opa, tudo bem? Falo com o responsável pela ${nomeEmpresa}?`;
+           
+           const saudacaoInicial = nomeContato
+    ? `Opa ${nomeContato}, tudo bem?`
+    : `Opa, tudo bem?`;
 
-            // 3. A NOVA ISCA (Gatilho da Indicação: "Dando" energia e perguntando de terceiros)
-            const novaSaudacao = `${saudacaoInicial} [QUEBRA] Aqui é o ${config.agente}. Peguei o contato da ${nomeEmpresa} num levantamento que a gente fez — identifiquei um dado aqui que queria confirmar contigo antes de fechar o relatório. É rapidinho, consegue me dar um retorno?`;
-            // 12. Fatiador de Balões com Trava Anti-Engasgo e Limite de 2 Balões
+// Usa bairro real do CNPJ se tiver
+const localRef = lead.bairro
+    ? `aí no ${lead.bairro}`
+    : `aí na região`;
+
+const novaSaudacao = `${saudacaoInicial} [QUEBRA] Aqui é o ${config.agente}. Peguei seu contato num levantamento que a gente fez ${localRef} — identifiquei um dado sobre o estabelecimento que queria confirmar contigo antes de fechar o relatório. Consegue me dar um retorno rapidinho?`;
+           
+           // 12. Fatiador de Balões com Trava Anti-Engasgo e Limite de 2 Balões
             const mensagensSplit = novaSaudacao.split('[QUEBRA]')
                 .map(t => t.trim())
                 .filter(t => t.length > 0)

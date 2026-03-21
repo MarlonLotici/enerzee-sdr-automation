@@ -32,7 +32,22 @@ async function buscarBairrosReais(cidade) {
 
     let bairrosSet = new Set();
     const res1 = await fetchOSM(`bairros em ${cidade}`);
-    res1.forEach(item => { const b = item.address?.suburb || item.address?.neighbourhood; if (b) bairrosSet.add(b); });
+res1.forEach(item => {
+    const b = item.address?.suburb
+        || item.address?.neighbourhood
+        || item.address?.city_district
+        || item.address?.quarter;
+    if (b && b.length > 3 && !['Centro', 'Jardim', 'Vila', 'Parque'].includes(b)) {
+        bairrosSet.add(b);
+    }
+});
+
+// Segunda busca mais específica
+const res2 = await fetchOSM(`neighbourhood ${cidade} Brazil`);
+res2.forEach(item => {
+    const b = item.address?.neighbourhood || item.address?.suburb;
+    if (b && b.length > 3) bairrosSet.add(b);
+});
 
     if (bairrosSet.size === 0) {
         console.log(`⚠️ [OSM] API limitada. Usando Morfologia Brasileira.`);
@@ -65,8 +80,8 @@ async function humanScroll(page) {
     });
 }
 
-async function iniciarVarredura(params, onProgress) {
-    const { city, niche, mode } = params;
+async function iniciarVarredura(params, onProgress, shouldStop = () => false) {
+const { city, niche, mode } = params;
     const sendStatus = (msg) => onProgress({ type: 'status', message: msg });
 
     let termos = [];
@@ -93,7 +108,10 @@ async function iniciarVarredura(params, onProgress) {
         let zonas = (mode !== 'map') ? await buscarBairrosReais(city) : [city];
         
         for (const zona of zonas) {
-            for (const termo of termos) {
+    if (shouldStop()) break;
+    for (const termo of termos) {
+        if (shouldStop()) break;
+
                 const query = `${termo}${zona.includes('📍') ? "" : ` em ${zona}`}`;
                 console.log(`📡 [RADAR] Alvo: ${query}`);
                 
@@ -112,7 +130,8 @@ async function iniciarVarredura(params, onProgress) {
                 let lastSavedName = "";
 
                 for (let i = 0; i < linksLeads.length; i++) {
-                    try {
+    if (shouldStop()) break;
+    try {
                         // 🚀 EVOLUÇÃO: Navega direto para o link. Zero falhas de clique.
                         await page.goto(linksLeads[i], { waitUntil: 'networkidle2', timeout: 60000 });
                         await delay(2000); 

@@ -76,16 +76,36 @@ io.on('connection', (socket) => {
             params.niche = ["Comércio"];
         }
 
-        const isMapMode = params.city && params.city.startsWith('📍');
-        const payloadCorrigido = { ...params, mode: isMapMode ? 'map' : 'city' };
+       const isMapMode = params.city && params.city.startsWith('📍');
+
+let cidadeResolvida = params.city;
+if (isMapMode && params.lat && params.lng) {
+    try {
+        const geoRes = await fetch(
+            `https://nominatim.openstreetmap.org/reverse?lat=${params.lat}&lon=${params.lng}&format=json`,
+            { headers: { 'User-Agent': 'EnerzeeBot/1.0' } }
+        );
+        const geoData = await geoRes.json();
+        cidadeResolvida = geoData.address?.city
+            || geoData.address?.town
+            || geoData.address?.municipality
+            || params.city;
+        console.log(`🗺️ [GEO] Coordenada resolvida: ${cidadeResolvida}`);
+    } catch(e) {
+        console.log(`⚠️ [GEO] Falha ao resolver cidade, usando coordenada`);
+    }
+}
+
+const payloadCorrigido = { ...params, city: cidadeResolvida, mode: isMapMode ? 'map' : 'city' };
 
         console.log(`🚀 [RADAR] Modo: ${payloadCorrigido.mode.toUpperCase()}`);
         console.log(`📍 Alvo: ${params.city} | 🎲 Distribuindo entre ${activeChips.length} chips conectados.`);
         socket.emit('notification', `📡 Radar ativado! Distribuindo leads para ${activeChips.length} chips...`);
 
         try {
+            const stopCheck = () => shouldStop;
             await iniciarVarredura(payloadCorrigido, async (evento) => {
-                if (shouldStop) return;
+            if (shouldStop) return;
 
                 if (evento.type === 'lead') {
                     let lead = evento.data;
@@ -119,9 +139,11 @@ io.on('connection', (socket) => {
                         }
                     }
                 }
-            });
-        } catch (err) {
-            console.error("🔥 Crash no processo de varredura:", err.message);
+           
+                }, () => shouldStop);
+    } catch (err) {
+        console.error("🔥 Crash no processo de varredura:", err.message);
+        
             socket.emit('notification', '❌ O Radar parou devido a uma falha de conexão.');
             socket.emit('scraping_stopped');
         }
