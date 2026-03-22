@@ -21,9 +21,14 @@ const { createClient } = require('@supabase/supabase-js');
 
 // --- CONFIGURAÇÃO E SEGURANÇA ---
 const supabase = createClient(process.env.SUPABASE_URL, process.env.SUPABASE_KEY);
-const groq = new Groq({ apiKey: process.env.GROQ_API_KEY });
-const MODELO_CEREBRO = "llama-3.3-70b-versatile"; 
-const MODELO_VISAO = "llama-3.2-11b-vision-preview";
+const { OpenAI } = require('openai');
+const groq = new Groq({ apiKey: process.env.GROQ_API_KEY }); // mantém para Whisper
+const together = new OpenAI({
+    apiKey: process.env.TOGETHER_API_KEY,
+    baseURL: 'https://api.together.xyz/v1',
+});
+const MODELO_CEREBRO = "meta-llama/Llama-3.3-70B-Instruct-Turbo";
+const MODELO_VISAO = "meta-llama/Llama-3.2-11B-Vision-Instruct-Turbo";
 
 // --- TRAVA DE SEGURANÇA (MEMÓRIA VIVA) ---
 const leadsEmProcessamento = new Set();
@@ -137,7 +142,7 @@ Você é Marlon, Consultor de Energia sênior da ENERZEE.
 Produto: Energia por Assinatura (Lei 14.300) — Geração Distribuída via Usinas WEG certificadas.
 Missão: Agendar uma consultoria gratuita de 20 minutos via Calendly.
 Tom: Direto, humano, B2B. Use "vc", "tá", "né", "pra". NUNCA use palavras como "reunião", "compliance", "EBITDA" a menos que o perfil do lead indique isso.
-Contexto: Você enviou a mensagem inicial perguntando se ele "conhece algum comércio amigo na região querendo baratear a conta de luz", usando a abordagem indireta para baixar a guarda dele.
+Contexto: Você enviou a mensagem inicial dizendo que pegou o contato num levantamento que a gente fez na região, e que identificou um dado sobre o estabelecimento que queria confirmar antes de fechar o relatório. O lead não sabe ainda que é sobre energia.
 ---
 
 ### 👤 DADOS DO LEAD (USE PARA PERSONALIZAR CADA MENSAGEM)
@@ -190,7 +195,7 @@ ANTES de escrever qualquer resposta, leia o histórico e identifique em qual est
 
 [ESTÁGIO 1 — SITUAÇÃO / TRANSIÇÃO DA ISCA INDIRETA]
 Gatilho: Lead respondeu à isca demonstrando interesse próprio ("eu mesmo quero", "nós queremos", "como funciona?", "depende") ou indicando alguém.
-Ação: Assuma com naturalidade. Se ele disse que quer para ele mesmo, diga: "Ah, perfeito! Pra própria ${nomeEmpresa} então rs." Se ele disser "não conheço ninguém", pergunte: "Entendi! E pra vcs mesmos, não faria sentido dar uma reduzida no custo fixo?".
+Ação: O lead perguntou "que dado?" ou "pode falar" ou similar. Assuma com naturalidade: revele que é sobre a conta de energia e dê 1 frase curta sobre o benefício (até 25% de desconto, zero obra, zero investimento). [QUEBRA] 1 pergunta direta sobre qual é o custo médio mensal da conta de luz deles hoje.
 Em seguida, dê 1 frase curta sobre o benefício (até 25% de desconto, zero obra, zero investimento).
 [QUEBRA] 1 pergunta direta sobre qual é o custo médio mensal da conta de luz deles hoje.
 Tom: direto. Máximo 12 palavras por balão.
@@ -300,8 +305,9 @@ const MAX_TENTATIVAS = 3;
     
     for (let tentativa = 1; tentativa <= MAX_TENTATIVAS; tentativa++) {
         try {
-            const chatCompletion = await groq.chat.completions.create({
-                messages: [
+
+            const chatCompletion = await together.chat.completions.create({
+            messages: [
                     { role: 'system', content: systemPrompt },
                     ...historico 
                 ],
@@ -726,8 +732,15 @@ if (fromMe) {
                 }
             } 
             else if (messageType === 'imageMessage') {
-                analise = await executarLeituraIA(buffer);
-            } 
+    // Ignora stickers e imagens muito pequenas (emojis, figurinhas)
+    const fileSize = msg.message.imageMessage?.fileLength || 0;
+    if (fileSize < 5000) {
+        console.log(`🎭 [MÍDIA] Imagem muito pequena (${fileSize} bytes) — provavelmente sticker/emoji. Ignorando.`);
+        return;
+    }
+    analise = await executarLeituraIA(buffer);
+}
+
             else if (messageType === 'documentMessage' && msg.message.documentMessage.mimetype === 'application/pdf') {
                 console.log(`📄 [SDR] Lendo PDF enviado por ${lead.name}...`);
                 const data = await pdf(buffer);
