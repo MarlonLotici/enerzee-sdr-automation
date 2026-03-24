@@ -34,7 +34,6 @@ L.Marker.prototype.options.icon = DefaultIcon;
 // Conexão Socket
 const SOCKET_URL = import.meta.env.DEV ? 'http://localhost:3001' : window.location.origin;
 const socket = io(SOCKET_URL, { autoConnect: false });
-
 // Som de notificação
 const playNotificationSound = () => {
     const audio = new Audio('https://assets.mixkit.co/active_storage/sfx/2869/2869-preview.mp3');
@@ -72,22 +71,47 @@ function MapClickHandler({ setCenter, setLocationName, setSearchMode }) {
 // ==================================================================================
 // COMPONENTE PRINCIPAL
 // ==================================================================================
-export default function App() {
-    // --- REFERÊNCIAS ---
-    const kanbanRef = useRef(null);
-    const logsEndRef = useRef(null);
+    export default function App() {
+    const [session, setSession] = useState(null);
+    const [authLoading, setAuthLoading] = useState(true);
+    // --- ESTADOS DO LOGIN ---
+    const [loginEmail, setLoginEmail] = useState('');
+    const [loginPassword, setLoginPassword] = useState('');
+    const [loginError, setLoginError] = useState(null);
+    const [isLoggingIn, setIsLoggingIn] = useState(false);
+
+    // Monitora o estado de login
+    useEffect(() => {
+        supabase.auth.getSession().then(({ data: { session } }) => {
+            setSession(session);
+            setAuthLoading(false);
+        });
+
+        const { data: { subscription } } = supabase.auth.onAuthStateChange((_event, session) => {
+            setSession(session);
+        });
+
+        return () => subscription.unsubscribe();
+    }, []);
+
+    // --- REFERÊNCIAS ---
+   const kanbanRef = useRef(null);
+    const logsEndRef = useRef(null);
+    const chatEndRef = useRef(null);
+    const lastScrollY = useRef(0); // Controle de direção do scroll
 
     // --- ESTADOS DE NAVEGAÇÃO E DADOS ---
     const [activeTab, setActiveTab] = useState("search");
     const [leads, setLeads] = useState([]);
     const [chats, setChats] = useState([]);
     const [activeChat, setActiveChat] = useState(null);
+    const [chatMessages, setChatMessages] = useState([]);
     const [viewingLeadDetail, setViewingLeadDetail] = useState(null);
     const [editingLead, setEditingLead] = useState(null);
     const [selectedLeadIds, setSelectedLeadIds] = useState(new Set());
     const [messageInput, setMessageInput] = useState("");
     const [sessionLeadsCount, setSessionLeadsCount] = useState(0);
-
+    const [headerVisible, setHeaderVisible] = useState(true);
     // --- ESTADOS DO MOTOR IA (MULTI-INSTÂNCIA 2026) ---
 const [isConnected, setIsConnected] = useState(false);
 const [qrCodeData, setQrCodeData] = useState(null); // Agora guarda { qr, instanceId, name }
@@ -120,6 +144,33 @@ const [botLogs, setBotLogs] = useState([]);
 
     const getLeadsByStatus = (status) => filteredLeads.filter(l => l.status === status);
 
+
+   // --- LÓGICA: RECOLHIMENTO DE ALTA PERFORMANCE (TOP COLLISION) ---
+    useEffect(() => {
+        const handleScroll = (e) => {
+            const target = e.target;
+            
+            // Ignora elementos inválidos ou que não tenham rolagem vertical (ex: rolagem lateral)
+            if (!target || target.scrollTop === undefined) return;
+            if (target.scrollHeight <= target.clientHeight) return;
+
+            const currentScrollY = target.scrollTop;
+
+            // Se desceu o Kanban (mais de 20px), retrai todo o painel superior
+            if (currentScrollY > 20) {
+                setHeaderVisible(false);
+            } 
+            // SÓ DEVOLVE o painel quando a barra bater no limite 0 (primeiro lead da lista)
+            else if (currentScrollY === 0) {
+                setHeaderVisible(true);
+            }
+        };
+
+        // O parâmetro 'true' garante que o sistema capture a rolagem de dentro das colunas do Kanban
+        window.addEventListener('scroll', handleScroll, true);
+        return () => window.removeEventListener('scroll', handleScroll, true);
+    }, []);
+
     // --- LÓGICA: SCROLL LATERAL POR MOUSE (EDGE SCROLLING) ---
     useEffect(() => {
         const handleMouseMove = (e) => {
@@ -137,12 +188,19 @@ const [botLogs, setBotLogs] = useState([]);
     }, [activeTab]);
 
     // --- SOCKETS E INICIALIZAÇÃO ---
-    useEffect(() => {
-        fetchLeadsFromDB();
-        socket.connect();
+    useEffect(() => {
+        fetchLeadsFromDB();
 
-        // PEDIR LISTA AO CONECTAR
-        socket.on('connect', () => {
+        // Pega a chave digital da sessão atual e injeta no motor antes de ligar
+        supabase.auth.getSession().then(({ data }) => {
+            if (data.session) {
+                socket.auth = { token: data.session.access_token };
+                socket.connect();
+            }
+        });
+
+        // PEDIR LISTA AO CONECTAR
+    socket.on('connect', () => {
             socket.emit('get_instances'); 
         });
 
@@ -182,9 +240,35 @@ const [botLogs, setBotLogs] = useState([]);
     }
 
     const fetchLeadsFromDB = async () => {
-        const { data } = await supabase.from('leads').select('*').order('created_at', { ascending: false });
+        const { data } = await supabase.from('leads')
+    .select('id, name, phone, status, niche, dono, cnpj, bairro, cep, porte, capital_social_numeric, whatsapp_id, instance_id, lat, lng, created_at, last_contact_at, is_paused, manual_pause')
+    .order('created_at', { ascending: false });
         if (data) setLeads(data);
     };
+
+    // --- LÓGICA DE BUSCA DAS MENSAGENS REAIS ---
+    useEffect(() => {
+        if (!activeChat) {
+            setChatMessages([]);
+            return;
+        }
+
+        const fetchMessages = async () => {
+            const { data, error } = await supabase
+                .from('messages')
+                .select('*')
+                .eq('whatsapp_id', activeChat.whatsapp_id)
+                .order('created_at', { ascending: true }); // Mais antigas em cima, mais novas embaixo
+
+            if (data && !error) {
+                setChatMessages(data);
+                // Força a rolagem para a mensagem mais recente
+                setTimeout(() => chatEndRef.current?.scrollIntoView({ behavior: 'smooth' }), 100);
+            }
+        };
+
+        fetchMessages();
+    }, [activeChat]);
 
     const handleMyLocation = () => {
         if (navigator.geolocation) {
@@ -257,15 +341,114 @@ const [botLogs, setBotLogs] = useState([]);
     };
 
     const handleBulkDelete = () => {
-        if(!confirm(`Excluir ${selectedLeadIds.size} leads permanentemente?`)) return;
-        selectedLeadIds.forEach(id => handleDeleteLead(id));
-    };
+        if(!confirm(`Excluir ${selectedLeadIds.size} leads permanentemente?`)) return;
+        selectedLeadIds.forEach(id => handleDeleteLead(id));
+    };
+
+    // Algoritmo de recolhimento automático do Header
+    const handleCrmScroll = (e) => {
+        const currentScrollY = e.target.scrollTop;
+        // Se rolou para baixo mais de 50px, esconde o header
+        if (currentScrollY > 50 && currentScrollY > lastScrollY.current) {
+            if (headerVisible) setHeaderVisible(false);
+        } 
+        // Se rolou para cima, mostra o header novamente
+        else if (currentScrollY < lastScrollY.current - 10 || currentScrollY === 0) {
+            if (!headerVisible) setHeaderVisible(true);
+        }
+        lastScrollY.current = currentScrollY;
+    };
     
+        // --- NÚCLEO DE SEGURANÇA: CONTROLE DE ACESSO ---
+    if (authLoading) {
+        return (
+            <div className="h-screen bg-[#020617] flex flex-col items-center justify-center">
+                <Rocket className="h-12 w-12 text-blue-500 animate-bounce mb-4" />
+                <div className="text-blue-500 font-black uppercase tracking-[0.5em] animate-pulse">Sincronizando Neural...</div>
+            </div>
+        )
+    }
+
+    if (!session) {
+        const handleLogin = async (e) => {
+            e.preventDefault();
+            setIsLoggingIn(true);
+            setLoginError(null);
+            const { error } = await supabase.auth.signInWithPassword({ email: loginEmail, password: loginPassword });
+            if (error) setLoginError(error.message);
+            setIsLoggingIn(false);
+        };
+
+        return (
+            <div className="h-screen bg-[#020617] flex items-center justify-center p-6">
+                <div className="glass-panel p-10 rounded-[2.5rem] border-blue-500/30 flex flex-col max-w-md w-full shadow-neon-blue relative overflow-hidden">
+                    <div className="absolute top-0 left-0 w-full h-1 bg-gradient-to-r from-blue-600 via-cyan-400 to-blue-600"></div>
+                    
+                    <div className="flex flex-col items-center mb-8">
+                        <div className="bg-blue-600/20 p-4 rounded-3xl mb-6 border border-blue-500/30">
+                            <ShieldCheck className="h-10 w-10 text-blue-400" />
+                        </div>
+                        <h2 className="text-3xl font-black text-white italic uppercase tracking-tighter leading-none text-center">
+                            Acesso <span className="text-blue-500">Restrito</span>
+                        </h2>
+                        <p className="text-slate-500 text-[10px] font-bold uppercase tracking-widest mt-2 text-center">Motor Enerzee SDR</p>
+                    </div>
+
+                    <form onSubmit={handleLogin} className="flex flex-col gap-4">
+                        <div className="space-y-2">
+                            <Label className="text-[10px] font-black text-blue-300 uppercase tracking-widest">Credencial (E-mail)</Label>
+                            <Input 
+                                type="email" 
+                                required
+                                value={loginEmail}
+                                onChange={(e) => setLoginEmail(e.target.value)}
+                                className="glass-card h-14 rounded-xl bg-black/40 border-white/10 text-white font-bold px-4 focus:border-blue-500 transition-colors" 
+                                placeholder="marlon@enerzee.com"
+                            />
+                        </div>
+                        
+                        <div className="space-y-2">
+                            <Label className="text-[10px] font-black text-blue-300 uppercase tracking-widest">Código de Acesso (Senha)</Label>
+                            <Input 
+                                type="password" 
+                                required
+                                value={loginPassword}
+                                onChange={(e) => setLoginPassword(e.target.value)}
+                                className="glass-card h-14 rounded-xl bg-black/40 border-white/10 text-white font-bold px-4 focus:border-blue-500 transition-colors" 
+                                placeholder="••••••••"
+                            />
+                        </div>
+
+                        {loginError && (
+                            <div className="bg-red-500/10 border border-red-500/30 rounded-lg p-3 mt-2">
+                                <p className="text-[10px] font-black text-red-400 uppercase tracking-wider text-center">
+                                    {loginError === 'Invalid login credentials' ? 'Credenciais Inválidas' : loginError}
+                                </p>
+                            </div>
+                        )}
+
+                        <Button 
+                            type="submit"
+                            disabled={isLoggingIn}
+                            className="w-full h-14 mt-4 bg-blue-600 hover:bg-blue-500 text-white font-black rounded-xl shadow-lg uppercase italic text-sm transition-transform active:scale-95"
+                        >
+                            {isLoggingIn ? <Loader2 className="h-5 w-5 animate-spin mx-auto" /> : "INICIAR SESSÃO NEURAL"}
+                        </Button>
+                    </form>
+                </div>
+            </div>
+        )
+    }
+
+    // Se estiver logado, libera o cockpit do sistema:
     return (
-        <div className="min-h-screen w-full flex flex-col relative bg-[#020617] overflow-x-hidden">
+        <div className="h-screen w-full flex flex-col relative bg-[#020617] overflow-x-hidden">
+
         {/* HEADER RETRÁTIL - VERSÃO COMPACTA 2026 */}
-                <header className="glass-panel border-b-0 px-8 py-3 shrink-0 z-50 relative overflow-hidden">
-                <div className="absolute top-0 left-0 w-full h-[1px] bg-gradient-to-r from-transparent via-blue-500/50 to-transparent"></div>
+<header className={`glass-panel border-b-0 shrink-0 z-50 relative overflow-hidden transition-all duration-500 ease-in-out`}
+    style={{ maxHeight: headerVisible ? '150px' : '0px', opacity: headerVisible ? 1 : 0, padding: headerVisible ? '1rem 2rem' : '0 2rem' }}>
+
+               <div className="absolute top-0 left-0 w-full h-[1px] bg-gradient-to-r from-transparent via-blue-500/50 to-transparent"></div>
                 <div className="flex justify-between items-center relative z-10">
                     <div className="flex items-center gap-4">
                         <div className="bg-blue-600/20 p-2.5 rounded-2xl border border-blue-500/30 shadow-neon-blue">
@@ -290,6 +473,8 @@ const [botLogs, setBotLogs] = useState([]);
                 </div>
             </header>
 
+
+
             {/* DASHBOARD STATUS */}
             {isBotRunning && (
                 <div className="glass-panel border-y-0 p-6 relative z-40 bg-slate-900/40">
@@ -310,8 +495,8 @@ const [botLogs, setBotLogs] = useState([]);
 
 <main className="flex-1 flex flex-col overflow-hidden relative z-30 min-h-0">
                     <Tabs value={activeTab} onValueChange={setActiveTab} className="flex-1 flex flex-col overflow-hidden min-h-0">
-                    {/* TABS STICKY BAR */}
-                    <div className="glass-panel border-b-0 px-8 py-4 sticky top-0 z-[60] backdrop-blur-3xl bg-[#020617]/90 shadow-2xl">
+                        {/* TABS STICKY BAR */}
+                    <div className="glass-panel border-b-0 sticky top-0 z-[60] backdrop-blur-3xl bg-[#020617]/90 shadow-2xl transition-all duration-500 ease-in-out" style={{ maxHeight: headerVisible ? '150px' : '0px', opacity: headerVisible ? 1 : 0, padding: headerVisible ? '1rem 2rem' : '0 2rem', overflow: 'hidden' }}>
                         <TabsList className="bg-slate-900/40 border border-white/5 p-1 h-auto rounded-[2rem] gap-2 shadow-inner">
                             <TabsTrigger value="search" className="data-[state=active]:bg-blue-600 data-[state=active]:text-white text-slate-400 px-10 py-4 rounded-2xl font-black uppercase text-[11px] transition-all"><MapPin className="mr-2 h-4 w-4" /> Radar</TabsTrigger>
                             <TabsTrigger value="crm" className="data-[state=active]:bg-blue-600 data-[state=active]:text-white text-slate-400 px-10 py-4 rounded-2xl font-black uppercase text-[11px] transition-all"><LayoutDashboard className="mr-2 h-4 w-4" /> CRM War Room</TabsTrigger>
@@ -327,10 +512,11 @@ const [botLogs, setBotLogs] = useState([]);
                             </div>
                         )}
                     </div>
+                                {/* --- ABA 2: CRM (DESTAQUE PARA DADOS) --- */}
+                            <TabsContent value="crm" className="w-full flex flex-col flex-1 m-0 overflow-y-auto custom-scrollbar">
+                        <div className="glass-panel border-b flex justify-between items-center shrink-0 bg-slate-950/40 z-40 transition-all duration-500 ease-in-out" style={{ maxHeight: headerVisible ? '200px' : '0px', opacity: headerVisible ? 1 : 0, padding: headerVisible ? '2rem 3rem' : '0 3rem', overflow: 'hidden', borderBottomWidth: headerVisible ? '1px' : '0px', borderColor: 'rgba(255,255,255,0.05)' }}>
 
-                    {/* --- ABA 2: CRM (DESTAQUE PARA DADOS) --- */}
-                    <TabsContent value="crm" className="w-full flex flex-col flex-1 m-0">
-                        <div className="p-8 glass-panel border-b border-white/5 flex justify-between items-center px-12 shrink-0 bg-slate-950/40 z-40">
+                   
                             <div className="relative glass-card rounded-[2rem] group w-[500px] bg-black/20 border-white/10 shadow-inner">
                                 <Search className="absolute left-6 top-5 h-7 w-7 text-slate-600 group-focus-within:text-blue-500 transition-colors" />
                                 <Input placeholder="Buscar por Nome, Sócio, CNPJ ou Celular..." className="bg-transparent border-none pl-16 text-white h-16 focus:ring-0 font-bold text-xl" value={filterText} onChange={e => setFilterText(e.target.value)} />
@@ -341,8 +527,8 @@ const [botLogs, setBotLogs] = useState([]);
                             </div>
                         </div>
 
-                        <div ref={kanbanRef} className="flex-1 flex gap-6 overflow-x-auto p-8 custom-scrollbar bg-slate-950/20 min-h-[500px] scroll-smooth items-start">
-                           {/* NOVA COLUNA: ERROS DE REGISTRO */}
+                        <div ref={kanbanRef} className="flex-1 flex gap-6 overflow-x-auto p-8 custom-scrollbar bg-slate-950/20 scroll-smooth items-stretch">
+{/* NOVA COLUNA: ERROS DE REGISTRO */}
 <KanbanColumn 
     title="Erros de Registro" 
     count={getLeadsByStatus('error').length} 
@@ -514,13 +700,14 @@ const [botLogs, setBotLogs] = useState([]);
 </div>
                     </TabsContent>
 
+                            {/* ABA 3: WHATSAPP */}
 
-                                {/* ABA 3: WHATSAPP */}
+                    <TabsContent value="connections" className="w-full flex flex-col flex-1 m-0 p-0 border-none overflow-hidden">
+                              
+                              <div className="flex h-full overflow-hidden bg-slate-950/40">
 
-            <TabsContent value="connections" className="m-0 p-0 flex-1 flex flex-col min-h-0 border-none">
-    <div className="flex flex-1 min-h-0 bg-slate-950/40">                    
         {/* COLUNA 1 — Chips + Conversas */}
-        <div className="w-[360px] shrink-0 border-r border-white/5 bg-slate-900/40 flex flex-col overflow-hidden">
+            <div className="w-[360px] shrink-0 border-r border-white/5 bg-slate-900/40 flex flex-col h-full overflow-hidden">
             {/* Seletor de chip ativo + adicionar */}
 <div className="shrink-0 p-3 border-b border-white/5 space-y-2">
     <p className="text-blue-300 text-[9px] font-black uppercase tracking-[0.2em]">Chip para Varredura</p>
@@ -561,16 +748,17 @@ const [botLogs, setBotLogs] = useState([]);
 </div>
 </div>
 
-                {/* ChipStatus: altura fixa, scroll interno */}
-                <div className="shrink-0 overflow-y-auto p-3 border-b border-white/5" style={{ maxHeight: '216px' }}>
+                {/* ChipStatus: altura ajustada para ceder espaço ao War Room */}
+                <div className="shrink-0 overflow-y-auto p-3 border-b border-white/5 custom-scrollbar" style={{ maxHeight: '155px' }}>
                  <ChipStatus instances={instances} socket={socket} />
                 </div>
 
-
-            {/* ConversaList: preenche o resto com scroll */}
-            <div className="flex-1 overflow-y-auto min-h-0">
+        
+                {/* ConversaList: preenche o resto com scroll */}
+               <div style={{ flex: 1, overflowY: 'auto', minHeight: 0 }}>
                 <ConversaList
-                    onSelect={setActiveChat}
+
+                                   onSelect={setActiveChat}
                     activeId={activeChat?.id}
                     socket={socket}
                 />
@@ -578,7 +766,7 @@ const [botLogs, setBotLogs] = useState([]);
         </div>
 
         {/* COLUNA 2 — Chat */}
-        <div className="flex-1 flex flex-col overflow-hidden bg-black/20">
+            <div className="flex-1 flex flex-col overflow-hidden min-h-0 bg-black/20">
             {activeChat ? (
                 <>
                     <div className="shrink-0 p-3 border-b border-white/5 flex items-center justify-between backdrop-blur-md bg-slate-900/40">
@@ -591,15 +779,38 @@ const [botLogs, setBotLogs] = useState([]);
                         <Badge className="bg-emerald-500/10 text-emerald-400 border-emerald-500/20 text-[8px] font-black">AUDITORIA ATIVA</Badge>
                     </div>
 
+
                     {/* Mensagens */}
-                    <div className="flex-1 overflow-y-auto p-4 custom-scrollbar flex flex-col gap-3 min-h-0">
-                        <div className="max-w-[85%] bg-slate-800/60 p-3 rounded-xl rounded-tl-none border border-white/5 self-start">
-                            <p className="text-xs text-slate-300">Olá, vi que você é proprietário da {activeChat.name}. Como está a economia de energia por aí?</p>
-                        </div>
-                        <div className="max-w-[85%] bg-blue-600/80 p-3 rounded-xl rounded-tr-none border border-blue-500/50 self-end text-white shadow-lg">
-                            <p className="text-xs font-medium">Assumindo controle manual da negociação...</p>
-                        </div>
-                    </div>
+                    <div className="flex-1 overflow-y-auto p-4 custom-scrollbar flex flex-col gap-3 h-0">
+                        {chatMessages.length === 0 ? (
+                            <div className="flex-1 flex items-center justify-center">
+                                <p className="text-xs text-slate-500 uppercase tracking-widest font-black">Nenhuma mensagem registrada</p>
+                            </div>
+                        ) : (
+                            chatMessages.map((msg) => {
+                                // Em seu sistema, 'user' é o cliente (lado esquerdo) e 'assistant'/'system' é a IA/você (lado direito)
+                                const isLead = msg.role === 'user'; 
+                                return (
+                                    <div 
+                                        key={msg.id} 
+                                        className={`max-w-[85%] p-3 rounded-xl border ${
+                                            isLead 
+                                            ? "bg-slate-800/60 rounded-tl-none border-white/5 self-start" 
+                                            : "bg-blue-600/80 rounded-tr-none border-blue-500/50 self-end text-white shadow-lg"
+                                        }`}
+                                    >
+                                        <p className={`text-xs ${isLead ? "text-slate-300" : "font-medium"}`}>
+                                            {msg.content}
+                                        </p>
+                                        <span className={`text-[8px] mt-1.5 block font-black uppercase tracking-widest ${isLead ? "text-slate-500 text-left" : "text-blue-300 text-right"}`}>
+                                            {new Date(msg.created_at).toLocaleTimeString('pt-BR', { hour: '2-digit', minute: '2-digit' })}
+                                        </span>
+                                    </div>
+                                );
+                            })
+                        )}
+                        <div ref={chatEndRef} />
+                    </div>
 
                     {/* Input — sempre fixo no rodapé */}
                     <div className="shrink-0 p-3 bg-slate-900/40 border-t border-white/5 flex gap-3">
@@ -804,11 +1015,11 @@ const [botLogs, setBotLogs] = useState([]);
 
 function KanbanColumn({ title, count, color, children, icon, isActive }) {
     return (
-        /* min-h-screen garante que a coluna encoste no final da página */
-        <div className={`min-w-[310px] w-[310px] glass-panel rounded-3xl flex flex-col mb-10 overflow-hidden border relative transition-all duration-500 
-            ${isActive ? 'border-blue-500/40 bg-blue-900/10 shadow-neon-blue' : 'border-white/5'} 
+        /* flex-1 e h-full garantem que a coluna expanda dinamicamente quando o header sumir */
+        <div className={`min-w-[310px] w-[310px] glass-panel rounded-3xl flex flex-col overflow-hidden border relative transition-all duration-500 
+         ${isActive ? 'border-blue-500/40 bg-blue-900/10 shadow-neon-blue' : 'border-white/5'}`}
+            style={{ height: '100%', minHeight: '65vh' }}>
 
-            min-h-screen h-fit`}>
             <div className={`p-4 border-b border-white/10 flex justify-between items-center bg-gradient-to-r ${color} shrink-0 sticky top-0 z-20`}>
                  <div className="flex items-center gap-3 relative z-10">
                     <div className="bg-white/10 p-2 rounded-xl backdrop-blur-md border border-white/5 shadow-sm">{icon}</div>
@@ -818,7 +1029,7 @@ function KanbanColumn({ title, count, color, children, icon, isActive }) {
             </div>
 
             {/* O conteúdo agora flui naturalmente sem scroll interno forçado */}
-            <div className="p-3 space-y-3 bg-slate-950/20 flex-1">
+                <div className="p-3 space-y-3 bg-slate-950/20 flex-1 overflow-y-auto custom-scrollbar">
                 {children}
             </div>
         </div>

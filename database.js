@@ -79,50 +79,52 @@ const db = {
     // 👥 GESTÃO DE LEADS (ANTI-DUPLICIDADE E PERSISTÊNCIA)
     // ========================================================================
 
-    saveLead: async (lead, instanceId) => {
-        // Normalização agressiva: Remove tudo que não é número e garante o sufixo Baileys
-        const phonePuro = String(lead.phone || lead.whatsapp_id).replace(/\D/g, '');
-        const zapId = phonePuro.includes('@') ? phonePuro : `${phonePuro}@s.whatsapp.net`;
+    saveLead: async (lead, instanceId, userId) => {
+        // Normalização agressiva: Remove tudo que não é número e garante o sufixo Baileys
+        const phonePuro = String(lead.phone || lead.whatsapp_id).replace(/\D/g, '');
+        const zapId = phonePuro.includes('@') ? phonePuro : `${phonePuro}@s.whatsapp.net`;
 
-        const leadData = {
-            whatsapp_id: zapId,
-            instance_id: instanceId,
-            name: (lead.name || "Sem Nome").replace(/['"“”]/g, ""), // Limpa caracteres que quebram prompt
-            phone: phonePuro,
-            niche: lead.niche || "Empresa",
-            cnpj: lead.cnpj || null,
-            dono: lead.dono || null,
-            endereco_fiscal: lead.endereco_fiscal || lead.address || null,
-            bairro: lead.bairro || null,
-            cep: lead.cep || null,
-            porte: lead.porte || null,
-            capital_social_numeric: lead.capital_social_numeric || 0,
-            lat: lead.lat || null,
-            lng: lead.lng || null,
-            status: lead.status || 'new',
-            updated_at: new Date()
-        };
+        const leadData = {
+            user_id: userId, // 🔐 AQUI: Vincula o lead ao usuário logado
+            whatsapp_id: zapId,
+            instance_id: instanceId,
+            name: (lead.name || "Sem Nome").replace(/['"“”]/g, ""), // Limpa caracteres que quebram prompt
+            phone: phonePuro,
+            niche: lead.niche || "Empresa",
+            cnpj: lead.cnpj || null,
+            dono: lead.dono || null,
+            endereco_fiscal: lead.endereco_fiscal || lead.address || null,
+            bairro: lead.bairro || null,
+            cep: lead.cep || null,
+            porte: lead.porte || null,
+            capital_social_numeric: lead.capital_social_numeric || 0,
+            lat: lead.lat || null,
+            lng: lead.lng || null,
+            status: lead.status || 'new',
+            updated_at: new Date()
+        };
 
-        // Tenta o salvamento. Se houver conflito no whatsapp_id, ele apenas ATUALIZA (upsert)
-        let { error } = await supabase
-            .from('leads')
-            .upsert(leadData, { onConflict: 'whatsapp_id' });
+        // Tenta o salvamento. Se houver conflito no whatsapp_id, ele apenas ATUALIZA (upsert)
+        let { error } = await supabase
+            .from('leads')
+            .upsert(leadData, { onConflict: 'whatsapp_id' });
 
-        if (error) {
-            console.error(`❌ [DB ERROR]: ${error.message}`);
-            // Fallback: Marca como erro no banco para revisão manual no Dashboard
-            await supabase.from('leads').upsert({
-                whatsapp_id: zapId,
-                name: lead.name,
-                instance_id: instanceId,
-                status: 'error',
-                updated_at: new Date()
-            }, { onConflict: 'whatsapp_id' });
-        } else {
-            console.log(`✅ [DB] Lead persistido com sucesso: ${lead.name}`);
-            return { error: null };
-        }
-    },
+        if (error) {
+            console.error(`❌ [DB ERROR]: ${error.message}`);
+            // Fallback: Marca como erro no banco para revisão manual no Dashboard
+            await supabase.from('leads').upsert({
+                user_id: userId, // 🔐 AQUI: Também vincula no fallback
+                whatsapp_id: zapId,
+                name: lead.name,
+                instance_id: instanceId,
+                status: 'error',
+                updated_at: new Date()
+            }, { onConflict: 'whatsapp_id' });
+        } else {
+            console.log(`✅ [DB] Lead persistido com sucesso: ${lead.name}`);
+            return { error: null };
+        }
+    },
 
     updateLeadStatus: async (whatsappId, updates) => {
         const { error } = await supabase

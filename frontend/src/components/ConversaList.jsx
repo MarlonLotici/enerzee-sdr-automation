@@ -58,11 +58,11 @@ function ConversaCard({ lead, ultimaMsg, isActive, onClick }) {
         <div
             onClick={onClick}
             style={{
-                display:       'flex',
-                alignItems:    'flex-start',
-                gap:           10,
-                padding:       '10px 12px',
-                borderRadius:  '0.75rem',
+                display:       'flex',
+                alignItems:    'center',
+                gap:           8,
+                padding:       '6px 10px',
+                borderRadius:  '0.5rem',
                 cursor:        'pointer',
                 background:    isActive ? 'rgba(59,130,246,0.12)' : 'transparent',
                 border:        `1px solid ${isActive ? 'rgba(59,130,246,0.3)' : 'transparent'}`,
@@ -75,12 +75,12 @@ function ConversaCard({ lead, ultimaMsg, isActive, onClick }) {
             {/* Avatar + dot de status */}
             <div style={{ position: 'relative', flexShrink: 0 }}>
                 <div style={{
-                    width: 36, height: 36, borderRadius: '50%',
-                    background: isActive ? 'rgba(59,130,246,0.25)' : 'rgba(255,255,255,0.06)',
-                    border: `1px solid ${isActive ? 'rgba(59,130,246,0.4)' : 'rgba(255,255,255,0.1)'}`,
-                    display: 'flex', alignItems: 'center', justifyContent: 'center',
-                    fontSize: 13, fontWeight: 900, color: isActive ? '#93C5FD' : 'rgba(255,255,255,0.6)',
-                }}>
+                    width: 28, height: 28, borderRadius: '50%',
+                    background: isActive ? 'rgba(59,130,246,0.25)' : 'rgba(255,255,255,0.06)',
+                    border: `1px solid ${isActive ? 'rgba(59,130,246,0.4)' : 'rgba(255,255,255,0.1)'}`,
+                    display: 'flex', alignItems: 'center', justifyContent: 'center',
+                    fontSize: 11, fontWeight: 900, color: isActive ? '#93C5FD' : 'rgba(255,255,255,0.6)',
+                }}>
                     {inicial}
                 </div>
                 {/* Dot de estado */}
@@ -171,6 +171,7 @@ export default function ConversaList({ onSelect, activeId, socket }) {
                 .select('id, name, whatsapp_id, status, is_paused, manual_pause, last_contact_at, instance_id, dono, niche, bairro, phone, cnpj, capital_social_numeric, porte')
                 .in('status', ['contact', 'waiting_analysis'])
                 .order('last_contact_at', { ascending: false })
+                .limit(50)
 
             if (error || !leads?.length) {
                 setConversas([])
@@ -244,12 +245,14 @@ export default function ConversaList({ onSelect, activeId, socket }) {
 
     return (
         <div style={{
-            display: 'flex', flexDirection: 'column',
-            height: '100%', fontFamily: "'DM Sans', system-ui, sans-serif",
+            display: 'flex', flexDirection: 'column', height: '100%', overflow: 'hidden',
+            fontFamily: "'DM Sans', system-ui, sans-serif",
         }}>
 
-            {/* ── Header ── */}
-            <div style={{ padding: '14px 14px 10px', borderBottom: '1px solid rgba(255,255,255,0.05)', flexShrink: 0 }}>
+         
+              {/* ── Header ── */}
+            <div style={{ padding: '8px 10px', borderBottom: '1px solid rgba(255,255,255,0.05)', flexShrink: 0 }}>
+
                 <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 10 }}>
                     <div style={{ display: 'flex', alignItems: 'center', gap: 7 }}>
                         <BrainCircuit size={14} color='#3B82F6' />
@@ -287,20 +290,20 @@ export default function ConversaList({ onSelect, activeId, socket }) {
                         onChange={e => setBusca(e.target.value)}
                         placeholder="Buscar conversa..."
                         style={{
-                            width: '100%', boxSizing: 'border-box',
-                            height: 32, paddingLeft: 26, paddingRight: 10,
-                            background: 'rgba(255,255,255,0.04)',
-                            border: '1px solid rgba(255,255,255,0.08)',
-                            borderRadius: '0.5rem',
-                            color: '#fff', fontSize: 11, fontWeight: 600,
-                            outline: 'none', fontFamily: 'inherit',
-                        }}
+                            width: '100%', boxSizing: 'border-box',
+                            height: 28, paddingLeft: 26, paddingRight: 10,
+                            background: 'rgba(255,255,255,0.04)',
+                            border: '1px solid rgba(255,255,255,0.08)',
+                            borderRadius: '0.4rem',
+                            color: '#fff', fontSize: 10, fontWeight: 600,
+                            outline: 'none', fontFamily: 'inherit',
+                        }}
                     />
                 </div>
             </div>
 
             {/* ── Lista ── */}
-            <div style={{ flex: 1, overflowY: 'auto', padding: '8px 6px' }}>
+            <div style={{ flex: 1, overflowY: 'auto', padding: '8px 6px', minHeight: 0 }}>
 
                 {loading && conversas.length === 0 ? (
                     <div style={{ padding: '30px 0', textAlign: 'center', color: 'rgba(255,255,255,0.2)', fontSize: 10, fontWeight: 700, textTransform: 'uppercase', letterSpacing: '0.15em' }}>

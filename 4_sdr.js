@@ -143,6 +143,9 @@ Produto: Energia por Assinatura (Lei 14.300) — Geração Distribuída via Usin
 Missão: Agendar uma consultoria gratuita de 20 minutos via Calendly.
 Tom: Direto, humano, B2B. Use "vc", "tá", "né", "pra". NUNCA use palavras como "reunião", "compliance", "EBITDA" a menos que o perfil do lead indique isso.
 Contexto: Você enviou a mensagem inicial dizendo que pegou o contato num levantamento que a gente fez na região, e que identificou um dado sobre o estabelecimento que queria confirmar antes de fechar o relatório. O lead não sabe ainda que é sobre energia.
+
+FILOSOFIA DE VENDA — CHALLENGER SALE:
+Você não espera o lead revelar a dor. Você ENSINA algo que ele não sabe: que comércios do porte da ${nomeEmpresa} pagam em média 18-22% a mais do que deveriam na conta de luz por desconhecimento da Lei 14.300. Você vem com o insight, não com perguntas. Só depois de ensinar você pergunta para confirmar.
 ---
 
 ### 👤 DADOS DO LEAD (USE PARA PERSONALIZAR CADA MENSAGEM)
@@ -193,14 +196,11 @@ sinais, retorne APENAS a tag [ROBO]. Nada mais.
 
 ANTES de escrever qualquer resposta, leia o histórico e identifique em qual estágio a conversa está. Avance APENAS UM estágio por vez. NUNCA pule etapas.
 
-[ESTÁGIO 1 — SITUAÇÃO / TRANSIÇÃO DA ISCA INDIRETA]
-Gatilho: Lead respondeu à isca demonstrando interesse próprio ("eu mesmo quero", "nós queremos", "como funciona?", "depende") ou indicando alguém.
-Ação: O lead perguntou "que dado?" ou "pode falar" ou similar. Assuma com naturalidade: revele que é sobre a conta de energia e dê 1 frase curta sobre o benefício (até 25% de desconto, zero obra, zero investimento). [QUEBRA] 1 pergunta direta sobre qual é o custo médio mensal da conta de luz deles hoje.
-Em seguida, dê 1 frase curta sobre o benefício (até 25% de desconto, zero obra, zero investimento).
-[QUEBRA] 1 pergunta direta sobre qual é o custo médio mensal da conta de luz deles hoje.
-Tom: direto. Máximo 12 palavras por balão.
-ATENÇÃO: Se ele responder que já tem placa ou desconto, aplique o KNOCK-OUT da Regra 3 ou pergunte se é desconto fixo/variável.
-ATENÇÃO 2: Se ele já disser o valor da conta logo de cara, PULE direto para o ESTÁGIO 3 fazendo o cálculo.
+[ESTÁGIO 1 — SITUAÇÃO / TRANSIÇÃO DA ISCA INDIRETA (CHALLENGER)]
+Gatilho: O lead respondeu "Qual dado?", "Do que se trata?" ou similar à sua isca.
+Ação: Aplique a filosofia Challenger. Revele que o "dado" é sobre o desperdício tarifário deles. Diga que vcs cruzaram o CNPJ da ${nomeEmpresa} com a nova Lei 14.300 e identificaram que eles estão pagando em média 20% a mais na conta de luz do que deveriam.
+[QUEBRA] Faça a qualificação direta: "Só pra eu confirmar se vcs têm o perfil pra isenção das usinas WEG, a conta aí hoje vem acima ou abaixo de R$ 800?"
+ATENÇÃO: Se ele já disser o valor da conta logo de cara, PULE para o ESTÁGIO 3. Se disser que já tem placa, aplique o KNOCK-OUT da Regra 3.
 
 [ESTÁGIO 2 — PROBLEMA / DOR]
 Gatilho: Lead demonstrou curiosidade com perguntas como "que usinas são essas?",
@@ -214,13 +214,12 @@ Gatilho: Lead entendeu o produto e demonstra engajamento sem objeção fatal.
 Ação: 1 cálculo de perda mensal usando o valor que o lead mencionou (ou R$1.000 como base).
 [QUEBRA] 1 frase mostrando o acumulado anual.
 Use UMA VEZ. Nunca repita. Não vá pro agendamento ainda.
-Máximo 12 palavras por balão.
 
-[ESTÁGIO 4 — NECESSIDADE / AGENDAMENTO]
-Gatilho: Lead concordou com o problema ou pediu mais detalhes práticos.
-Ação: Proponha consultoria de 20 min como solução lógica, não como venda.
-[QUEBRA] Alternativa fechada: "amanhã de manhã ou à tarde?"
-NUNCA use as palavras "reunião" ou "call". Máximo 12 palavras por balão.
+[ESTÁGIO 4 — NECESSIDADE / VENDENDO O SIMULADOR]
+Gatilho: Lead concordou com a perda (problema) ou pediu o próximo passo prático.
+Ação: Aumente o valor do seu tempo. Diga que, para não ficar no achismo, vc consegue abrir o simulador oficial e jogar os dados reais da ${nomeEmpresa} na tela.
+[QUEBRA] Proponha o agendamento como a única solução para ver o número: "A gente vê o valor exato de redução em 15 minutinhos. Fica melhor pra vc amanhã de manhã ou algum outro dia?"
+NUNCA use as palavras "reunião" ou "call".
 
 [ESTÁGIO 5 — FECHAMENTO / LINK]
 Gatilho: Lead disse "sim", "quero", "pode ser", "ok", "amanhã", qualquer confirmação de interesse na consultoria.
@@ -258,12 +257,19 @@ Resposta: "Perfeito! Escolhe o horário que funcionar melhor aqui na minha agend
 
 7. "JÁ TENHO CONTRATO / FORNECEDOR DE ENERGIA":
    Resposta: "Entendido! Desejo ótimos negócios para a ${nomeEmpresa}." ENCERRE.
+
+   8. "DEIXA EU PENSAR" / "VOU VER COM MEU SÓCIO" / "ME PASSA O CONTATO":
+   Resposta: "Claro! [QUEBRA] Só pra deixar registrado: a cota que separamos pra região da ${nomeEmpresa} vence sexta-feira. Se quiser garantir antes, são só 20 minutos. Fica melhor amanhã cedo ou tarde?"
+
+9. "QUANTO CUSTA?" / "TEM MENSALIDADE?":
+   Resposta: "Zero custo de adesão — o desconto já vem na fatura da concessionária todo mês. [QUEBRA] Pra ver o valor exato no caso da ${nomeEmpresa}, preciso de 20 minutos com vc. Fica melhor amanhã ou algum outro dia?"
 ---
 
 ### 🏆 PROVA SOCIAL (USE NO MÁXIMO 1x POR CONVERSA)
-Use apenas se o lead hesitar muito, pedir referência ou demonstrar ceticismo após a explicação do produto:
-"Já mapeamos mais de 200 empresas na região — de padarias a indústrias. A maioria aprova na primeira análise porque o critério principal é o consumo mensal, e não o porte da empresa."
-Nunca use essa linha duas vezes. Não invente números.
+Use apenas se o lead hesitar muito ou pedir referência:
+"Só aqui no ${bairroLead}, já mapeamos comércios similares à ${nomeEmpresa} economizando entre R$ 200 e R$ 600 por mês — sem obra, sem troca de equipamento, sem fidelidade."
+Adapte os valores ao porte do lead (capital social). Para ME: R$ 150-400. Para EPP: R$ 400-900.
+Nunca invente números. Use sempre "entre X e Y".
 
 ---
 
@@ -1112,9 +1118,9 @@ async function motorAtaquePorChip(instanceId) {
 
            // 2. GATILHO DE ABORDAGEM INDIRETA (Aumenta a taxa de resposta baixando a guarda)
            
-           const saudacaoInicial = nomeContato
-    ? `Opa ${nomeContato}, tudo bem?`
-    : `Opa, tudo bem?`;
+           const saudacaoInicial = primeiroNomeDono
+    ? `Opa ${primeiroNomeDono}, tudo bem?`
+    : `Opa, tudo bem?`;
 
 // Usa bairro real do CNPJ se tiver
 const localRef = lead.bairro
@@ -1175,17 +1181,17 @@ const novaSaudacao = `${saudacaoInicial} [QUEBRA] Aqui é o ${config.agente}. Pe
             // 🛡️ SUCESSO! Zera o contador de falhas de CPU
             falhasConsecutivas = 0;
 
-} catch (err) {
-            console.error(`❌ Erro no motor do chip ${instanceId}:`, err.message);
-            if (currentLeadId) leadsEmProcessamento.delete(currentLeadId); 
-            
-            // 🛡️ PROTEÇÃO DE CPU: BACKOFF EXPONENCIAL
-            falhasConsecutivas++;
-            const tempoEspera = Math.min(10000 * Math.pow(2, falhasConsecutivas - 1), 300000); 
-            console.log(`⏸️ [CONTROLE CPU] Pausando motor ${config.nome} por ${tempoEspera / 1000}s para evitar sobrecarga...`);
-            
-            await delay(tempoEspera); 
-        }
+            } catch (err) {
+            console.error(`❌ Erro no motor do chip ${instanceId}:`, err.message);
+            if (currentLeadId) leadsEmProcessamento.delete(currentLeadId); 
+            
+            // 🛡️ PROTEÇÃO DE CPU: BACKOFF EXPONENCIAL
+            falhasConsecutivas++;
+            const tempoEspera = Math.min(10000 * Math.pow(2, falhasConsecutivas - 1), 300000); 
+            console.log(`⏸️ [CONTROLE CPU] Pausando motor por ${tempoEspera / 1000}s para evitar sobrecarga...`);
+            
+            await delay(tempoEspera); 
+        }
     }
 }
 
@@ -1465,8 +1471,9 @@ module.exports = {
         instanciasLigando.delete(instanceId);
         console.log(`🔌 [SDR] Sessão ${instanceId} encerrada da memória.`);
     },
-    criarNovaInstancia: async (n, t) => {
-        const { data } = await supabase.from('instances').insert([{ name: n, owner_phone: t }]).select().single(); 
+    criarNovaInstancia: async (n, t, userId) => {
+        const { data } = await supabase.from('instances').insert([{ name: n, owner_phone: t, user_id: userId }]).select().single();
+    
         if (data) startInstance(data.id, data.name); 
         return data; 
     }

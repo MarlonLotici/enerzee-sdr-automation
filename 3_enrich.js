@@ -36,7 +36,7 @@ function titleCase(str) {
 async function enriquecerLeadIndividual(lead) {
     console.log(`[ENRICH] Enriquecendo: ${lead.name} | ${lead.city}`);
     // Delay humano entre chamadas para não ser bloqueado
-    await new Promise(r => setTimeout(r, 2000 + Math.random() * 2000));
+        await new Promise(r => setTimeout(r, 4000 + Math.random() * 3000));
     let enrichment = {
         cnpj: null, razao_social: null, nome_fantasia: null,
         dono: null, capital_social: 0, capital_social_numeric: 0,
@@ -54,50 +54,104 @@ async function enriquecerLeadIndividual(lead) {
 
         console.log(`[ENRICH] 🦆 Buscando: ${termoBusca}`);
 
-        // DuckDuckGo lite — sem Puppeteer
-        const ddgUrl = `https://html.duckduckgo.com/html/?q=${encodeURIComponent(termoBusca)}`;
-        const bodyText = await new Promise((resolve) => {
-            const req = https.get(ddgUrl, {
-                headers: {
-                    'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36',
-                    'Accept': 'text/html',
-                },
-                timeout: 15000
-            }, (res) => {
-                let data = '';
-                res.on('data', chunk => data += chunk);
-                res.on('end', () => resolve(data));
-            });
-            req.on('error', () => resolve(''));
-            req.on('timeout', () => { req.destroy(); resolve(''); });
-        });
+            // --- NÚCLEO PROFISSIONAL DE BUSCA (SERPER.DEV) ---
+        console.log(`[ENRICH] 🦅 Buscando no Google via API Serper: ${termoBusca}`);
 
-        const cnpjMatch = bodyText.match(/\d{2}\.?\d{3}\.?\d{3}\/?\d{4}-?\d{2}/);
+        const bodyText = await new Promise((resolve) => {
+            const postData = JSON.stringify({
+                q: termoBusca,
+                gl: "br", // Filtra resultados só do Brasil
+                hl: "pt-br",
+                num: 10 // Puxa 10 sites de uma vez para achar o CNPJ rápido
+            });
 
-        if (!cnpjMatch) {
-            console.log(`[ENRICH] ❌ CNPJ não encontrado para ${lead.name}`);
-            return { ...lead, ...enrichment };
-        }
+            const options = {
+                hostname: 'google.serper.dev',
+                path: '/search',
+                method: 'POST',
+                headers: {
+                    'X-API-KEY': process.env.SERPER_API_KEY,
+                    'Content-Type': 'application/json',
+                    'Content-Length': Buffer.byteLength(postData)
+                },
+                timeout: 10000
+            };
 
-        console.log(`[ENRICH] ✅ CNPJ: ${cnpjMatch[0]}`);
-        const cnpjLimpo = cnpjMatch[0].replace(/\D/g, '');
-        const dadosFiscais = await consultarDadosOficiais(cnpjLimpo);
+            const req = https.request(options, (res) => {
+                let data = '';
+                res.on('data', chunk => data += chunk);
+                res.on('end', () => {
+                    try {
+                        const json = JSON.parse(data);
+                        let fullText = '';
+                        // Junta título e resumo de todos os sites retornados
+                        if (json.organic) {
+                            json.organic.forEach(item => fullText += `${item.title} ${item.snippet} `);
+                        }
+                        // Pega dados da caixinha de empresa do Google (Knowledge Graph)
+                        if (json.knowledgeGraph && json.knowledgeGraph.description) {
+                            fullText += json.knowledgeGraph.description;
+                        }
+                        resolve(fullText);
+                    } catch {
+                        resolve('');
+                    }
+                });
+            });
 
-        if (!dadosFiscais) return { ...lead, ...enrichment };
+            req.on('error', () => resolve(''));
+            req.on('timeout', () => { req.destroy(); resolve(''); });
+            req.write(postData);
+            req.end();
+        });
 
-        const nomeMaps = lead.name.toUpperCase();
-        const razao = (dadosFiscais.razao_social || "").toUpperCase();
-        const fantasia = (dadosFiscais.nome_fantasia || "").toUpperCase();
 
-        const scoreRazao = stringSimilarity.compareTwoStrings(nomeMaps, razao);
-        const scoreFantasia = stringSimilarity.compareTwoStrings(nomeMaps, fantasia);
-        enrichment.match_confidence = Math.max(scoreRazao, scoreFantasia) * 100;
 
-        const cidadeBate = dadosFiscais.municipio &&
-            (lead.city || "").toLowerCase().includes(dadosFiscais.municipio.toLowerCase());
+            // 1. Extrai TODOS os CNPJs da página para evitar lixo de rodapé
+        const todosCnpjs = [...new Set(bodyText.match(/\d{2}\.?\d{3}\.?\d{3}\/?\d{4}-?\d{2}/g) || [])];
 
-        if (enrichment.match_confidence > 20 || cidadeBate) {
-            enrichment.cnpj              = cnpjMatch[0];
+        if (todosCnpjs.length === 0) {
+            console.log(`[ENRICH] ❌ CNPJ não encontrado para ${lead.name}`);
+            return { ...lead, ...enrichment };
+        }
+
+        let dadosFiscais = null;
+        let cnpjValidado = null;
+        const nomeMaps = lead.name.toUpperCase();
+
+        // 2. Loop de Autenticação: Testa na Receita os 3 primeiros CNPJs achados
+        for (const cnpj of todosCnpjs.slice(0, 3)) {
+            const cnpjLimpo = cnpj.replace(/\D/g, '');
+            const dados = await consultarDadosOficiais(cnpjLimpo);
+            
+            if (dados) {
+                const razao = (dados.razao_social || "").toUpperCase();
+                const fantasia = (dados.nome_fantasia || "").toUpperCase();
+                
+                const scoreRazao = stringSimilarity.compareTwoStrings(nomeMaps, razao);
+                const scoreFantasia = stringSimilarity.compareTwoStrings(nomeMaps, fantasia);
+                enrichment.match_confidence = Math.max(scoreRazao, scoreFantasia) * 100;
+
+                const cidadeBate = dados.municipio && (lead.city || "").toLowerCase().includes(dados.municipio.toLowerCase());
+
+                // 3. Match Confirmado!
+                if (enrichment.match_confidence > 20 || cidadeBate) {
+                    dadosFiscais = dados;
+                    cnpjValidado = cnpj;
+                    break; // Para o loop, achou o dono
+                }
+            }
+        }
+
+        if (!dadosFiscais) {
+            console.log(`[ENRICH] ❌ Alucinação bloqueada. CNPJs não bateram com ${lead.name}`);
+            return { ...lead, ...enrichment };
+        }
+
+        console.log(`[ENRICH] ✅ CNPJ Validado na Receita: ${cnpjValidado}`);
+
+        if (true) { // Mantém a estrutura de chaves do seu código intacta
+            enrichment.cnpj              = cnpjValidado;
             enrichment.razao_social      = titleCase(dadosFiscais.razao_social);
             enrichment.nome_fantasia     = titleCase(dadosFiscais.nome_fantasia);
             enrichment.porte             = dadosFiscais.porte;

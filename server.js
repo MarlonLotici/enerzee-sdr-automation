@@ -5,6 +5,8 @@ const http = require('http');
 const { Server } = require('socket.io');
 const cors = require('cors');
 const path = require('path');
+const { createClient } = require('@supabase/supabase-js');
+const supabase = createClient(process.env.SUPABASE_URL, process.env.SUPABASE_KEY);
 
 // ⚙️ IMPORTAÇÕES DA ESTEIRA DE DADOS MESTRE
 const { iniciarVarredura } = require('./1_scraper'); 
@@ -26,6 +28,17 @@ const PORT = process.env.PORT || 3001;
 
 app.use(cors());
 app.use(express.json());
+// Camada de Segurança: Verifica o Token do Supabase
+const autenticarMiddleware = async (req, res, next) => {
+    const token = req.headers.authorization?.split(' ')[1];
+    if (!token) return res.status(401).json({ error: 'Acesso negado.' });
+
+    const { data: { user }, error } = await supabase.auth.getUser(token);
+    if (error || !user) return res.status(401).json({ error: 'Sessão inválida.' });
+
+    req.user = user;
+    next();
+};
 app.use(express.static(path.join(__dirname, 'frontend', 'dist')));
 
 app.post('/webhook/calendly', (req, res) => {
@@ -45,8 +58,19 @@ sdr.initMultiTenancy(io);
 // =======================================================
 // 2. SOCKET.IO (COMUNICAÇÃO REAL-TIME)
 // =======================================================
+io.use(async (socket, next) => {
+    const token = socket.handshake.auth.token;
+    if (!token) return next(new Error("Não autenticado"));
+    
+    const { data: { user }, error } = await supabase.auth.getUser(token);
+    if (error || !user) return next(new Error("Sessão expirada"));
+    
+    socket.user = user;
+    next();
+});
+
 io.on('connection', (socket) => {
-    console.log(`🔌 Dashboard conectado: ${socket.id}`);
+    console.log(`🔐 Acesso autorizado para: ${socket.user.email}`);
 
     const atualizarListaInstancias = async () => {
         const list = await db.getActiveInstances();
@@ -58,9 +82,9 @@ io.on('connection', (socket) => {
     });
 
     socket.on('create_instance', async (data) => {
-        await sdr.criarNovaInstancia(data.name, data.phone);
-        await atualizarListaInstancias();
-    });
+        await sdr.criarNovaInstancia(data.name, data.phone, socket.user.id);
+        await atualizarListaInstancias();
+    });
 
     socket.on('start_scraping', async (params) => {
         shouldStop = false;
@@ -127,8 +151,7 @@ const payloadCorrigido = { ...params, city: cidadeResolvida, mode: isMapMode ? '
 
                         console.log(`🎲 [DISTRIBUIÇÃO] Lead ${leadFinal.name} entregue para o chip: ${chipSorteado.name}`);
 
-                        const { error: dbError } = await db.saveLead(leadFinal, chipSorteado.id);
-
+                            const { error: dbError } = await db.saveLead(leadFinal, chipSorteado.id, chipSorteado.user_id);
                         if (dbError) {
                             console.error(`❌ Erro DB (${leadFinal.name}):`, dbError.message);
                             if (!dbError.message.includes('unique')) {
@@ -162,7 +185,7 @@ const payloadCorrigido = { ...params, city: cidadeResolvida, mode: isMapMode ? '
 });
 });
 
-app.get('{*path}', (req, res) => {
+app.get(/.*/, (req, res) => {
     res.sendFile(path.join(__dirname, 'frontend', 'dist', 'index.html'));
 });
 

@@ -55,11 +55,11 @@ function ChipCard({ instance, dailyCount, statusInfo }) {
     return (
         <div
             style={{
-                background:    'rgba(255,255,255,0.02)',
-                border:        `1px solid ${statusInfo.color}25`,
-                borderTop:     `2px solid ${statusInfo.color}`,
-                borderRadius:  '1.25rem',
-                padding:       '18px 20px',
+               background:    'rgba(255,255,255,0.02)',
+                border:        `1px solid ${statusInfo.color}25`,
+                borderTop:     `2px solid ${statusInfo.color}`,
+                borderRadius:  '1rem',
+                padding:       '14px 16px',
                 display:       'flex',
                 flexDirection: 'column',
                 gap:           14,
@@ -311,24 +311,24 @@ export default function ChipStatus({ instances = [], socket }) {
                 </button>
             </div>
 
-            {/* ── Resumo global ── */}
-            <div style={{ display: 'grid', gridTemplateColumns: 'repeat(3, 1fr)', gap: 10, marginBottom: 20 }}>
-                {[
-                    { label: 'Chips Ativos',    value: `${totalConectados} / ${instances.length}`, color: C.connected,    icon: <Wifi size={13} color={C.connected} /> },
-                    { label: 'Disparos Hoje',   value: totalDisparos,                               color: C.blue,         icon: <Zap  size={13} color={C.blue} /> },
-                    { label: 'Capacidade Total',value: `${totalLimite}/dia`,                        color: 'rgba(255,255,255,0.5)', icon: <Target size={13} color="rgba(255,255,255,0.4)" /> },
-                ].map(({ label, value, color, icon }) => (
-                    <div key={label} style={{ background: 'rgba(255,255,255,0.03)', border: '1px solid rgba(255,255,255,0.06)', borderRadius: '1rem', padding: '12px 14px', display: 'flex', alignItems: 'center', gap: 10 }}>
-                        <div style={{ background: 'rgba(255,255,255,0.05)', padding: '6px', borderRadius: '0.5rem' }}>
-                            {icon}
-                        </div>
-                        <div>
-                            <p style={{ fontSize: 8, fontWeight: 900, color: 'rgba(255,255,255,0.3)', textTransform: 'uppercase', letterSpacing: '0.15em', marginBottom: 2 }}>{label}</p>
-                            <p style={{ fontSize: 15, fontWeight: 900, color, lineHeight: 1 }}>{value}</p>
-                        </div>
-                    </div>
-                ))}
-            </div>
+                    {/* ── Resumo global ── */}
+            <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 8, marginBottom: 16 }}>
+                {[
+                    { label: 'Chips Ativos',    value: `${totalConectados} / ${instances.length}`, color: C.connected,    icon: <Wifi size={11} color={C.connected} />, span: false },
+                    { label: 'Disparos Hoje',   value: totalDisparos,                               color: C.blue,         icon: <Zap  size={11} color={C.blue} />, span: false },
+                    { label: 'Capacidade Total',value: `${totalLimite}/dia`,                        color: 'rgba(255,255,255,0.5)', icon: <Target size={11} color="rgba(255,255,255,0.4)" />, span: true },
+                ].map(({ label, value, color, icon, span }) => (
+                    <div key={label} style={{ gridColumn: span ? 'span 2' : 'auto', background: 'rgba(255,255,255,0.03)', border: '1px solid rgba(255,255,255,0.06)', borderRadius: '0.75rem', padding: '10px 12px', display: 'flex', alignItems: 'center', gap: 8 }}>
+                        <div style={{ background: 'rgba(255,255,255,0.05)', padding: '5px', borderRadius: '0.4rem' }}>
+                            {icon}
+                        </div>
+                        <div>
+                            <p style={{ fontSize: 7, fontWeight: 900, color: 'rgba(255,255,255,0.4)', textTransform: 'uppercase', letterSpacing: '0.1em', marginBottom: 2 }}>{label}</p>
+                            <p style={{ fontSize: 13, fontWeight: 900, color, lineHeight: 1 }}>{value}</p>
+                        </div>
+                    </div>
+                ))}
+            </div>
 
             {/* ── Grid de chips ── */}
             {instances.length === 0 ? (
