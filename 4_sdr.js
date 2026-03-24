@@ -49,22 +49,25 @@ setInterval(() => {
 const sessions = new Map(); 
 const instanciasLigando = new Set();
 let ioSocket = null;
-
-
-// 🕒 SEGURANÇA: HORÁRIO COMERCIAL — ATENDIMENTO (05:30 - 22:45)
-function dentroDoExpediente() {
+function getHoraBrasil() {
     const agora = new Date();
-    const t = agora.getHours() * 60 + agora.getMinutes();
-    return t >= 330 && t <= 1365; // Responde leads o dia todo
+    // Subtrai 3 horas do UTC para forçar o horário de Brasília
+    agora.setHours(agora.getUTCHours() - 3); 
+    return agora;
 }
 
-// 🕒 SEGURANÇA: JANELA DE DISPARO — APENAS HORÁRIO COMERCIAL (08:00 - 18:00)
-function dentroDaJanelaDeDisparo() {
-    const agora = new Date();
-    const diaSemana = agora.getDay(); // 0 = domingo, 6 = sábado
-    if (diaSemana === 0) return false; // Nunca dispara no domingo
+function dentroDoExpediente() {
+    const agora = getHoraBrasil();
     const t = agora.getHours() * 60 + agora.getMinutes();
-    return t >= 480 && t <= 1080; // 08:00 - 18:00
+    return t >= 330 && t <= 1365;
+}
+
+function dentroDaJanelaDeDisparo() {
+    const agora = getHoraBrasil();
+    const diaSemana = agora.getDay(); 
+    if (diaSemana === 0) return false; 
+    const t = agora.getHours() * 60 + agora.getMinutes();
+    return t >= 480 && t <= 1080; 
 }
 
 // ============================================================================
@@ -1127,7 +1130,7 @@ const localRef = lead.bairro
     ? `aí no ${lead.bairro}`
     : `aí na região`;
 
-const novaSaudacao = `${saudacaoInicial} [QUEBRA] Aqui é o ${config.agente}. Peguei seu contato num levantamento que a gente fez ${localRef} — identifiquei um dado sobre o estabelecimento que queria confirmar contigo antes de fechar o relatório. Consegue me dar um retorno rapidinho?`;
+const novaSaudacao = `${saudacaoInicial} [QUEBRA] Aqui é o ${config.agente}. Peguei seu contato num levantamento que a gente fez ${localRef} e identifiquei um dado sobre o estabelecimento que queria confirmar contigo antes de fechar o relatório. Consegue me dar um retorno rapidinho?`;
            
            // 12. Fatiador de Balões com Trava Anti-Engasgo e Limite de 2 Balões
             const mensagensSplit = novaSaudacao.split('[QUEBRA]')
@@ -1446,6 +1449,9 @@ async function processarMensagemManual(sock, lead) {
     }
 }
 
+// 👇 Adicione esta variável de controle aqui fora
+let loopIniciado = false;
+
 module.exports = {
     initMultiTenancy: async (io) => {
         ioSocket = io;
@@ -1458,8 +1464,11 @@ module.exports = {
             motorAtaquePorChip(i.id); 
         }
         
-        // Motor 2: Conversas Pendentes (Mantém como estava)
-        loopRecuperacaoConversas(); 
+        // 🛑 TRAVA DO LOOP APLICADA AQUI (Motor 2)
+        if (!loopIniciado) {
+            loopIniciado = true;
+            loopRecuperacaoConversas(); 
+        }
     },
     enviarMensagemSDR: async () => {},
     encerrarInstancia: (instanceId) => {
@@ -1472,7 +1481,7 @@ module.exports = {
         console.log(`🔌 [SDR] Sessão ${instanceId} encerrada da memória.`);
     },
     criarNovaInstancia: async (n, t, userId) => {
-        const { data } = await supabase.from('instances').insert([{ name: n, owner_phone: t, user_id: userId }]).select().single();
+        const { data } = await supabase.from('instances').insert([{ name: n, owner_phone: t, user_id: userId }]).select().single();
     
         if (data) startInstance(data.id, data.name); 
         return data; 
