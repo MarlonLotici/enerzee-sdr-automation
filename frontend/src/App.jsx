@@ -202,6 +202,7 @@ const [botLogs, setBotLogs] = useState([]);
         // PEDIR LISTA AO CONECTAR
     socket.on('connect', () => {
             socket.emit('get_instances'); 
+            socket.emit('check_scraper_status');
         });
 
         socket.on('instances_list', (list) => {
@@ -230,9 +231,27 @@ const [botLogs, setBotLogs] = useState([]);
 
         socket.on('notification', (m) => setBotLogs(prev => [...prev, `[IA] ${m}`]));
         socket.on('scraping_stopped', () => setIsBotRunning(false));
+
+            // 👇 ADICIONE ESTES LISTENERS 👇
+        socket.on('scraper_status', (statusData) => {
+            setIsBotRunning(statusData.isRunning);
+            if (statusData.isRunning) {
+                // Se estava rodando, puxa os logs recentes para a tela não ficar vazia
+                setBotLogs(statusData.recentLogs || ["[SISTEMA] Conexão restabelecida. Monitorando motor..."]);
+                // Muda pra aba CRM pra pessoa ver o War Room
+                setActiveTab("crm"); 
+            }
+        });
+
+        // Ouve a emissão em broadcast para leads salvos no background
+        socket.on('background_lead_saved', () => {
+            // Recarrega a tabela silenciosamente para atualizar os contadores
+            fetchLeadsFromDB();
+        });
         
         return () => socket.disconnect();
     }, []);
+
 
     // --- FUNÇÕES DE AÇÃO ---
     const playNotificationSound = () => {

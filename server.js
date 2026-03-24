@@ -52,9 +52,21 @@ app.post('/webhook/calendly', (req, res) => {
 
 let shouldStop = false;
 
+// 👇 NOVA MEMÓRIA GLOBAL DO SCRAPER 👇
+let isScraperRunning = false;
+let recentScraperLogs = [];
+
+// Função auxiliar para gravar os logs e gritar no megafone (io.emit)
+const emitLog = (message) => {
+    recentScraperLogs.push(message);
+    if (recentScraperLogs.length > 50) recentScraperLogs.shift(); // Guarda só os últimos 50
+    io.emit('notification', message); 
+};
+// 👆 FIM DA MEMÓRIA GLOBAL 👆
 // 🔥 LIGA A IGNIÇÃO DO MOTOR MULTI-CHIP
 sdr.initMultiTenancy(io);
 
+// =======================================================
 // =======================================================
 // 2. SOCKET.IO (COMUNICAÇÃO REAL-TIME)
 // =======================================================
@@ -82,9 +94,24 @@ io.on('connection', (socket) => {
     });
 
     socket.on('create_instance', async (data) => {
-        await sdr.criarNovaInstancia(data.name, data.phone, socket.user.id);
-        await atualizarListaInstancias();
-    });
+        await sdr.criarNovaInstancia(data.name, data.phone, socket.user.id);
+        await atualizarListaInstancias();
+    });
+
+    socket.on('remove_instance', async (instanceId) => {
+        sdr.encerrarInstancia(instanceId);
+        await db.removeInstance(instanceId);
+        await atualizarListaInstancias();
+        console.log(`🗑️ Chip ${instanceId} removido e sessão encerrada.`);
+    });
+
+    // 👇 O listener que responde à pergunta do Front-end quando a página reabre 👇
+    socket.on('check_scraper_status', () => {
+        socket.emit('scraper_status', { 
+            isRunning: isScraperRunning, 
+            recentLogs: recentScraperLogs 
+        });
+    });
 
     socket.on('start_scraping', async (params) => {
         shouldStop = false;
@@ -100,41 +127,49 @@ io.on('connection', (socket) => {
             params.niche = ["Comércio"];
         }
 
-       const isMapMode = params.city && params.city.startsWith('📍');
+        const isMapMode = params.city && params.city.startsWith('📍');
 
-let cidadeResolvida = params.city;
-if (isMapMode && params.lat && params.lng) {
-    try {
-        const geoRes = await fetch(
-            `https://nominatim.openstreetmap.org/reverse?lat=${params.lat}&lon=${params.lng}&format=json`,
-            { headers: { 'User-Agent': 'EnerzeeBot/1.0' } }
-        );
-        const geoData = await geoRes.json();
-        cidadeResolvida = geoData.address?.city
-            || geoData.address?.town
-            || geoData.address?.municipality
-            || params.city;
-        console.log(`🗺️ [GEO] Coordenada resolvida: ${cidadeResolvida}`);
-    } catch(e) {
-        console.log(`⚠️ [GEO] Falha ao resolver cidade, usando coordenada`);
-    }
-}
+        let cidadeResolvida = params.city;
+        if (isMapMode && params.lat && params.lng) {
+            try {
+                const geoRes = await fetch(
+                    `https://nominatim.openstreetmap.org/reverse?lat=${params.lat}&lon=${params.lng}&format=json`,
+                    { headers: { 'User-Agent': 'EnerzeeBot/1.0' } }
+                );
+                const geoData = await geoRes.json();
+                cidadeResolvida = geoData.address?.city
+                    || geoData.address?.town
+                    || geoData.address?.municipality
+                    || params.city;
+                console.log(`🗺️ [GEO] Coordenada resolvida: ${cidadeResolvida}`);
+            } catch(e) {
+                console.log(`⚠️ [GEO] Falha ao resolver cidade, usando coordenada`);
+            }
+        }
 
-const payloadCorrigido = { ...params, city: cidadeResolvida, mode: isMapMode ? 'map' : 'city' };
+        const payloadCorrigido = { ...params, city: cidadeResolvida, mode: isMapMode ? 'map' : 'city' };
 
         console.log(`🚀 [RADAR] Modo: ${payloadCorrigido.mode.toUpperCase()}`);
         console.log(`📍 Alvo: ${params.city} | 🎲 Distribuindo entre ${activeChips.length} chips conectados.`);
-        socket.emit('notification', `📡 Radar ativado! Distribuindo leads para ${activeChips.length} chips...`);
+        
+        // Seta a memória global dizendo que começou
+        isScraperRunning = true;
+        recentScraperLogs = []; 
+        
+        emitLog(`📡 Radar ativado em ${params.city}! O motor está rodando na nuvem. Pode fechar a página se quiser.`);
+        io.emit('scraper_status', { isRunning: true, recentLogs: recentScraperLogs });
 
         try {
             const stopCheck = () => shouldStop;
-            await iniciarVarredura(payloadCorrigido, async (evento) => {
-            if (shouldStop) return;
+            
+            // 👇 FIRE-AND-FORGET: SEM O AWAIT, ELE RODA SOLTO 👇
+            iniciarVarredura(payloadCorrigido, async (evento) => {
+                if (shouldStop) return;
+
+                if (evento.type === 'log') emitLog(evento.data);
 
                 if (evento.type === 'lead') {
                     let lead = evento.data;
-                    
-                    // 🛡️ REINTEGRAÇÃO DA ESTEIRA DE LIMPEZA E ENRIQUECIMENTO
                     const limpos = processarLimpeza([lead]);
                 
                     if (limpos.length > 0 && limpos[0].valido) {
@@ -149,40 +184,49 @@ const payloadCorrigido = { ...params, city: cidadeResolvida, mode: isMapMode ? '
                         const chipSorteado = activeChips[chipCounter % activeChips.length];
                         chipCounter++; 
 
-                        console.log(`🎲 [DISTRIBUIÇÃO] Lead ${leadFinal.name} entregue para o chip: ${chipSorteado.name}`);
+                        emitLog(`🎲 Lead ${leadFinal.name} extraído e entregue para o chip: ${chipSorteado.name}`);
 
-                            const { error: dbError } = await db.saveLead(leadFinal, chipSorteado.id, chipSorteado.user_id);
+                        const { error: dbError } = await db.saveLead(leadFinal, chipSorteado.id, chipSorteado.user_id);
+                        
                         if (dbError) {
                             console.error(`❌ Erro DB (${leadFinal.name}):`, dbError.message);
                             if (!dbError.message.includes('unique')) {
-                                socket.emit('notification', `⚠️ Erro ao registrar: ${leadFinal.name}`);
+                                emitLog(`⚠️ Erro ao registrar: ${leadFinal.name}`);
                             }
                         } else {
-                            socket.emit('new_lead', leadFinal);
+                            // 👇 EMITE PARA TODAS AS ABAS: O lead foi salvo!
+                            io.emit('new_lead', leadFinal);
+                            io.emit('background_lead_saved');
                         }
                     }
                 }
-           
-                }, () => shouldStop);
-    } catch (err) {
-        console.error("🔥 Crash no processo de varredura:", err.message);
-        
-            socket.emit('notification', '❌ O Radar parou devido a uma falha de conexão.');
-            socket.emit('scraping_stopped');
+            }, stopCheck).then(() => {
+                // Finalizou 100%
+                isScraperRunning = false;
+                emitLog("✅ Varredura concluída com sucesso na nuvem.");
+                io.emit('scraper_status', { isRunning: false, recentLogs: recentScraperLogs });
+                io.emit('scraping_stopped');
+            }).catch(err => {
+                console.error("🔥 Crash no processo de varredura:", err.message);
+                isScraperRunning = false;
+                emitLog('❌ O Radar parou devido a uma falha de conexão com a Receita/Google.');
+                io.emit('scraper_status', { isRunning: false, recentLogs: recentScraperLogs });
+                io.emit('scraping_stopped');
+            });
+            
+        } catch (errGeral) {
+            console.error("Erro geral na rota:", errGeral);
+            isScraperRunning = false;
+            io.emit('scraping_stopped');
         }
     });
 
     socket.on('stop_scraping', () => { 
-        console.log("🛑 Comando: Parar Radar.");
+        emitLog("🛑 Comando: Parar Radar Recebido.");
         shouldStop = true; 
+        isScraperRunning = false;
+        io.emit('scraper_status', { isRunning: false, recentLogs: recentScraperLogs });
     });
-    
-   socket.on('remove_instance', async (instanceId) => {
-    sdr.encerrarInstancia(instanceId);
-    await db.removeInstance(instanceId);
-    await atualizarListaInstancias();
-    console.log(`🗑️ Chip ${instanceId} removido e sessão encerrada.`);
-});
 });
 
 app.get(/.*/, (req, res) => {
