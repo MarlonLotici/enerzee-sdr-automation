@@ -19,42 +19,62 @@ const SINONIMOS = {
 const delay = (ms) => new Promise(res => setTimeout(res, ms));
 
 async function buscarBairrosReais(cidade) {
-    console.log(`🗺️ [MAPPING] Iniciando triangulação geográfica para: ${cidade}...`);
-    const fetchOSM = (query) => new Promise((resolve) => {
-        const url = `https://nominatim.openstreetmap.org/search?q=${encodeURIComponent(query)}&country=Brazil&format=json&addressdetails=1&limit=45`;
-        const req = https.get(url, { headers: { 'User-Agent': `EnerzeeBot-V20-${Math.random()}` } }, (res) => {
-            let data = '';
-            res.on('data', c => data += c);
-            res.on('end', () => { try { const parsed = JSON.parse(data); resolve(Array.isArray(parsed) ? parsed : []); } catch { resolve([]); } });
+    console.log(`🧠 [MAPPING] Acionando a IA (Groq Nativo) para extrair as veias de ouro de ${cidade}...`);
+    
+    try {
+        const prompt = `Liste os 25 principais bairros residenciais e comerciais (onde ficam padarias e mercados) da cidade de ${cidade}, Brasil. Retorne APENAS um array JSON válido, sem formatação markdown, sem introdução. Exemplo: ["Centro", "Bosque da Saúde", "CPA I"]`;
+
+        // 🚀 O Segredo: Fetch Nativo! Não usa bibliotecas que dão erro de conexão na Railway.
+        // Bate direto no servidor de ultra-velocidade do Groq.
+        const res = await fetch('https://api.groq.com/openai/v1/chat/completions', {
+            method: 'POST',
+            headers: {
+                'Authorization': `Bearer ${process.env.GROQ_API_KEY}`,
+                'Content-Type': 'application/json'
+            },
+            body: JSON.stringify({
+                model: "llama-3.3-70b-versatile",
+                messages: [{ role: "user", content: prompt }],
+                temperature: 0.1
+            })
         });
-        req.on('error', () => resolve([]));
-    });
 
-    let bairrosSet = new Set();
-    const res1 = await fetchOSM(`bairros em ${cidade}`);
-res1.forEach(item => {
-    const b = item.address?.suburb
-        || item.address?.neighbourhood
-        || item.address?.city_district
-        || item.address?.quarter;
-    if (b && b.length > 3 && !['Centro', 'Jardim', 'Vila', 'Parque'].includes(b)) {
-        bairrosSet.add(b);
+        if (!res.ok) throw new Error(`Erro HTTP: ${res.status}`);
+
+        const data = await res.json();
+        const rawText = data.choices[0].message.content.trim();
+        
+        // Blindagem contra formatação indesejada da IA
+        const cleanJson = rawText.replace(/```json/g, '').replace(/```/g, '').trim();
+        let bairrosList = JSON.parse(cleanJson);
+
+        if (!Array.isArray(bairrosList) || bairrosList.length === 0) {
+            throw new Error("O JSON retornado estava vazio.");
+        }
+
+        console.log(`✅ [MAPPING] SUCESSO! A IA mapeou ${bairrosList.length} bairros cirúrgicos de ${cidade}!`);
+        
+        // Remove limites, ordena e devolve pronto pro motor térmico
+        return bairrosList.sort().map(b => `${b}, ${cidade}`);
+
+    } catch (err) {
+        console.log(`⚠️ [IA] Falha na rede (${err.message}). Acionando Fallback de Ouro.`);
+        
+        // 🛡️ O FALLBACK DE OURO: Se a IA falhar de novo, ele JÁ SABE os bairros de Cuiabá de cor!
+        if (cidade.toLowerCase().includes('cuiab')) {
+            const bairrosCuiaba = [
+                "Bosque da Saúde", "CPA I", "CPA II", "Pedra 90", "Jardim Imperial", 
+                "Jardim das Américas", "Santa Rosa", "Goiabeiras", "Boa Esperança", 
+                "Coxipó", "Tijucal", "Morada do Ouro", "Centro", "Areão", "Quilombo"
+            ];
+            console.log(`✅ [FALLBACK] Carregando ${bairrosCuiaba.length} veias de ouro locais de Cuiabá.`);
+            return bairrosCuiaba.sort().map(b => `${b}, ${cidade}`);
+        }
+        
+        // Se for outra cidade e tudo der errado, ele usa o fatiador padrão
+        const fallback = ['Centro', 'Zona Norte', 'Zona Sul', 'Zona Leste', 'Zona Oeste', 'Distrito Industrial'];
+        return fallback.map(z => `${z}, ${cidade}`);
     }
-});
-
-// Segunda busca mais específica
-const res2 = await fetchOSM(`neighbourhood ${cidade} Brazil`);
-res2.forEach(item => {
-    const b = item.address?.neighbourhood || item.address?.suburb;
-    if (b && b.length > 3) bairrosSet.add(b);
-});
-
-    if (bairrosSet.size === 0) {
-        console.log(`⚠️ [OSM] API limitada. Usando Morfologia Brasileira.`);
-        return [`Centro`, `Jardim`, `Vila`, `Parque`, `Distrito Industrial`].map(z => `${z}, ${cidade}`);
-    }
-    console.log(`✅ [MAPPING] ${bairrosSet.size} bairros detectados.`);
-    return Array.from(bairrosSet).slice(0, 15).map(b => `${b}, ${cidade}`);
 }
 
 async function humanScroll(page) {
@@ -70,8 +90,8 @@ async function humanScroll(page) {
                 if (wrapper.scrollHeight === lastHeight) tentativas++;
                 else tentativas = 0;
                 lastHeight = wrapper.scrollHeight;
-                // Busca até 500 itens para garantir Diadema inteira
-                if (tentativas >= 12 || wrapper.childElementCount > 500) {
+                // 🛡️ Fix: Reduzido para 120 para não estourar a CPU da Railway à toa
+                if (tentativas >= 8 || wrapper.childElementCount > 120) {
                     clearInterval(timer);
                     resolve();
                 }
@@ -81,7 +101,7 @@ async function humanScroll(page) {
 }
 
 async function iniciarVarredura(params, onProgress, shouldStop = () => false) {
-const { city, niche, mode } = params;
+    const { city, niche, mode } = params;
     const sendStatus = (msg) => onProgress({ type: 'status', message: msg });
 
     let termos = [];
@@ -96,96 +116,127 @@ const { city, niche, mode } = params;
     });
     termos = [...new Set(termos)];
 
-    const browser = await puppeteer.launch({
-        headless: true,
-        args: ['--start-maximized', '--no-sandbox']
-    });
-
-    const page = await browser.newPage();
-    await page.setViewport({ width: 1280, height: 900 });
-    
     try {
+        // 1. Pega TODOS os bairros
         let zonas = (mode !== 'map') ? await buscarBairrosReais(city) : [city];
         
-        for (const zona of zonas) {
-    if (shouldStop()) break;
-    for (const termo of termos) {
-        if (shouldStop()) break;
+        // 2. Fatiador de Lotes (Chunks de 5 bairros)
+        const tamanhoLote = 5;
+        const lotes = [];
+        for (let i = 0; i < zonas.length; i += tamanhoLote) {
+            lotes.push(zonas.slice(i, i + tamanhoLote));
+        }
 
-                const query = `${termo}${zona.includes('📍') ? "" : ` em ${zona}`}`;
-                console.log(`📡 [RADAR] Alvo: ${query}`);
-                
-                await page.goto(`https://www.google.com.br/maps/search/${encodeURIComponent(query)}?hl=pt-BR`, { waitUntil: 'networkidle2', timeout: 60000 });                
-                try {
-                    await page.waitForSelector('div[role="feed"]', { timeout: 10000 });
-                    await humanScroll(page);
-                } catch (e) { continue; }
+        console.log(`🔥 [MOTOR] Cidade dividida em ${lotes.length} lotes térmicos para não sobrecarregar a RAM.`);
 
-                const linksLeads = await page.evaluate(() => {
-                    return Array.from(document.querySelectorAll('a[href*="/maps/place/"]')).map(a => a.href);
-                });
+        // 3. Loop dos Lotes (O Reinício Térmico)
+        for (let loteIndex = 0; loteIndex < lotes.length; loteIndex++) {
+            if (shouldStop()) break;
+            
+            const loteAtual = lotes[loteIndex];
+            console.log(`\n🔄 [REINÍCIO TÉRMICO] Iniciando Lote ${loteIndex + 1}/${lotes.length}. RAM zerada!`);
 
-                console.log(`🕵️ [DEBUG] ${linksLeads.length} potenciais em ${zona}. Iniciando extração estável...`);
+            // Inicia o navegador FRESCO para este lote
+            const browser = await puppeteer.launch({
+                headless: "new",
+                executablePath: process.env.PUPPETEER_EXECUTABLE_PATH || null,
+                args: [
+                    '--start-maximized', 
+                    '--no-sandbox', 
+                    '--disable-setuid-sandbox',
+                    '--disable-dev-shm-usage',
+                    '--disable-gpu'
+                ]
+            });
 
-                let lastSavedName = "";
+            try {
+                for (const zona of loteAtual) {
+                    if (shouldStop()) break;
+                    
+                    for (const termo of termos) {
+                        if (shouldStop()) break;
 
-                for (let i = 0; i < linksLeads.length; i++) {
-    if (shouldStop()) break;
-    try {
-                        // 🚀 EVOLUÇÃO: Navega direto para o link. Zero falhas de clique.
-                        await page.goto(linksLeads[i], { waitUntil: 'networkidle2', timeout: 60000 });
-                        await delay(2000); 
+                        const query = `${termo}${zona.includes('📍') ? "" : ` em ${zona}`}`;
+                        console.log(`📡 [RADAR] Alvo: ${query}`);
+                        
+                        const page = await browser.newPage();
+                        await page.setViewport({ width: 1280, height: 900 });
 
-                        const leadInfo = await page.evaluate((urlLead, termoRef, cidadeRef, zonaRef) => {
-                            const nome = document.querySelector('h1')?.innerText || "";
-                            
-                            // 🛡️ FILTRO ANTI-LIXO: Ignora Prefeituras, Municípios e botões
-                            const lixo = ["prefeitura", "município", "resultados", "filtros", "ordenar", "google", "mais"];
-                            if (!nome || nome.length < 3 || lixo.some(word => nome.toLowerCase().includes(word))) return null;
-
-                            const corpo = document.body.innerText;
-                            const matchTel = corpo.match(/(\(?\d{2}\)?\s?)?(9?\d{4}[-\s]?\d{4})/);
-                            if (!matchTel) return null; // Ignora se não tiver telefone
-
-                            let endereco = "Não identificado";
-                            const btnEnd = document.querySelector('button[data-item-id="address"]');
-                            if (btnEnd) endereco = btnEnd.innerText;
-                            // Extrai lat/lng direto da URL — formato /@lat,lng,zoom
-const coordMatch = urlLead.match(/@(-?\d+\.\d+),(-?\d+\.\d+)/);
-
-return {
-    name: nome,
-    niche: termoRef,
-    phone: matchTel[0],
-    address: endereco,
-    city: cidadeRef,
-    bairro: zonaRef.split(',')[0],
-    link: urlLead,
-    lat: coordMatch ? parseFloat(coordMatch[1]) : null,
-    lng: coordMatch ? parseFloat(coordMatch[2]) : null,
-    valido: true
-};
-
-                        }, linksLeads[i], termo, city, zona);
-
-                        // 🛡️ ANTI-REPETIÇÃO: Só salva se o nome for diferente do anterior
-                        if (leadInfo && leadInfo.name !== lastSavedName) {
-                            lastSavedName = leadInfo.name;
-                            console.log(`✅ [EXTRAÍDO] ${leadInfo.name} | ${leadInfo.phone}`);
-                            await onProgress({ type: 'lead', data: leadInfo });
+                        await page.goto(`https://www.google.com.br/maps/search/${encodeURIComponent(query)}?hl=pt-BR`, { waitUntil: 'domcontentloaded', timeout: 60000 });                
+                        try {
+                            await page.waitForSelector('div[role="feed"]', { timeout: 10000 });
+                            await humanScroll(page);
+                        } catch (e) { 
+                            await page.close();
+                            continue; 
                         }
 
-                    } catch (e) {
-                        console.log(`⚠️ Falha no lead ${i + 1}. Pulando...`);
+                        const linksLeads = await page.evaluate(() => {
+                            return Array.from(document.querySelectorAll('a[href*="/maps/place/"]')).map(a => a.href);
+                        });
+
+                        console.log(`🕵️ [DEBUG] ${linksLeads.length} potenciais em ${zona}. Extraindo...`);
+
+                        let lastSavedName = "";
+
+                        for (let i = 0; i < linksLeads.length; i++) {
+                            if (shouldStop()) break;
+                            try {
+                                await page.goto(linksLeads[i], { waitUntil: 'domcontentloaded', timeout: 35000 });
+                                await delay(1500); 
+
+                                const leadInfo = await page.evaluate((urlLead, termoRef, cidadeRef, zonaRef) => {
+                                    const nome = document.querySelector('h1')?.innerText || "";
+                                    
+                                    const lixo = ["prefeitura", "município", "resultados", "filtros", "ordenar", "google", "mais"];
+                                    if (!nome || nome.length < 3 || lixo.some(word => nome.toLowerCase().includes(word))) return null;
+
+                                    const corpo = document.body.innerText;
+                                    const matchTel = corpo.match(/(\(?\d{2}\)?\s?)?(9?\d{4}[-\s]?\d{4})/);
+                                    if (!matchTel) return null;
+
+                                    let endereco = "Não identificado";
+                                    const btnEnd = document.querySelector('button[data-item-id="address"]');
+                                    if (btnEnd) endereco = btnEnd.innerText;
+                                    
+                                    const coordMatch = urlLead.match(/@(-?\d+\.\d+),(-?\d+\.\d+)/);
+
+                                    return {
+                                        name: nome,
+                                        niche: termoRef,
+                                        phone: matchTel[0],
+                                        address: endereco,
+                                        city: cidadeRef,
+                                        bairro: zonaRef.split(',')[0],
+                                        link: urlLead,
+                                        lat: coordMatch ? parseFloat(coordMatch[1]) : null,
+                                        lng: coordMatch ? parseFloat(coordMatch[2]) : null,
+                                        valido: true
+                                    };
+
+                                }, linksLeads[i], termo, city, zona);
+
+                                if (leadInfo && leadInfo.name !== lastSavedName) {
+                                    lastSavedName = leadInfo.name;
+                                    console.log(`✅ [EXTRAÍDO] ${leadInfo.name} | ${leadInfo.phone}`);
+                                    await onProgress({ type: 'lead', data: leadInfo });
+                                }
+                            } catch (e) {
+                                console.log(`⚠️ Falha no lead ${i + 1}. Pulando...`);
+                            }
+                        }
+                        await page.close(); // Fecha a aba após terminar aquele bairro e termo
                     }
                 }
+            } finally {
+                await browser.close(); // MATA O NAVEGADOR E LIMPA A RAM
+                await delay(3000); // Dá 3 segundos pro servidor respirar antes do próximo lote
             }
         }
     } catch (err) {
         console.error("🔥 ERRO NO MOTOR:", err);
     } finally {
-        await browser.close();
-        sendStatus("🏁 Varredura finalizada.");
+        sendStatus("🏁 Varredura 100% da cidade finalizada com segurança.");
     }
 }
 
