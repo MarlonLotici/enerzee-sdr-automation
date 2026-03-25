@@ -911,23 +911,23 @@ async function motorAtaquePorChip(instanceId) {
     // 🛡️ CONTROLE DE CPU: Variável de Backoff Exponencial
     let falhasConsecutivas = 0; 
 
-    // Loop Infinito exclusivo deste chip
     while (true) {
         let currentLeadId = null; 
 
         try {
-            // 1. Trava de Horário (Segurança Anti-Ban)
+            // 🛑 ECONOMIA 1: Fora de hora, dorme 30 min sem nem olhar pro banco
             if (!dentroDaJanelaDeDisparo()) {
-    await delay(60000 * 5); 
-    continue;
-}
-            // 🌟 SAAS DATA: Puxa a identidade e os limites deste chip no banco de dados
+                console.log(`💤 [ECONOMIA] Fora da janela de disparo. Dormindo 30 min...`);
+                await delay(1000 * 60 * 30);
+                continue;
+            }
+
             const instanceData = await db.getInstanceRules(instanceId);
             if (!instanceData) {
-                await delay(10000);
-                continue; // Aguarda o banco responder
+                await delay(60000);
+                continue;
             }
-            
+
             const config = {
                 nome: instanceData.name || `Chip-${instanceId.substring(0, 4)}`,
                 limite: instanceData.daily_limit || 50,
@@ -935,37 +935,45 @@ async function motorAtaquePorChip(instanceId) {
                 empresa: instanceData.company_name || "Enerzee"
             };
 
-            // 2. Busca 1 lead 'new' que pertença EXCLUSIVAMENTE a este chip
+            // 🛑 ECONOMIA 2: Puxa apenas colunas necessárias (Menos Egress)
+            // ✅ ADOÇÃO: Puxa leads deste chip OU leads novos sem dono (null)
             const { data: lead, error } = await supabase
                 .from('leads')
-                .select('*')
+                .select('id, name, whatsapp_id, dono, bairro, instance_id')
                 .eq('status', 'new')
-                .eq('instance_id', instanceId)
-                .order('created_at', { ascending: true }) 
+                .or(`instance_id.eq.${instanceId},instance_id.is.null`)
+                .order('created_at', { ascending: true })
                 .limit(1)
                 .maybeSingle();
 
-            if (error) throw error; // Se der erro de banco, cai pro catch e ativa o Backoff de proteção
+            if (error) throw error;
 
             if (!lead) {
-                falhasConsecutivas = 0; // O banco respondeu bem, só não tem lead na fila. Zera as falhas.
-                await delay(30000); 
+                // 🛑 ECONOMIA 3: Fila vazia, espera 5 min em vez de 30s
+                console.log(`🌕 [${config.nome}] Sem leads novos. Próxima checagem em 5 min...`);
+                await delay(1000 * 60 * 5); 
                 continue;
             }
 
             currentLeadId = lead.id;
 
-            // 3. Trava de Processamento Duplo
+            // Trava de Processamento Duplo
             if (leadsEmProcessamento.has(lead.id)) { 
                 await delay(5000); 
                 continue; 
             }
 
-            // 4. Checa Limite Diário do Chip
+            // ✅ ADOÇÃO REAL: Se o lead era órfão, o chip assume a paternidade agora no banco
+            if (!lead.instance_id) {
+                await supabase.from('leads').update({ instance_id: instanceId }).eq('id', lead.id);
+                console.log(`👶 [ADOÇÃO] Chip ${config.nome} assumiu o lead: ${lead.name}`);
+            }
+
+            // Checa Limite Diário
             const enviosHoje = await db.getDailyContactCount(instanceId);
             if (enviosHoje >= config.limite) {
-                console.log(`🌙 [METAS] ${config.nome} atingiu o limite de ${config.limite} disparos hoje. Dormindo por 30 minutos.`);
-                await delay(1800000); // 30 minutos
+                console.log(`🌙 [METAS] ${config.nome} atingiu o limite de ${config.limite}. Dormindo 30 min...`);
+                await delay(1800000);
                 continue;
             }
 
