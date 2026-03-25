@@ -51,7 +51,7 @@ const supabase = createClient(
     import.meta.env.VITE_SUPABASE_URL, 
     import.meta.env.VITE_SUPABASE_ANON_KEY
 )
-    // --- COMPONENTES AUXILIARES DO MAPA ---
+    // --- COMPONENTES AUXILIARES DO MAPA --- //mudança
 function MapController({ center }) {
     const map = useMap();
     useEffect(() => { 

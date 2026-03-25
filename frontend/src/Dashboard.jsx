@@ -11,9 +11,10 @@ import {
     BarChart2, Activity, AlertTriangle
 } from 'lucide-react'
 
+// FORMA CORRETA - ALTA PERFORMANCE
 const supabase = createClient(
-    "https://vptfedhzynyhvhrlcfqd.supabase.co",
-    "sb_publishable_T0-4c2bm3I5lNTw7tUGmcg_xVInIQKR"
+    import.meta.env.VITE_SUPABASE_URL, 
+    import.meta.env.VITE_SUPABASE_ANON_KEY
 )
 
 // ============================================================
