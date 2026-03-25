@@ -46,8 +46,11 @@ const playNotificationSound = () => {
 import { createClient } from '@supabase/supabase-js'
 
 // --- CONFIGURAÇÃO ---
-const supabase = createClient("https://vptfedhzynyhvhrlcfqd.supabase.co", "sb_publishable_T0-4c2bm3I5lNTw7tUGmcg_xVInIQKR")
-
+// LINHA 62 CORRIGIDA:
+const supabase = createClient(
+    import.meta.env.VITE_SUPABASE_URL, 
+    import.meta.env.VITE_SUPABASE_ANON_KEY
+)
     // --- COMPONENTES AUXILIARES DO MAPA ---
 function MapController({ center }) {
     const map = useMap();
