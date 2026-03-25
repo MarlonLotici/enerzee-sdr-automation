@@ -2,10 +2,10 @@ import React, { useState, useEffect, useCallback } from 'react'
 import { createClient } from '@supabase/supabase-js'
 import { Cpu, Wifi, WifiOff, Loader2, RefreshCw, Zap, User, Building2, Target, Clock } from 'lucide-react'
 
-// ─── SUPABASE (mesmas credenciais do App.jsx) ─────────────────────────────────
+// FORMA CORRETA - ALTA PERFORMANCE
 const supabase = createClient(
-    'https://vptfedhzynyhvhrlcfqd.supabase.co',
-    'sb_publishable_T0-4c2bm3I5lNTw7tUGmcg_xVInIQKR'
+    import.meta.env.VITE_SUPABASE_URL, 
+    import.meta.env.VITE_SUPABASE_ANON_KEY
 )
 
 // ─── PALETA ───────────────────────────────────────────────────────────────────
