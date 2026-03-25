@@ -185,12 +185,11 @@ Você não dá aulas técnicas sobre leis. Você ENSINA que comércios do porte 
 ESTA É A ESPINHA DORSAL DA CONVERSA. Antes de gerar qualquer palavra, analise o histórico, descubra em qual estágio o lead está e avance APENAS UM ESTÁGIO por vez. PROIBIDO pular etapas ou revelar a solução antes de causar a dor.
 
 [ESTÁGIO 1 — SITUAÇÃO / INVESTIGAÇÃO DO PROBLEMA]
-Gatilho: O lead respondeu à sua isca inicial (ex: "Oi", "Não ativamos", "Que isenção?").
-Ação: NÃO revele a solução ainda. NÃO fale de WEG ou Lei 14.300. Crie o problema (tarifa cheia) e puxe a qualificação.
-Balão 1: "Pois é, a gente tá identificando que a maioria dos comércios aqui da região tá pagando a tarifa cheia da concessionária à toa."
+Gatilho: O lead respondeu à isca da Tarifa Digital (ex: "Como funciona?", "Que tarifa?", "Pago 100%").
+Ação: Reforce que a concessionária dificulta o acesso para lucrar no silêncio. Peça o valor da conta para qualificar.
+Balão 1: "Pois é, o pessoal da concessionária dificulta o acesso porque pra eles é melhor vc continuar na tarifa cheia sem o benefício."
 [QUEBRA]
-Balão 2: Balão 2: "Só pra eu ver se a ${nomeEmpresa} se enquadra na regra de isenção, a conta de luz aí hoje costuma passar de ${ancoraConta}?"
-ATENÇÃO: Se ele já disser o valor da conta na primeira resposta, PULE para o ESTÁGIO 2. Se o lead disse apenas: sim/um pouco/ou qualquer resposta vaga PERGUNTE O VALOR.
+Balão 2: "Só pra eu confirmar se a ${nomeEmpresa} já tem o teto de consumo liberado, a conta de luz aí hoje costuma passar de ${ancoraConta}?"
 
 [ESTÁGIO 2 — IMPLICAÇÃO / GIRANDO A FACA (A DOR)]
 Gatilho: Lead informou o valor aproximado da conta (ex: "vem uns 1500", "acima de 2 mil", "uns 900").
@@ -1066,13 +1065,36 @@ async function motorAtaquePorChip(instanceId) {
            // 2. GATILHO DE ABORDAGEM INDIRETA (Aumenta a taxa de resposta baixando a guarda)
            
       // 2. GATILHO DE ABORDAGEM INDIRETA E FILTRO DE RESPONSABILIDADE
+const MAPA_CONCESSIONARIAS = {
+    'MT': 'Energisa',
+    'MS': 'Energisa',
+    'SC': 'Celesc',
+    'PR': 'Copel',
+    'RS': 'RGE/Ceee',
+    'BA': 'Coelba',
+    'PE': 'Neoenergia',
+    'MG': 'Cemig',
+    'CE': 'Enel',
+    'PA': 'Equatorial',
+    'GO': 'Equatorial',
+    'RJ': 'Light/Enel',
+    'SP': 'Enel/CPFL'
+};
+
+// 1. Identifica a UF (Vem do enriquecimento do CNPJ ou Scraper)
+const ufLead = lead.estado || 'seu estado'; 
+
+// 2. Busca o nome da empresa local ou usa um termo genérico como fallback
+const concessionariaLocal = MAPA_CONCESSIONARIAS[ufLead] || 'concessionária de energia';
+
+// 3. Montagem da Isca V12
 const saudacaoInicial = primeiroNomeDono
-    ? `Opa, tudo bem? Aqui é o ${config.agente}. Esse contato é direto do ${primeiroNomeDono} ou do responsável pela ${nomeEmpresa}?`
-    : `Opa, tudo bem? Aqui é o ${config.agente} da ${config.empresa}.`;
+    ? `Oi ${primeiroNomeDono}, tudo bem? Vi o cadastro da ${nomeEmpresa} aqui.`
+    : `Opa, tudo bem? Vi o cadastro da ${nomeEmpresa} aqui.`;
 
-const localRef = lead.bairro ? `aí no ${lead.bairro}` : `aí na região`;
+const localRef = lead.bairro ? `aí de ${lead.bairro}` : `aí da região`;
 
-const novaSaudacao = `${saudacaoInicial} [QUEBRA] A gente tá fazendo um mapeamento de custos fixos dos comércios ${localRef} e cruzando com o CNPJ de vcs, vi que a empresa talvez se enquadre numa isenção tarifária nova. Vcs já ativaram esse benefício?`;            
+const novaSaudacao = `${saudacaoInicial} [QUEBRA] Notei que vocês ainda não solicitaram a portabilidade para a Tarifa Digital liberada para o comércio ${localRef}. A ${concessionariaLocal} não avisa, mas vocês já podem parar de pagar a tarifa cheia. Vocês já estão recebendo o desconto da usina ou ainda pagam 100% da conta de luz?`;
 
            // 12. Fatiador de Balões com Trava Anti-Engasgo e Limite de 2 Balões
             const mensagensSplit = novaSaudacao.split('[QUEBRA]')
