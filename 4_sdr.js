@@ -128,7 +128,7 @@ async function gerarRespostaIA(historico, contextoLead, instanceData) {
 
     // Perfilamento Financeiro (High Ticket vs Mass Market)
     const isBigFish = (contextoLead.capital_social_numeric > 500000);
-    
+    const ancoraConta = isBigFish ? "R$ 3.000" : "R$ 700";
     // Definição de Arquétipo de Venda
     const perfilComportamental = isBigFish 
         ? "ARQUÉTIPO: O BANQUEIRO DE INVESTIMENTOS. Tom: Direto, focado em EBITDA, Redução de OPEX e Zero CAPEX." 
@@ -176,7 +176,7 @@ Você não dá aulas técnicas sobre leis. Você ENSINA que comércios do porte 
    Responda APENAS: "Entendi! Como a ${nomeEmpresa} já possui compensação ativa, a regulação da ANEEL não permite acumular dois benefícios. Parabéns pela gestão energética!" e ENCERRE.
 
 4. FLEXIBILIDADE DO FUNIL (REGRA DO ELÁSTICO): Clientes reais pulam etapas. Se o lead perguntar "quanto custa?" ou "tem obra?" logo de cara, NÃO seja robótico. Responda a dúvida dele em 1 frase (ex: "é zero custo de adesão e sem obra") e, logo depois (usando [QUEBRA]), puxe a conversa de volta com a pergunta de diagnóstico do funil (ex: valor da conta).
-
+5. FILTRO DE IDENTIDADE: Se o lead disser que a pessoa procurada não está, não trabalha lá ou que é apenas um funcionário, responda absorvendo a informação e avançando: "Sem problemas! Consegue me colocar em contato com o responsável? (se a pessoa indicar que é mulher trate como a responsável, se indicar que é homem trate como o responsável) 
 ---
 
 
@@ -189,7 +189,7 @@ Gatilho: O lead respondeu à sua isca inicial (ex: "Oi", "Não ativamos", "Que i
 Ação: NÃO revele a solução ainda. NÃO fale de WEG ou Lei 14.300. Crie o problema (tarifa cheia) e puxe a qualificação.
 Balão 1: "Pois é, a gente tá identificando que a maioria dos comércios aqui da região tá pagando a tarifa cheia da concessionária à toa."
 [QUEBRA]
-Balão 2: "Só pra eu ver se a ${nomeEmpresa} se enquadra na regra de isenção, a conta de luz aí hoje costuma passar de R$ 700?"
+Balão 2: Balão 2: "Só pra eu ver se a ${nomeEmpresa} se enquadra na regra de isenção, a conta de luz aí hoje costuma passar de ${ancoraConta}?"
 ATENÇÃO: Se ele já disser o valor da conta na primeira resposta, PULE para o ESTÁGIO 2. Se o lead disse apenas: sim/um pouco/ou qualquer resposta vaga PERGUNTE O VALOR.
 
 [ESTÁGIO 2 — IMPLICAÇÃO / GIRANDO A FACA (A DOR)]
@@ -1057,17 +1057,14 @@ async function motorAtaquePorChip(instanceId) {
 
            // 2. GATILHO DE ABORDAGEM INDIRETA (Aumenta a taxa de resposta baixando a guarda)
            
-           const saudacaoInicial = primeiroNomeDono
-    ? `Opa ${primeiroNomeDono}, tudo bem?`
-    : `Opa, tudo bem?`;
+      // 2. GATILHO DE ABORDAGEM INDIRETA E FILTRO DE RESPONSABILIDADE
+const saudacaoInicial = primeiroNomeDono
+    ? `Opa, tudo bem? Aqui é o ${config.agente}. Esse contato é direto do ${primeiroNomeDono} ou do responsável pela ${nomeEmpresa}?`
+    : `Opa, tudo bem? Aqui é o ${config.agente} da ${config.empresa}.`;
 
-           // Usa bairro real do CNPJ se tiver
-const localRef = lead.bairro
-    ? `aí no ${lead.bairro}`
-    : `aí na região`;
+const localRef = lead.bairro ? `aí no ${lead.bairro}` : `aí na região`;
 
-// 👇 A NOVA ISCA CHALLENGER: Foco em dor (custo fixo) e benefício (isenção) 👇
-const novaSaudacao = `${saudacaoInicial} [QUEBRA] Aqui é o ${config.agente}. A gente tá fazendo um mapeamento de custos fixos dos comércios ${localRef} e vi que a ${nomeEmpresa} se enquadra numa isenção tarifária nova. Vcs já ativaram esse benefício aí?`;            
+const novaSaudacao = `${saudacaoInicial} [QUEBRA] A gente tá fazendo um mapeamento de custos fixos dos comércios ${localRef} e cruzando com o CNPJ de vcs, vi que a empresa talvez se enquadre numa isenção tarifária nova. Vcs já ativaram esse benefício?`;            
 
            // 12. Fatiador de Balões com Trava Anti-Engasgo e Limite de 2 Balões
             const mensagensSplit = novaSaudacao.split('[QUEBRA]')
