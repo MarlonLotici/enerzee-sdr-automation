@@ -947,6 +947,12 @@ async function motorAtaquePorChip(instanceId) {
 
             const instanceData = await db.getInstanceRules(instanceId);
             if (!instanceData || instanceData.whatsapp_status !== 'CONNECTED') {
+                const instanceData = await db.getInstanceRules(instanceId);
+if (!instanceData || instanceData.whatsapp_status !== 'CONNECTED') {
+    console.log(`🔕 [MOTOR SILENCIADO] Chip ${instanceId} ignorado. Status no banco está: ${instanceData?.whatsapp_status}`);
+    await delay(60000);
+    continue;
+}
                 await delay(60000);
                 continue;
             }
