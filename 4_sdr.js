@@ -20,6 +20,18 @@ const pdf = require('pdf-parse');
 const db = require('./database');
 const { createClient } = require('@supabase/supabase-js');
 const motoresEmExecucao = new Set(); // 🛡️ Impede que o mesmo chip ligue dois loops infinitos
+const MAPA_CONCESSIONARIAS = {
+    'MT': 'Energisa', 'MS': 'Energisa', 'SC': 'Celesc', 'PR': 'Copel',
+    'RS': 'RGE/Ceee', 'BA': 'Coelba', 'PE': 'Neoenergia', 'MG': 'Cemig',
+    'CE': 'Enel', 'PA': 'Equatorial', 'GO': 'Equatorial', 'RJ': 'Light/Enel', 'SP': 'Enel/CPFL'
+};
+
+function identificarArtigo(nome) {
+    if (!nome) return "do responsável pela";
+    const nomeLimpo = nome.trim().toLowerCase();
+    const ehFeminino = nomeLimpo.endsWith('a') || nomeLimpo.endsWith('as');
+    return ehFeminino ? `da ${nome}` : `do ${nome}`;
+}
 // --- CONFIGURAÇÃO E SEGURANÇA ---
 const supabase = createClient(process.env.SUPABASE_URL, process.env.SUPABASE_KEY);
 const { OpenAI } = require('openai');
@@ -92,7 +104,7 @@ Responda APENAS a tag, nada mais.
 
 Mensagem: ${historico}`;
     try {
-        const res = await groq.chat.completions.create({
+        const res = await together.chat.completions.create({
             messages: [{ role: 'user', content: prompt }],
             model: MODELO_CEREBRO,
             temperature: 0
@@ -112,6 +124,7 @@ Mensagem: ${historico}`;
 // ============================================================================
 
 async function gerarRespostaIA(historico, contextoLead, instanceData) {
+    const concessionariaLocal = MAPA_CONCESSIONARIAS[contextoLead.estado] || 'concessionária de energia';
     // 1. ANÁLISE DE DADOS E CONTEXTO (Data Intelligence)
     const nomeLead = (contextoLead.dono && typeof contextoLead.dono === 'string') 
         ? contextoLead.dono.split(' ')[0] 
@@ -904,14 +917,14 @@ const chipsEsgotadosHoje = new Set();
 let dataControleLimites = new Date().toISOString().split('T')[0];
 
 async function motorAtaquePorChip(instanceId) {
-    // 🛡️ TRAVA DE INSTÂNCIA: Garante que apenas um loop por chip existe
+    // 🛡️ TRAVA DE INSTÂNCIA ÚNICA (CORRIGIDA: Só aparece uma vez!)
     if (motoresEmExecucao.has(instanceId)) {
-        console.log(`⚠️ [TRAVA] Motor do chip ${instanceId} já está em execução. Ignorando chamada duplicada.`);
+        console.log(`⚠️ [TRAVA] Motor ${instanceId} já rodando. Ignorando duplicata.`);
         return;
     }
     motoresEmExecucao.add(instanceId);
     console.log(`🚀 [MOTOR] Loop iniciado para chip ${instanceId}`);
-
+    
     // ⏰ DESPERTADOR: Limpa o cache de chips esgotados se virou o dia
     const hojeAgora = new Date().toISOString().split('T')[0];
     if (dataControleLimites !== hojeAgora) {
@@ -920,15 +933,12 @@ async function motorAtaquePorChip(instanceId) {
         console.log(`🌅 [NOVO DIA] Metas diárias zeradas. Chips acordados!`);
     }
 
-   
-    // 🛡️ CONTROLE DE CPU: Variável de Backoff Exponencial
     let falhasConsecutivas = 0; 
 
     while (true) {
         let currentLeadId = null; 
 
         try {
-            // 🛑 ECONOMIA 1: Fora de hora, dorme 30 min sem nem olhar pro banco
             if (!dentroDaJanelaDeDisparo()) {
                 console.log(`💤 [ECONOMIA] Fora da janela de disparo. Dormindo 30 min...`);
                 await delay(1000 * 60 * 30);
@@ -936,7 +946,7 @@ async function motorAtaquePorChip(instanceId) {
             }
 
             const instanceData = await db.getInstanceRules(instanceId);
-            if (!instanceData) {
+            if (!instanceData || instanceData.whatsapp_status !== 'CONNECTED') {
                 await delay(60000);
                 continue;
             }
@@ -948,11 +958,9 @@ async function motorAtaquePorChip(instanceId) {
                 empresa: instanceData.company_name || "Enerzee"
             };
 
-            // 🛑 ECONOMIA 2: Puxa apenas colunas necessárias (Menos Egress)
-            // ✅ ADOÇÃO: Puxa leads deste chip OU leads novos sem dono (null)
             const { data: lead, error } = await supabase
                 .from('leads')
-                .select('id, name, whatsapp_id, dono, bairro, instance_id')
+                .select('id, name, whatsapp_id, dono, bairro, instance_id, estado')
                 .eq('status', 'new')
                 .or(`instance_id.eq.${instanceId},instance_id.is.null`)
                 .order('created_at', { ascending: true })
@@ -962,7 +970,6 @@ async function motorAtaquePorChip(instanceId) {
             if (error) throw error;
 
             if (!lead) {
-                // 🛑 ECONOMIA 3: Fila vazia, espera 5 min em vez de 30s
                 console.log(`🌕 [${config.nome}] Sem leads novos. Próxima checagem em 5 min...`);
                 await delay(1000 * 60 * 5); 
                 continue;
@@ -970,88 +977,61 @@ async function motorAtaquePorChip(instanceId) {
 
             currentLeadId = lead.id;
 
-            // Trava de Processamento Duplo
+            // ⚡ 1. TRAVA RELÂMPAGO NO BANCO
+            await supabase.from('leads').update({ status: 'reservado', instance_id: instanceId }).eq('id', lead.id);
+
+            // 🛡️ 2. TRAVA NA MEMÓRIA
             if (leadsEmProcessamento.has(lead.id)) { 
                 await delay(5000); 
                 continue; 
             }
+            leadsEmProcessamento.add(lead.id);
 
-            // ✅ ADOÇÃO REAL: Se o lead era órfão, o chip assume a paternidade agora no banco
-            if (!lead.instance_id) {
-                await supabase.from('leads').update({ instance_id: instanceId }).eq('id', lead.id);
-                console.log(`👶 [ADOÇÃO] Chip ${config.nome} assumiu o lead: ${lead.name}`);
-            }
-
-            // Checa Limite Diário
+            // 🎯 3. CHECA LIMITE DIÁRIO
             const enviosHoje = await db.getDailyContactCount(instanceId);
             if (enviosHoje >= config.limite) {
                 console.log(`🌙 [METAS] ${config.nome} atingiu o limite de ${config.limite}. Dormindo 30 min...`);
                 await delay(1800000);
-                continue;
-            }
-
-            // 5. Checagem de Blacklist 
-            const estaNaBlacklist = await db.isBlacklisted(lead.whatsapp_id);
-            if (estaNaBlacklist) {
-                console.log(`🚫 [BLACKLIST] Lead ${lead.name} restrito. Abortando...`);
-                await supabase.from('leads').update({ status: 'blacklisted' }).eq('id', lead.id);
-                continue; 
-            }
-
-            // Bloqueia na memória E no banco imediatamente (Anti Race Condition)
-            leadsEmProcessamento.add(lead.id);
-            await supabase.from('leads')
-                .update({ status: 'reservado', instance_id: instanceId })
-                .eq('id', lead.id)
-                .eq('status', 'new'); // Só atualiza se ainda for 'new' (trava otimista)
-
-            // Confirma que conseguiu reservar (outro motor pode ter pegado antes)
-            const { data: leadConfirmado } = await supabase
-                .from('leads')
-                .select('status, instance_id')
-                .eq('id', lead.id)
-                .single();
-
-            if (!leadConfirmado || leadConfirmado.status !== 'reservado' || leadConfirmado.instance_id !== instanceId) {
-                console.log(`⚔️ [CONFLITO] Lead ${lead.name} já foi reservado por outro motor. Pulando...`);
                 leadsEmProcessamento.delete(lead.id);
                 continue;
             }
 
-            // 6. Jitter Sequencial
-            const jitter = Math.random() * 180000 + 180000;
-            console.log(`🎯 [${config.nome}] Mirando em: ${lead.name} (${enviosHoje + 1}/${config.limite}). Aguardando ${Math.round(jitter/1000)}s...`);
-            await delay(jitter);
+            // 🚫 4. CHECA BLACKLIST
+            const estaNaBlacklist = await db.isBlacklisted(lead.whatsapp_id);
+            if (estaNaBlacklist) {
+                console.log(`🚫 [BLACKLIST] Lead ${lead.name} restrito. Abortando...`);
+                await supabase.from('leads').update({ status: 'blacklisted' }).eq('id', lead.id);
+                leadsEmProcessamento.delete(lead.id);
+                continue; 
+            }
 
-            // 7. Verificação de Saúde da Conexão
+            // ⚡ 5. VALIDAÇÃO RÁPIDA DE ZAP (Mata os leads ruins em segundos)
             const instancia = sessions.get(instanceId);
             if (!instancia || !instancia.ready) {
-                console.log(`❌ [FALHA SILENCIOSA] ${config.nome} não está com o canal pronto. Reagendando lead...`);
+                console.log(`❌ [FALHA SILENCIOSA] ${config.nome} não está com o canal pronto.`);
+                await supabase.from('leads').update({ status: 'new' }).eq('id', lead.id);
                 leadsEmProcessamento.delete(lead.id);
                 await delay(10000);
                 continue;
             }
 
-            // 8. Verificação de Histórico
             const hist = await db.getHistory(lead.whatsapp_id, instanceId);
-            if (hist && hist.length > 0) {
-                console.log(`⚠️ [ABORTADO] ${lead.name} já possui histórico. O SDR não manda saudação dupla! Pulando...`);
-                await supabase.from('leads').update({ status: 'contact' }).eq('id', lead.id);
-                leadsEmProcessamento.delete(lead.id);
-                continue;
-            }
-
-            // 9. Validação de Identidade (Anti-Vácuo)
             const [result] = await instancia.sock.onWhatsApp(lead.whatsapp_id);
             
-            if (!result || !result.exists) {
-                console.log(`🚫 [NÚMERO INVÁLIDO] ${lead.name} não tem WhatsApp. Pulando...`);
-                await supabase.from('leads').update({ status: 'invalid' }).eq('id', lead.id);
+            if (!result?.exists || (hist && hist.length > 0)) {
+                console.log(`⏩ [PULO RÁPIDO] Lead ${lead.name} inválido ou já contactado. Ignorando.`);
+                await supabase.from('leads').update({ status: hist?.length > 0 ? 'contact' : 'invalid' }).eq('id', lead.id);
                 leadsEmProcessamento.delete(lead.id);
+                await delay(2000); 
                 continue;
             }
 
-            // 10. Limpeza Profunda de LID e JID
+            // ⏳ 6. JITTER SEQUENCIAL (Só agora ele espera, porque o lead é ouro puro)
+            const jitter = Math.random() * 180000 + 120000;
+            console.log(`🎯 [${config.nome}] Mirando em: ${lead.name} (${enviosHoje + 1}/${config.limite}). Aguardando ${Math.round(jitter/1000)}s...`);
+            await delay(jitter);
+
+            // 7. Limpeza de LID/JID
             let cleanLid = null;
             if (result.lid) {
                 cleanLid = result.lid.split(':')[0].split('@')[0] + '@lid';
@@ -1060,91 +1040,43 @@ async function motorAtaquePorChip(instanceId) {
 
             const cleanJid = result.jid.split(':')[0].split('@')[0] + '@s.whatsapp.net';
             if (lead.whatsapp_id !== cleanJid) {
-                console.log(`🔄 [AJUSTE DE ROTA] Corrigindo 9º dígito: ${lead.whatsapp_id} -> ${cleanJid}`);
                 await supabase.from('leads').update({ whatsapp_id: cleanJid }).eq('id', lead.id);
                 lead.whatsapp_id = cleanJid;
             }
 
-            // PLANO B: Se o onWhatsApp falhou em trazer o LID
-            if (result.exists && !cleanLid) {
-                try {
-                    const [contact] = await instancia.sock.getContact(cleanJid);
-                    if (contact && contact.lid) {
-                        cleanLid = contact.lid.split(':')[0].split('@')[0] + '@lid';
-                        await supabase.from('leads').update({ whatsapp_lid: cleanLid }).eq('id', lead.id);
-                    }
-                } catch (e) { /* Ignora se falhar */ }
-            }
-
-            // 11. Saudação Dinâmica e Humanizada (V36 - MS)
+            // 8. MONTAGEM DA SAUDAÇÃO (Com regra do/da)
             console.log(`🚀 [DISPARANDO] ${config.nome} enviando saudação para ${lead.name}...`);
-            
             await instancia.sock.sendPresenceUpdate('composing', cleanJid);
             await delay(Math.random() * 4000 + 4000); 
             await instancia.sock.sendPresenceUpdate('paused', cleanJid);
 
-          // 1. VARIÁVEIS DINÂMICAS (Agora usa os dados do banco SaaS)
             let primeiroNomeDono = null;
+            let preposicaoNome = "do responsável pela";
+
             if (lead.dono && lead.dono.trim().length > 2) {
-                const nomeSujo = lead.dono.trim().split(' ')[0].toLowerCase();
-                primeiroNomeDono = nomeSujo.charAt(0).toUpperCase() + nomeSujo.slice(1);
+                primeiroNomeDono = lead.dono.trim().split(' ')[0].toLowerCase();
+                primeiroNomeDono = primeiroNomeDono.charAt(0).toUpperCase() + primeiroNomeDono.slice(1);
+                preposicaoNome = identificarArtigo(primeiroNomeDono);
             }
             
-            const bairroLead = lead.bairro ? `no bairro ${lead.bairro}` : "aí na região";
+            const ufLead = lead.estado || 'seu estado'; 
+            const concessionariaLocal = MAPA_CONCESSIONARIAS[ufLead] || 'concessionária de energia';
             const nomeEmpresa = lead.name ? lead.name.replace(/\s(LTDA|ME|EIRELI|S\.A|LIMITED)\b/gi, '').trim() : "sua empresa";
 
-           // 2. GATILHO DE ABORDAGEM INDIRETA (Aumenta a taxa de resposta baixando a guarda)
-           
-      // 2. GATILHO DE ABORDAGEM INDIRETA E FILTRO DE RESPONSABILIDADE
-const MAPA_CONCESSIONARIAS = {
-    'MT': 'Energisa',
-    'MS': 'Energisa',
-    'SC': 'Celesc',
-    'PR': 'Copel',
-    'RS': 'RGE/Ceee',
-    'BA': 'Coelba',
-    'PE': 'Neoenergia',
-    'MG': 'Cemig',
-    'CE': 'Enel',
-    'PA': 'Equatorial',
-    'GO': 'Equatorial',
-    'RJ': 'Light/Enel',
-    'SP': 'Enel/CPFL'
-};
-
-// 1. Identifica a UF (Vem do enriquecimento do CNPJ ou Scraper)
-const ufLead = lead.estado || 'seu estado'; 
-
-// 2. Busca o nome da empresa local ou usa um termo genérico como fallback
-const concessionariaLocal = MAPA_CONCESSIONARIAS[ufLead] || 'concessionária de energia';
-
-// 3. Montagem da Isca V12
             const saudacaoInicial = primeiroNomeDono
-    ? `Oi ${primeiroNomeDono}, tudo certo?`
-    : `Opa, tudo certo? Falo com o responsável pela ${nomeEmpresa}?`;
+                ? `Oi ${primeiroNomeDono}, tudo certo? Aqui é o ${config.agente}. Esse contato é direto ${preposicaoNome} ou falo com o responsável pela ${nomeEmpresa}?`
+                : `Opa, tudo certo? Aqui é o ${config.agente}. Falo com o responsável pela ${nomeEmpresa}?`;
 
-const localRef = lead.bairro ? `aí no ${lead.bairro}` : `aí na região`;
+            const localRef = lead.bairro ? `aí no ${lead.bairro}` : `aí na região`;
+            const novaSaudacao = `${saudacaoInicial} [QUEBRA] Vi o cadastro de vcs num levantamento ${localRef}. A ${concessionariaLocal} vem cobrando uma tarifa que já podia ter caído, mas não avisa. Vocês já pagam com desconto ou ainda vem a conta cheia?`;
 
-const novaSaudacao = `${saudacaoInicial} [QUEBRA] Aqui é o Marlon. Vi o cadastro da ${nomeEmpresa} num levantamento que fizemos ${localRef} — a ${concessionariaLocal} vem cobrando uma tarifa que já podia ter sido reduzida faz tempo e a maioria dos comércios não sabe disso. Vocês já estão pagando menos ou ainda vem a conta cheia todo mês?`;
-// 12. Fatiador de Balões com Trava Anti-Engasgo e Limite de 2 Balões
-            const mensagensSplit = novaSaudacao.split('[QUEBRA]')
-                .map(t => t.trim())
-                .filter(t => t.length > 0)
-                .slice(0, 2); // 🛡️ TRAVA RIGOROSA: Máximo de 2 balões na abordagem inicial
+            // 9. FATIADOR HUMANO E ENVIO
+            const mensagensSplit = novaSaudacao.split('[QUEBRA]').map(t => t.trim()).filter(t => t.length > 0).slice(0, 2); 
             
             for (let i = 0; i < mensagensSplit.length; i++) {
-                
-                // 🛑 CHECAGEM DE INTERRUPÇÃO (Prevenção contra Bots de atendimento)
-                const { data: checkMsg } = await supabase
-                    .from('messages')
-                    .select('role')
-                    .eq('whatsapp_id', cleanJid)
-                    .order('created_at', { ascending: false })
-                    .limit(1)
-                    .maybeSingle();
-
+                const { data: checkMsg } = await supabase.from('messages').select('role').eq('whatsapp_id', cleanJid).order('created_at', { ascending: false }).limit(1).maybeSingle();
                 if (checkMsg && checkMsg.role === 'user') {
-                    console.log(`🛑 [INTERRUPÇÃO] Lead ${lead.name} respondeu rápido. Abortando os próximos balões da saudação.`);
+                    console.log(`🛑 [INTERRUPÇÃO] Lead respondeu rápido. Abortando.`);
                     break; 
                 }
 
@@ -1163,43 +1095,25 @@ const novaSaudacao = `${saudacaoInicial} [QUEBRA] Aqui é o Marlon. Vi o cadastr
                 }
             }
 
-
-            // 13. Conclusão de Sucesso
-            await supabase.from('leads').update({ 
-                status: 'contact', 
-                last_contact_at: new Date().toISOString() 
-            }).eq('id', lead.id);
-
-            console.log(`✅ [SUCESSO REAL] Mensagem entregue por ${config.nome} para ${lead.name}!`);
-
-            // Libera o lead da memória
+            // 10. CONCLUSÃO E SUCESSO
+            await supabase.from('leads').update({ status: 'contact', last_contact_at: new Date().toISOString() }).eq('id', lead.id);
+            console.log(`✅ [SUCESSO REAL] Entregue por ${config.nome} para ${lead.name}!`);
             leadsEmProcessamento.delete(lead.id);
-
-            // 🛡️ SUCESSO! Zera o contador de falhas de CPU
             falhasConsecutivas = 0;
 
-                 } catch (err) {
-    console.error(`❌ Erro no motor do chip ${instanceId}:`, err.message);
-    if (currentLeadId) {
-        leadsEmProcessamento.delete(currentLeadId);
-        // Reverte 'reservado' para 'new' se falhou antes de disparar
-        await supabase.from('leads')
-            .update({ status: 'new' })
-            .eq('id', currentLeadId)
-            .eq('status', 'reservado');
-    }
-    // Se erro fatal, remove a trava para permitir reinício
-    if (err.message?.includes('Connection') || err.message?.includes('Socket')) {
-        motoresEmExecucao.delete(instanceId);
-        console.log(`🔄 [MOTOR] Trava liberada para chip ${instanceId} por erro de conexão.`);
-    }
-            // 🛡️ PROTEÇÃO DE CPU: BACKOFF EXPONENCIAL
-            falhasConsecutivas++;
-            const tempoEspera = Math.min(10000 * Math.pow(2, falhasConsecutivas - 1), 300000); 
-            console.log(`⏸️ [CONTROLE CPU] Pausando motor por ${tempoEspera / 1000}s para evitar sobrecarga...`);
-            
-            await delay(tempoEspera); 
-        }
+        } catch (err) {
+            console.error(`❌ Erro no motor do chip ${instanceId}:`, err.message);
+            if (currentLeadId) {
+                leadsEmProcessamento.delete(currentLeadId);
+                await supabase.from('leads').update({ status: 'new' }).eq('id', currentLeadId).eq('status', 'reservado');
+            }
+            if (err.message?.includes('Connection') || err.message?.includes('Socket')) {
+                motoresEmExecucao.delete(instanceId);
+                console.log(`🔄 [MOTOR] Trava liberada para chip ${instanceId} por erro de conexão.`);
+            }
+            falhasConsecutivas++;
+            await delay(Math.min(10000 * Math.pow(2, falhasConsecutivas - 1), 300000)); 
+        }
     }
 }
 
@@ -1483,7 +1397,11 @@ module.exports = {
         }
         sessions.delete(instanceId);
         instanciasLigando.delete(instanceId);
-        console.log(`🔌 [SDR] Sessão ${instanceId} encerrada da memória.`);
+        motoresEmExecucao.delete(instanceId); // 🔥 ISSO CONSERTA O SEU BOTÃO DO DASHBOARD
+        if (fs.existsSync(`./wpp_sessions/${instanceId}`)) {
+            fs.rmSync(`./wpp_sessions/${instanceId}`, { recursive: true, force: true });
+        }
+        console.log(`🔌 [SDR] Sessão ${instanceId} completamente encerrada e limpa.`);
     },
     criarNovaInstancia: async (n, t, userId) => {
         const { data } = await supabase.from('instances').insert([{ name: n, owner_phone: t, user_id: userId }]).select().single();
