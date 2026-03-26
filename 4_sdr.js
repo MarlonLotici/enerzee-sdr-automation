@@ -1,4 +1,5 @@
 /**
+ * 
  * 4_sdr.js - MÓDULO DE VENDAS NEURAL V12 (BAILEYS MULTI-TENANCY)
  * INTEGRAL: Vision, PDF, Regras Regionais Enerzee, Anti-Ban e Horários.
  */
@@ -18,7 +19,7 @@ const Groq = require('groq-sdk');
 const pdf = require('pdf-parse');
 const db = require('./database');
 const { createClient } = require('@supabase/supabase-js');
-
+const motoresEmExecucao = new Set(); // 🛡️ Impede que o mesmo chip ligue dois loops infinitos
 // --- CONFIGURAÇÃO E SEGURANÇA ---
 const supabase = createClient(process.env.SUPABASE_URL, process.env.SUPABASE_KEY);
 const { OpenAI } = require('openai');
@@ -145,7 +146,8 @@ Você é Marlon, Consultor de Energia sênior da ENERZEE.
 Produto: Energia por Assinatura (Lei 14.300) — Geração Distribuída via Usinas WEG certificadas.
 Missão: Agendar uma consultoria gratuita de 20 minutos via Calendly oferecendo redução de custo de energia com ZERO custo de adesão e ZERO obras.
 Tom: Direto, humano, B2B brasileiro. Use "vc", "tá", "né", "pra". NUNCA use palavras como "reunião", "compliance", "EBITDA" a menos que o perfil do lead indique isso.
-Contexto: Você enviou a mensagem inicial dizendo que está fazendo um mapeamento de custos fixos na região e viu que a ${nomeEmpresa} se enquadra numa isenção tarifária nova. O lead não sabe ainda que é sobre energia.
+Contexto: Você enviou a mensagem inicial dizendo que viu o cadastro da empresa num levantamento regional e que a concessionária local vem cobrando uma tarifa que já podia ter sido reduzida. Perguntou se eles pagam conta cheia ou já recebem desconto. O lead ainda não sabe exatamente o que é — apenas que há algo sobre a conta de luz.
+
 
 FILOSOFIA DE VENDA — CHALLENGER SALE:
 Você não dá aulas técnicas sobre leis. Você ENSINA que comércios do porte da ${nomeEmpresa} estão perdendo dinheiro e pagando 20% a mais na conta de luz. APENAS de ensinar a dor, você faz a pergunta para confirmar se o lead aprova.
@@ -185,11 +187,13 @@ Você não dá aulas técnicas sobre leis. Você ENSINA que comércios do porte 
 ESTA É A ESPINHA DORSAL DA CONVERSA. Antes de gerar qualquer palavra, analise o histórico, descubra em qual estágio o lead está e avance APENAS UM ESTÁGIO por vez. PROIBIDO pular etapas ou revelar a solução antes de causar a dor.
 
 [ESTÁGIO 1 — SITUAÇÃO / INVESTIGAÇÃO DO PROBLEMA]
-Gatilho: O lead respondeu à isca da Tarifa Digital (ex: "Como funciona?", "Que tarifa?", "Pago 100%").
-Ação: Reforce que a concessionária dificulta o acesso para lucrar no silêncio. Peça o valor da conta para qualificar.
-Balão 1: "Pois é, o pessoal da concessionária dificulta o acesso porque pra eles é melhor vc continuar na tarifa cheia sem o benefício."
+Gatilho: O lead respondeu QUALQUER COISA à isca inicial — "oi", "pago cheio", "como assim?", "que tarifa?", "não sei".
+NUNCA responda "qual dado?" ou faça outra pergunta antes de revelar a dor.
+Ação: Assuma a liderança. Confirme que a concessionária lucra no silêncio e pergunte o valor da conta para qualificar.
+Balão 1: "Pois é, a ${concessionariaLocal} não avisa porque pra eles é melhor você continuar pagando a tarifa cheia. A gente identificou isso no cadastro de vocês."
 [QUEBRA]
-Balão 2: "Só pra eu confirmar se a ${nomeEmpresa} já tem o teto de consumo liberado, a conta de luz aí hoje costuma passar de ${ancoraConta}?"
+Balão 2: "Só pra confirmar se vocês têm o perfil certo, a conta de luz aí hoje costuma passar de ${ancoraConta}?"
+
 
 [ESTÁGIO 2 — IMPLICAÇÃO / GIRANDO A FACA (A DOR)]
 Gatilho: Lead informou o valor aproximado da conta (ex: "vem uns 1500", "acima de 2 mil", "uns 900").
@@ -205,12 +209,14 @@ Exemplo de Texto Pós-Áudio: "Como não precisa furar telhado nem gastar nada, 
 [ESTÁGIO 4 — VENDENDO O SIMULADOR / AGENDAMENTO]
 Gatilho: Lead concordou em ver a simulação ou pediu o próximo passo.
 Ação: Aumente o valor do seu tempo e venda a consultoria de 20 minutos.
-Exemplo: "Fechado. Pra gente não ficar no achismo, eu consigo jogar os dados da ${nomeEmpresa} no sistema. A gente vê o número exato em 15 minutinhos na tela. [QUEBRA] Fica melhor pra vc amanhã de manhã ou à tarde?"
+Exemplo: "Pra não ficar no achismo, a gente abre o simulador oficial junto e vê o número exato da ${nomeEmpresa} em 20 minutos. [QUEBRA] Fica melhor amanhã de manhã ou à tarde? Já adianta separar a fatura de luz — com ela na mão o cálculo fica preciso."
+
 
 [ESTÁGIO 5 — FECHAMENTO / LINK]
 Gatilho: Lead definiu um período ("pode ser de manhã", "amanhã").
 Ação: Envie o link. Ponto final.
-Resposta: "Perfeito! Escolhe o horário que funcionar melhor aqui na agenda: [QUEBRA] 🔗 https://calendly.com/marlonlotici6/30min [QUEBRA] Depois de agendar me envia uma cópia da fatura de energia que já deixo a simulação da ${nomeEmpresa} pronta, ou se preferir leva para a nossa conversa que faço na hora."---
+Resposta: "Perfeito! Escolhe o horário que funcionar melhor aqui na agenda: [QUEBRA] 🔗 https://calendly.com/marlonlotici6/30min [QUEBRA] Depois de agendar me envia uma cópia da fatura de energia que já deixo a simulação da ${nomeEmpresa} pronta, ou se preferir leva para a nossa conversa que faço na hora."
+
 
 ### 5. 🎙️ GATILHOS DE ÁUDIO E MATRIZ DE OBJEÇÕES
 
@@ -898,6 +904,14 @@ const chipsEsgotadosHoje = new Set();
 let dataControleLimites = new Date().toISOString().split('T')[0];
 
 async function motorAtaquePorChip(instanceId) {
+    // 🛡️ TRAVA DE INSTÂNCIA: Garante que apenas um loop por chip existe
+    if (motoresEmExecucao.has(instanceId)) {
+        console.log(`⚠️ [TRAVA] Motor do chip ${instanceId} já está em execução. Ignorando chamada duplicada.`);
+        return;
+    }
+    motoresEmExecucao.add(instanceId);
+    console.log(`🚀 [MOTOR] Loop iniciado para chip ${instanceId}`);
+
     // ⏰ DESPERTADOR: Limpa o cache de chips esgotados se virou o dia
     const hojeAgora = new Date().toISOString().split('T')[0];
     if (dataControleLimites !== hojeAgora) {
@@ -984,10 +998,27 @@ async function motorAtaquePorChip(instanceId) {
                 continue; 
             }
 
-            // Bloqueia o lead na memória viva
+            // Bloqueia na memória E no banco imediatamente (Anti Race Condition)
             leadsEmProcessamento.add(lead.id);
+            await supabase.from('leads')
+                .update({ status: 'reservado', instance_id: instanceId })
+                .eq('id', lead.id)
+                .eq('status', 'new'); // Só atualiza se ainda for 'new' (trava otimista)
 
-            // 6. Jitter Sequencial (Espera Humana entre 2 e 4 minutos)
+            // Confirma que conseguiu reservar (outro motor pode ter pegado antes)
+            const { data: leadConfirmado } = await supabase
+                .from('leads')
+                .select('status, instance_id')
+                .eq('id', lead.id)
+                .single();
+
+            if (!leadConfirmado || leadConfirmado.status !== 'reservado' || leadConfirmado.instance_id !== instanceId) {
+                console.log(`⚔️ [CONFLITO] Lead ${lead.name} já foi reservado por outro motor. Pulando...`);
+                leadsEmProcessamento.delete(lead.id);
+                continue;
+            }
+
+            // 6. Jitter Sequencial
             const jitter = Math.random() * 180000 + 180000;
             console.log(`🎯 [${config.nome}] Mirando em: ${lead.name} (${enviosHoje + 1}/${config.limite}). Aguardando ${Math.round(jitter/1000)}s...`);
             await delay(jitter);
@@ -1088,15 +1119,14 @@ const ufLead = lead.estado || 'seu estado';
 const concessionariaLocal = MAPA_CONCESSIONARIAS[ufLead] || 'concessionária de energia';
 
 // 3. Montagem da Isca V12
-const saudacaoInicial = primeiroNomeDono
-    ? `Oi ${primeiroNomeDono}, tudo bem? Vi o cadastro da ${nomeEmpresa} aqui.`
-    : `Opa, tudo bem? Vi o cadastro da ${nomeEmpresa} aqui.`;
+            const saudacaoInicial = primeiroNomeDono
+    ? `Oi ${primeiroNomeDono}, tudo certo?`
+    : `Opa, tudo certo? Falo com o responsável pela ${nomeEmpresa}?`;
 
-const localRef = lead.bairro ? `aí de ${lead.bairro}` : `aí da região`;
+const localRef = lead.bairro ? `aí no ${lead.bairro}` : `aí na região`;
 
-const novaSaudacao = `${saudacaoInicial} [QUEBRA] Notei que vocês ainda não solicitaram a portabilidade para a Tarifa Digital liberada para o comércio ${localRef}. A ${concessionariaLocal} não avisa, mas vocês já podem parar de pagar a tarifa cheia. Vocês já estão recebendo o desconto da usina ou ainda pagam 100% da conta de luz?`;
-
-           // 12. Fatiador de Balões com Trava Anti-Engasgo e Limite de 2 Balões
+const novaSaudacao = `${saudacaoInicial} [QUEBRA] Aqui é o Marlon. Vi o cadastro da ${nomeEmpresa} num levantamento que fizemos ${localRef} — a ${concessionariaLocal} vem cobrando uma tarifa que já podia ter sido reduzida faz tempo e a maioria dos comércios não sabe disso. Vocês já estão pagando menos ou ainda vem a conta cheia todo mês?`;
+// 12. Fatiador de Balões com Trava Anti-Engasgo e Limite de 2 Balões
             const mensagensSplit = novaSaudacao.split('[QUEBRA]')
                 .map(t => t.trim())
                 .filter(t => t.length > 0)
@@ -1148,10 +1178,21 @@ const novaSaudacao = `${saudacaoInicial} [QUEBRA] Notei que vocês ainda não so
             // 🛡️ SUCESSO! Zera o contador de falhas de CPU
             falhasConsecutivas = 0;
 
-            } catch (err) {
-            console.error(`❌ Erro no motor do chip ${instanceId}:`, err.message);
-            if (currentLeadId) leadsEmProcessamento.delete(currentLeadId); 
-            
+                 } catch (err) {
+    console.error(`❌ Erro no motor do chip ${instanceId}:`, err.message);
+    if (currentLeadId) {
+        leadsEmProcessamento.delete(currentLeadId);
+        // Reverte 'reservado' para 'new' se falhou antes de disparar
+        await supabase.from('leads')
+            .update({ status: 'new' })
+            .eq('id', currentLeadId)
+            .eq('status', 'reservado');
+    }
+    // Se erro fatal, remove a trava para permitir reinício
+    if (err.message?.includes('Connection') || err.message?.includes('Socket')) {
+        motoresEmExecucao.delete(instanceId);
+        console.log(`🔄 [MOTOR] Trava liberada para chip ${instanceId} por erro de conexão.`);
+    }
             // 🛡️ PROTEÇÃO DE CPU: BACKOFF EXPONENCIAL
             falhasConsecutivas++;
             const tempoEspera = Math.min(10000 * Math.pow(2, falhasConsecutivas - 1), 300000); 
