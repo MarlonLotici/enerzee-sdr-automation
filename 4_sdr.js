@@ -1133,10 +1133,12 @@ async function loopRecuperacaoConversas() {
 
         // 1. LÓGICA ORIGINAL: Busca leads que estão em conversa ativa e NÃO estão pausados
         const { data: leadsAtivos } = await supabase
-            .from('leads')
-            .select('*')
-            .eq('status', 'contact')
-            .eq('is_paused', false);
+    .from('leads')
+    .select('id, name, whatsapp_id, instance_id, is_paused, manual_pause, last_human_interaction')
+    .eq('status', 'contact')
+    .eq('is_paused', false)
+    .order('last_contact_at', { ascending: false })
+    .limit(20);
 
         if (leadsAtivos) {
             for (const l of leadsAtivos) {
