@@ -7,6 +7,8 @@ const cors = require('cors');
 const path = require('path');
 const { createClient } = require('@supabase/supabase-js');
 const supabase = createClient(process.env.SUPABASE_URL, process.env.SUPABASE_KEY);
+const EventEmitter = require('events');
+const sdrEvents = new EventEmitter(); // 🔔 Nosso Alarme de RAM
 
 // ⚙️ IMPORTAÇÕES DA ESTEIRA DE DADOS MESTRE
 const { iniciarVarredura } = require('./1_scraper'); 
@@ -64,8 +66,8 @@ const emitLog = (message) => {
 };
 // 👆 FIM DA MEMÓRIA GLOBAL 👆
 // 🔥 LIGA A IGNIÇÃO DO MOTOR MULTI-CHIP
-sdr.initMultiTenancy(io);
-
+// Passamos o sdrEvents para que o motor consiga "ouvir" o scraper
+sdr.initMultiTenancy(io, sdrEvents);
 // =======================================================
 // =======================================================
 // 2. SOCKET.IO (COMUNICAÇÃO REAL-TIME)
@@ -197,6 +199,9 @@ io.on('connection', (socket) => {
                             // 👇 EMITE PARA TODAS AS ABAS: O lead foi salvo!
                             io.emit('new_lead', leadFinal);
                             io.emit('background_lead_saved');
+
+                            // 🔔 O GRITO NO CORREDOR: Avisa o SDR que tem lead novo no banco!
+                            sdrEvents.emit('NOVO_LEAD_DISPONIVEL', chipSorteado.id);
                         }
                     }
                 }

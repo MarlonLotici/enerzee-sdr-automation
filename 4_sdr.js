@@ -49,6 +49,8 @@ const mensagensEnviadasPelaIA = new Set(); // 🛡️ PASSO 1: A Memória Anti-E
 const iaRespondendo = new Set();
 const mapaRastreioLID = new Map();
 const gavetaDeMensagens = new Map(); // 🧠 OUVIDO PACIENTE: Gaveta temporária de mensagens
+const cacheRegrasInstancia = new Map(); // 🧠 Memória de curto prazo para regras
+let sdrEventsGlobal = null; // 🛡️ Adicione esta linha aqui no topo
 if (!fs.existsSync('./wpp_sessions')) fs.mkdirSync('./wpp_sessions');
 
 // 🧹 LIXEIRO AUTOMÁTICO (Evita que o servidor trave por falta de memória RAM)
@@ -116,8 +118,25 @@ Mensagem: ${historico}`;
 }
 
 // ============================================================================
-// 🧠 NÚCLEO IA: A MATRIZ DE VENDAS (AGORA COM AS REGRAS TÉCNICAS REAIS)
+// 🧠 CACHE INTELIGENTE DE REGRAS (TTL: 30 Minutos)
 // ============================================================================
+async function getRegrasEmCache(instanceId) {
+    const agora = Date.now();
+    const cache = cacheRegrasInstancia.get(instanceId);
+    
+    // Se existe na memória e tem menos de 30 minutos (1800000 ms), usa a RAM!
+    if (cache && (agora - cache.timestamp < 1800000)) {
+        return cache.dados;
+    }
+    
+    // Se não tem na memória ou o tempo expirou, vai no banco de dados buscar
+    const regrasDoBanco = await db.getInstanceRules(instanceId);
+    if (regrasDoBanco) {
+        // Salva na RAM com a hora exata da consulta
+        cacheRegrasInstancia.set(instanceId, { dados: regrasDoBanco, timestamp: agora });
+    }
+    return regrasDoBanco;
+}
 
 // ============================================================================
 // 🧠 NÚCLEO IA: "THE ARCHITECT" - STATE OF THE ART SDR V3.0
@@ -680,6 +699,23 @@ if (fromMe) {
         console.log(`📄 [MÍDIA] Analisando arquivo enviado por ${lead.name}...`);
         
         try {
+            // 🛡️ PASSO 4: BARREIRA ANTI-CRASH
+            // Lemos o tamanho do arquivo nos metadados antes de iniciar o download
+            const fileSize = msg.message[messageType]?.fileLength || 0;
+            const limiteMaximo = 15 * 1024 * 1024; // 15MB em bytes
+
+            if (fileSize > limiteMaximo) {
+                console.log(`⚠️ [BARREIRA] Arquivo de ${lead.name} é muito grande (${(fileSize / 1024 / 1024).toFixed(2)}MB). Abortando download.`);
+                
+                if (!lead.is_paused) {
+                    const msgErroCarga = "Opa, meu sistema não conseguiu carregar esse arquivo por causa do tamanho rs. Consegue me mandar um print da primeira página da fatura? Fica mais fácil de eu ler aqui.";
+                    await sock.sendMessage(remoteJid, { text: msgErroCarga });
+                    await db.saveMessage(lead.whatsapp_id, 'assistant', msgErroCarga, instanceId);
+                }
+                return; // Mata o processamento aqui e economiza sua CPU/Banda
+            }
+
+            // Se for menor que 15MB, o download segue normalmente
             const buffer = await downloadMediaMessage(msg, 'buffer', {}, { logger: pino({ level: 'silent' }) });
             let analise = null;
 
@@ -778,7 +814,7 @@ if (fromMe) {
 
         const histRaw = await db.getHistory(lead.whatsapp_id, instanceId);
         const historico = histRaw.map(m => ({ role: m.role, content: m.content }));
-        const instanceData = await db.getInstanceRules(instanceId);
+        const instanceData = await getRegrasEmCache(instanceId);
         
    let resposta = await gerarRespostaIA(historico, lead, instanceData);
 
@@ -916,16 +952,19 @@ if (memoriaHistorico.includes('<<Áudio Obras/Placas Enviado>>') && /\[AUDIO[_\w
 const chipsEsgotadosHoje = new Set();
 let dataControleLimites = new Date().toISOString().split('T')[0];
 
-async function motorAtaquePorChip(instanceId) {
-    // 🛡️ TRAVA DE INSTÂNCIA ÚNICA (CORRIGIDA: Só aparece uma vez!)
+// ============================================================================
+// 🔄 MOTOR HÍBRIDO DE ATAQUE (RAM + DB) - PRESERVANDO 100% DAS TRAVAS
+// ============================================================================
+async function processarFilaDeAtaque(instanceId) {
+    // 🛡️ TRAVA DE INSTÂNCIA ÚNICA
     if (motoresEmExecucao.has(instanceId)) {
         console.log(`⚠️ [TRAVA] Motor ${instanceId} já rodando. Ignorando duplicata.`);
         return;
     }
     motoresEmExecucao.add(instanceId);
-    console.log(`🚀 [MOTOR] Loop iniciado para chip ${instanceId}`);
+    console.log(`🚀 [MOTOR HÍBRIDO] Fila de ataque ativada para o chip ${instanceId}`);
     
-    // ⏰ DESPERTADOR: Limpa o cache de chips esgotados se virou o dia
+    // ⏰ DESPERTADOR
     const hojeAgora = new Date().toISOString().split('T')[0];
     if (dataControleLimites !== hojeAgora) {
         chipsEsgotadosHoje.clear();
@@ -935,293 +974,333 @@ async function motorAtaquePorChip(instanceId) {
 
     let falhasConsecutivas = 0; 
 
-    while (true) {
-        let currentLeadId = null; 
+    try {
+        while (true) {
+            let currentLeadId = null; 
 
-        try {
-            if (!dentroDaJanelaDeDisparo()) {
-                console.log(`💤 [ECONOMIA] Fora da janela de disparo. Dormindo 30 min...`);
-                await delay(1000 * 60 * 30);
-                continue;
-            }
-
-            const instanceData = await db.getInstanceRules(instanceId);
-            if (!instanceData || instanceData.whatsapp_status !== 'CONNECTED') {
-                const instanceData = await db.getInstanceRules(instanceId);
-if (!instanceData || instanceData.whatsapp_status !== 'CONNECTED') {
-    console.log(`🔕 [MOTOR SILENCIADO] Chip ${instanceId} ignorado. Status no banco está: ${instanceData?.whatsapp_status}`);
-    await delay(60000);
-    continue;
-}
-                await delay(60000);
-                continue;
-            }
-
-            const config = {
-                nome: instanceData.name || `Chip-${instanceId.substring(0, 4)}`,
-                limite: instanceData.daily_limit || 50,
-                agente: instanceData.agent_name || "Marlon",
-                empresa: instanceData.company_name || "Enerzee"
-            };
-
-            const { data: lead, error } = await supabase
-                .from('leads')
-                .select('id, name, whatsapp_id, dono, bairro, instance_id, estado')
-                .eq('status', 'new')
-                .or(`instance_id.eq.${instanceId},instance_id.is.null`)
-                .order('created_at', { ascending: true })
-                .limit(1)
-                .maybeSingle();
-
-            if (error) throw error;
-
-            if (!lead) {
-                console.log(`🌕 [${config.nome}] Sem leads novos. Próxima checagem em 5 min...`);
-                await delay(1000 * 60 * 5); 
-                continue;
-            }
-
-            currentLeadId = lead.id;
-
-            // ⚡ 1. TRAVA RELÂMPAGO NO BANCO
-            await supabase.from('leads').update({ status: 'reservado', instance_id: instanceId }).eq('id', lead.id);
-
-            // 🛡️ 2. TRAVA NA MEMÓRIA
-            if (leadsEmProcessamento.has(lead.id)) { 
-                await delay(5000); 
-                continue; 
-            }
-            leadsEmProcessamento.add(lead.id);
-
-            // 🎯 3. CHECA LIMITE DIÁRIO
-            const enviosHoje = await db.getDailyContactCount(instanceId);
-            if (enviosHoje >= config.limite) {
-                console.log(`🌙 [METAS] ${config.nome} atingiu o limite de ${config.limite}. Dormindo 30 min...`);
-                await delay(1800000);
-                leadsEmProcessamento.delete(lead.id);
-                continue;
-            }
-
-            // 🚫 4. CHECA BLACKLIST
-            const estaNaBlacklist = await db.isBlacklisted(lead.whatsapp_id);
-            if (estaNaBlacklist) {
-                console.log(`🚫 [BLACKLIST] Lead ${lead.name} restrito. Abortando...`);
-                await supabase.from('leads').update({ status: 'blacklisted' }).eq('id', lead.id);
-                leadsEmProcessamento.delete(lead.id);
-                continue; 
-            }
-
-            // ⚡ 5. VALIDAÇÃO RÁPIDA DE ZAP (Mata os leads ruins em segundos)
-            const instancia = sessions.get(instanceId);
-            if (!instancia || !instancia.ready) {
-                console.log(`❌ [FALHA SILENCIOSA] ${config.nome} não está com o canal pronto.`);
-                await supabase.from('leads').update({ status: 'new' }).eq('id', lead.id);
-                leadsEmProcessamento.delete(lead.id);
-                await delay(10000);
-                continue;
-            }
-
-            const hist = await db.getHistory(lead.whatsapp_id, instanceId);
-            const [result] = await instancia.sock.onWhatsApp(lead.whatsapp_id);
-            
-            if (!result?.exists || (hist && hist.length > 0)) {
-                console.log(`⏩ [PULO RÁPIDO] Lead ${lead.name} inválido ou já contactado. Ignorando.`);
-                await supabase.from('leads').update({ status: hist?.length > 0 ? 'contact' : 'invalid' }).eq('id', lead.id);
-                leadsEmProcessamento.delete(lead.id);
-                await delay(2000); 
-                continue;
-            }
-
-            // ⏳ 6. JITTER SEQUENCIAL (Só agora ele espera, porque o lead é ouro puro)
-            const jitter = Math.random() * 180000 + 120000;
-            console.log(`🎯 [${config.nome}] Mirando em: ${lead.name} (${enviosHoje + 1}/${config.limite}). Aguardando ${Math.round(jitter/1000)}s...`);
-            await delay(jitter);
-
-            // 7. Limpeza de LID/JID
-            let cleanLid = null;
-            if (result.lid) {
-                cleanLid = result.lid.split(':')[0].split('@')[0] + '@lid';
-                await supabase.from('leads').update({ whatsapp_lid: cleanLid }).eq('id', lead.id);
-            }
-
-            const cleanJid = result.jid.split(':')[0].split('@')[0] + '@s.whatsapp.net';
-            if (lead.whatsapp_id !== cleanJid) {
-                await supabase.from('leads').update({ whatsapp_id: cleanJid }).eq('id', lead.id);
-                lead.whatsapp_id = cleanJid;
-            }
-
-            // 8. MONTAGEM DA SAUDAÇÃO (Com regra do/da)
-            console.log(`🚀 [DISPARANDO] ${config.nome} enviando saudação para ${lead.name}...`);
-            await instancia.sock.sendPresenceUpdate('composing', cleanJid);
-            await delay(Math.random() * 4000 + 4000); 
-            await instancia.sock.sendPresenceUpdate('paused', cleanJid);
-
-            let primeiroNomeDono = null;
-            let preposicaoNome = "do responsável pela";
-
-            if (lead.dono && lead.dono.trim().length > 2) {
-                primeiroNomeDono = lead.dono.trim().split(' ')[0].toLowerCase();
-                primeiroNomeDono = primeiroNomeDono.charAt(0).toUpperCase() + primeiroNomeDono.slice(1);
-                preposicaoNome = identificarArtigo(primeiroNomeDono);
-            }
-            
-            const ufLead = lead.estado || 'seu estado'; 
-            const concessionariaLocal = MAPA_CONCESSIONARIAS[ufLead] || 'concessionária de energia';
-            const nomeEmpresa = lead.name ? lead.name.replace(/\s(LTDA|ME|EIRELI|S\.A|LIMITED)\b/gi, '').trim() : "sua empresa";
-
-            const saudacaoInicial = primeiroNomeDono
-                ? `Oi ${primeiroNomeDono}, tudo certo? Aqui é o ${config.agente}. Esse contato é direto ${preposicaoNome} ou falo com o responsável pela ${nomeEmpresa}?`
-                : `Opa, tudo certo? Aqui é o ${config.agente}. Falo com o responsável pela ${nomeEmpresa}?`;
-
-            const localRef = lead.bairro ? `aí no ${lead.bairro}` : `aí na região`;
-            const novaSaudacao = `${saudacaoInicial} [QUEBRA] Vi o cadastro de vcs num levantamento ${localRef}. A ${concessionariaLocal} vem cobrando uma tarifa que já podia ter caído, mas não avisa. Vocês já pagam com desconto ou ainda vem a conta cheia?`;
-
-            // 9. FATIADOR HUMANO E ENVIO
-            const mensagensSplit = novaSaudacao.split('[QUEBRA]').map(t => t.trim()).filter(t => t.length > 0).slice(0, 2); 
-            
-            for (let i = 0; i < mensagensSplit.length; i++) {
-                const { data: checkMsg } = await supabase.from('messages').select('role').eq('whatsapp_id', cleanJid).order('created_at', { ascending: false }).limit(1).maybeSingle();
-                if (checkMsg && checkMsg.role === 'user') {
-                    console.log(`🛑 [INTERRUPÇÃO] Lead respondeu rápido. Abortando.`);
-                    break; 
+            try {
+                if (!dentroDaJanelaDeDisparo()) {
+                    console.log(`💤 [ECONOMIA] Fora da janela de disparo. Motor pausado.`);
+                    break; // 🛑 HÍBRIDO: Morre aqui e libera memória
                 }
 
-                const trecho = mensagensSplit[i].replace(/[\*_~`]/g, '');
-                const tempoDigitacao = (trecho.length * 70) + 3000; 
+                const instanceData = await getRegrasEmCache(instanceId);
+                if (!instanceData || instanceData.whatsapp_status !== 'CONNECTED') {
+                    console.log(`🔕 [MOTOR SILENCIADO] Chip ${instanceId} ignorado. Status: ${instanceData?.whatsapp_status}`);
+                    break; // 🛑 HÍBRIDO: Morre aqui se não estiver conectado
+                }
+
+                const config = {
+                    nome: instanceData.name || `Chip-${instanceId.substring(0, 4)}`,
+                    limite: instanceData.daily_limit || 50,
+                    agente: instanceData.agent_name || "Marlon",
+                    empresa: instanceData.company_name || "Enerzee"
+                };
+
+                const { data: lead, error } = await supabase
+                    .from('leads')
+                    .select('id, name, whatsapp_id, dono, bairro, instance_id, estado')
+                    .eq('status', 'new')
+                    .or(`instance_id.eq.${instanceId},instance_id.is.null`)
+                    .order('created_at', { ascending: true })
+                    .limit(1)
+                    .maybeSingle();
+
+                if (error) throw error;
+
+                // 👇 A GRANDE MUDANÇA: O BREAK QUE SALVA SEU BOLSO 👇
+                if (!lead) {
+                    console.log(`🌕 [MOTOR HÍBRIDO] Fila limpa para ${config.nome}. Repouso absoluto (0 Egress).`);
+                    break; // 🛑 HÍBRIDO: Não tem chumbo, ele não espera 5 min, ele desliga!
+                }
+
+                currentLeadId = lead.id;
+
+                // ⚡ 1. TRAVA RELÂMPAGO NO BANCO
+                await supabase.from('leads').update({ status: 'reservado', instance_id: instanceId }).eq('id', lead.id);
+
+                // 🛡️ 2. TRAVA NA MEMÓRIA
+                if (leadsEmProcessamento.has(lead.id)) { 
+                    await delay(5000); 
+                    continue; 
+                }
+                leadsEmProcessamento.add(lead.id);
+
+                // 🎯 3. CHECA LIMITE DIÁRIO
+                const enviosHoje = await db.getDailyContactCount(instanceId);
+                if (enviosHoje >= config.limite) {
+                    console.log(`🌙 [METAS] ${config.nome} atingiu o limite de ${config.limite}. Dormindo.`);
+                    leadsEmProcessamento.delete(lead.id);
+                    break; // 🛑 HÍBRIDO: Bateu a meta, desliga a máquina.
+                }
+
+                // 🚫 4. CHECA BLACKLIST
+                const estaNaBlacklist = await db.isBlacklisted(lead.whatsapp_id);
+                if (estaNaBlacklist) {
+                    console.log(`🚫 [BLACKLIST] Lead ${lead.name} restrito. Abortando...`);
+                    await supabase.from('leads').update({ status: 'blacklisted' }).eq('id', lead.id);
+                    leadsEmProcessamento.delete(lead.id);
+                    continue; 
+                }
+
+                // ⚡ 5. VALIDAÇÃO RÁPIDA DE ZAP
+                const instancia = sessions.get(instanceId);
+                if (!instancia || !instancia.ready) {
+                    console.log(`❌ [FALHA SILENCIOSA] ${config.nome} não está com o canal pronto.`);
+                    await supabase.from('leads').update({ status: 'new' }).eq('id', lead.id);
+                    leadsEmProcessamento.delete(lead.id);
+                    break; // 🛑 HÍBRIDO: Caiu o socket, desliga e espera o próximo arranque
+                }
+
+                const hist = await db.getHistory(lead.whatsapp_id, instanceId);
+                const [result] = await instancia.sock.onWhatsApp(lead.whatsapp_id);
                 
+                if (!result?.exists || (hist && hist.length > 0)) {
+                    console.log(`⏩ [PULO RÁPIDO] Lead ${lead.name} inválido ou já contactado. Ignorando.`);
+                    await supabase.from('leads').update({ status: hist?.length > 0 ? 'contact' : 'invalid' }).eq('id', lead.id);
+                    leadsEmProcessamento.delete(lead.id);
+                    await delay(2000); 
+                    continue;
+                }
+
+                // ⏳ 6. JITTER SEQUENCIAL ORIGINAL (Intacto)
+                const jitter = Math.random() * 180000 + 120000;
+                console.log(`🎯 [${config.nome}] Mirando em: ${lead.name} (${enviosHoje + 1}/${config.limite}). Aguardando ${Math.round(jitter/1000)}s...`);
+                await delay(jitter);
+
+                // 7. Limpeza de LID/JID
+                let cleanLid = null;
+                if (result.lid) {
+                    cleanLid = result.lid.split(':')[0].split('@')[0] + '@lid';
+                    await supabase.from('leads').update({ whatsapp_lid: cleanLid }).eq('id', lead.id);
+                }
+
+                const cleanJid = result.jid.split(':')[0].split('@')[0] + '@s.whatsapp.net';
+                if (lead.whatsapp_id !== cleanJid) {
+                    await supabase.from('leads').update({ whatsapp_id: cleanJid }).eq('id', lead.id);
+                    lead.whatsapp_id = cleanJid;
+                }
+
+                // 8. MONTAGEM DA SAUDAÇÃO (Com regra do/da)
+                console.log(`🚀 [DISPARANDO] ${config.nome} enviando saudação para ${lead.name}...`);
                 await instancia.sock.sendPresenceUpdate('composing', cleanJid);
-                await delay(Math.max(4000, Math.min(tempoDigitacao, 10000))); 
-                
-                await enviarMensagemIA(instancia.sock, cleanJid, { text: trecho });
-                await db.saveMessage(cleanJid, 'assistant', trecho, instanceId);
+                await delay(Math.random() * 4000 + 4000); 
+                await instancia.sock.sendPresenceUpdate('paused', cleanJid);
 
-                if (i < mensagensSplit.length - 1) {
-                    await instancia.sock.sendPresenceUpdate('paused', cleanJid);
-                    await delay(Math.random() * 2000 + 2500); 
+                let primeiroNomeDono = null;
+                let preposicaoNome = "do responsável pela";
+
+                if (lead.dono && lead.dono.trim().length > 2) {
+                    primeiroNomeDono = lead.dono.trim().split(' ')[0].toLowerCase();
+                    primeiroNomeDono = primeiroNomeDono.charAt(0).toUpperCase() + primeiroNomeDono.slice(1);
+                    preposicaoNome = identificarArtigo(primeiroNomeDono);
                 }
-            }
+                
+                const ufLead = lead.estado || 'seu estado'; 
+                const concessionariaLocal = MAPA_CONCESSIONARIAS[ufLead] || 'concessionária de energia';
+                const nomeEmpresa = lead.name ? lead.name.replace(/\s(LTDA|ME|EIRELI|S\.A|LIMITED)\b/gi, '').trim() : "sua empresa";
 
-            // 10. CONCLUSÃO E SUCESSO
-            await supabase.from('leads').update({ status: 'contact', last_contact_at: new Date().toISOString() }).eq('id', lead.id);
-            console.log(`✅ [SUCESSO REAL] Entregue por ${config.nome} para ${lead.name}!`);
-            leadsEmProcessamento.delete(lead.id);
-            falhasConsecutivas = 0;
+                const saudacaoInicial = primeiroNomeDono
+                    ? `Oi ${primeiroNomeDono}, tudo certo? Aqui é o ${config.agente}. Esse contato é direto ${preposicaoNome} ou falo com o responsável pela ${nomeEmpresa}?`
+                    : `Opa, tudo certo? Aqui é o ${config.agente}. Falo com o responsável pela ${nomeEmpresa}?`;
 
-        } catch (err) {
-            console.error(`❌ Erro no motor do chip ${instanceId}:`, err.message);
-            if (currentLeadId) {
-                leadsEmProcessamento.delete(currentLeadId);
-                await supabase.from('leads').update({ status: 'new' }).eq('id', currentLeadId).eq('status', 'reservado');
+                const localRef = lead.bairro ? `aí no ${lead.bairro}` : `aí na região`;
+                const novaSaudacao = `${saudacaoInicial} [QUEBRA] Vi o cadastro de vcs num levantamento ${localRef}. A ${concessionariaLocal} vem cobrando uma tarifa que já podia ter caído, mas não avisa. Vocês já pagam com desconto ou ainda vem a conta cheia?`;
+
+                // 9. FATIADOR HUMANO E ENVIO (Com interrupção intacta!)
+                const mensagensSplit = novaSaudacao.split('[QUEBRA]').map(t => t.trim()).filter(t => t.length > 0).slice(0, 2); 
+                
+                for (let i = 0; i < mensagensSplit.length; i++) {
+                    const { data: checkMsg } = await supabase.from('messages').select('role').eq('whatsapp_id', cleanJid).order('created_at', { ascending: false }).limit(1).maybeSingle();
+                    if (checkMsg && checkMsg.role === 'user') {
+                        console.log(`🛑 [INTERRUPÇÃO] Lead respondeu rápido. Abortando.`);
+                        break; 
+                    }
+
+                    const trecho = mensagensSplit[i].replace(/[\*_~`]/g, '');
+                    const tempoDigitacao = (trecho.length * 70) + 3000; 
+                    
+                    await instancia.sock.sendPresenceUpdate('composing', cleanJid);
+                    await delay(Math.max(4000, Math.min(tempoDigitacao, 10000))); 
+                    
+                    await enviarMensagemIA(instancia.sock, cleanJid, { text: trecho });
+                    await db.saveMessage(cleanJid, 'assistant', trecho, instanceId);
+
+                    if (i < mensagensSplit.length - 1) {
+                        await instancia.sock.sendPresenceUpdate('paused', cleanJid);
+                        await delay(Math.random() * 2000 + 2500); 
+                    }
+                }
+
+                // 10. CONCLUSÃO E SUCESSO
+                await supabase.from('leads').update({ status: 'contact', last_contact_at: new Date().toISOString() }).eq('id', lead.id);
+                console.log(`✅ [SUCESSO REAL] Entregue por ${config.nome} para ${lead.name}!`);
+                leadsEmProcessamento.delete(lead.id);
+                falhasConsecutivas = 0;
+
+            } catch (errInner) {
+                // SEU CATCH ORIGINAL DE FALHAS CONSECUTIVAS
+                console.error(`❌ Erro no motor do chip ${instanceId}:`, errInner.message);
+                if (currentLeadId) {
+                    leadsEmProcessamento.delete(currentLeadId);
+                    await supabase.from('leads').update({ status: 'new' }).eq('id', currentLeadId).eq('status', 'reservado');
+                }
+                if (errInner.message?.includes('Connection') || errInner.message?.includes('Socket')) {
+                    console.log(`🔄 [MOTOR] Chip ${instanceId} com erro de conexão. Pausando loop.`);
+                    break; // 🛑 HÍBRIDO: Erro de rede? Desliga e espera o Vigia tentar de novo em 30 min.
+                }
+                falhasConsecutivas++;
+                await delay(Math.min(10000 * Math.pow(2, falhasConsecutivas - 1), 300000)); 
             }
-            if (err.message?.includes('Connection') || err.message?.includes('Socket')) {
-                motoresEmExecucao.delete(instanceId);
-                console.log(`🔄 [MOTOR] Trava liberada para chip ${instanceId} por erro de conexão.`);
-            }
-            falhasConsecutivas++;
-            await delay(Math.min(10000 * Math.pow(2, falhasConsecutivas - 1), 300000)); 
-        }
+        } // <-- Fim do while(true)
+
+    } finally {
+        // 🔓 SEMPRE solta a trava quando a função termina (seja por break ou erro fatal)
+        motoresEmExecucao.delete(instanceId);
     }
 }
-
+// ============================================================================
+// 🔄 LOOP TRIPLO DE RECUPERAÇÃO E FOLLOW-UP (OTIMIZADO)
+// ============================================================================
 async function loopRecuperacaoConversas() {
     try {
-        // --- 🛑 TRAVA DO ZUMBI DA MADRUGADA ---
-        // Se estiver fora do horário comercial, ele pausa a busca e tenta de novo em 5 minutos.
+        // 🛑 TRAVA DO EXPEDIENTE: Não manda follow-up de madrugada
         if (!dentroDoExpediente()) return setTimeout(loopRecuperacaoConversas, 60000 * 5);
 
-        console.log("🕵️ [SDR] Escaneando mensagens não respondidas e travas de pausa...");
+        console.log("🕵️ [VIGIA DE CONVERSAS] Escaneando conversas perdidas e follow-ups...");
 
-        // 1. LÓGICA ORIGINAL: Busca leads que estão em conversa ativa e NÃO estão pausados
+        // ====================================================================
+        // 🌟 1. RECUPERAÇÃO DE FALHAS (O Bot ignorou o cliente)
+        // ====================================================================
         const { data: leadsAtivos } = await supabase
-    .from('leads')
-    .select('id, name, whatsapp_id, instance_id, is_paused, manual_pause, last_human_interaction')
-    .eq('status', 'contact')
-    .eq('is_paused', false)
-    .order('last_contact_at', { ascending: false })
-    .limit(20);
+            .from('leads')
+            .select('id, name, whatsapp_id, instance_id, is_paused')
+            .eq('status', 'contact')
+            .eq('is_paused', false)
+            .order('last_contact_at', { ascending: false })
+            .limit(20);
 
         if (leadsAtivos) {
             for (const l of leadsAtivos) {
                 try {
-                    // Busca a última mensagem dessa conversa
-                   const { data: mensagens } = await supabase
-    .from('messages')
-    .select('role, content')   // ← adicionado 'content'
-    .eq('whatsapp_id', l.whatsapp_id)
-    .order('created_at', { ascending: false })
-    .limit(1);
+                    // Traz APENAS a última mensagem (payload minúsculo de poucos bytes)
+                    const { data: mensagens } = await supabase
+                        .from('messages')
+                        .select('role, content')
+                        .eq('whatsapp_id', l.whatsapp_id)
+                        .order('created_at', { ascending: false })
+                        .limit(1);
 
-if (mensagens && mensagens.length > 0 
-    && mensagens[0].role === 'user' 
-    && !mensagens[0].content?.startsWith('[AUTORESPOSTA]')) { 
-                        // 👇 NOVA TRAVA DE SEGURANÇA (Sugerida pelo Claude)
-                        if (iaRespondendo.has(l.whatsapp_id)) {
-                            console.log(`⏳ [RECUPERAÇÃO] Lead ${l.name} ignorado no loop pois a IA principal já está digitando para ele.`);
-                            continue; // Pula para o próximo lead
-                        }
-                        console.log(`⚠️ [ALERTA] Lead ${l.name} aguardando resposta há algum tempo. Ativando IA...`);
+                    if (mensagens && mensagens.length > 0) {
+                        const ultimaMsg = mensagens[0];
                         
-                        const instancia = sessions.get(l.instance_id);
-                        if (instancia && instancia.ready) {
-                            await processarMensagemManual(instancia.sock, l);
+                        // O banco trouxe a mensagem, agora o Node faz a filtragem leve
+                        if (ultimaMsg.role === 'user' && !ultimaMsg.content?.startsWith('[AUTORESPOSTA]')) {
+                            if (iaRespondendo.has(l.whatsapp_id)) continue; 
+                            
+                            console.log(`⚠️ [SALVAMENTO] Lead ${l.name} aguardando resposta. Reativando IA...`);
+                            const instancia = sessions.get(l.instance_id);
+                            if (instancia && instancia.ready) {
+                                await processarMensagemManual(instancia.sock, l);
+                            }
                         }
                     }
                 } catch (errLeadAtivo) {
-                    console.error(`❌ [ERRO] Falha ao recuperar conversa ativa de ${l.name}:`, errLeadAtivo.message);
-                    continue; // 🛡️ BLINDAGEM: Se der erro neste lead, pula pro próximo sem matar o loop!
+                    console.error(`❌ Erro ao recuperar ${l.name}:`, errLeadAtivo.message);
                 }
             }
         }
 
-        // --- 🚀 NOVO INCREMENTO: GESTÃO DE RETOMADA APÓS INTERVENÇÃO HUMANA ---
-        // Busca leads que você assumiu manualmente (is_paused = true)
+        // ====================================================================
+        // 🚀 2. FOLLOW-UP 24 HORAS (O Cliente ignorou o Bot) - MÁQUINA DE VENDAS
+        // ====================================================================
+        // Calcula o tempo exato: leads contatados entre 24h e 48h atrás
+        const ontem = new Date(Date.now() - 24 * 60 * 60 * 1000).toISOString();
+        const anteontem = new Date(Date.now() - 48 * 60 * 60 * 1000).toISOString();
+
+        const { data: leadsFollowUp } = await supabase
+            .from('leads')
+            .select('id, name, whatsapp_id, instance_id, dono')
+            .eq('status', 'contact')
+            .lte('last_contact_at', ontem)
+            .gte('last_contact_at', anteontem)
+            .limit(15);
+
+        if (leadsFollowUp) {
+            for (const lf of leadsFollowUp) {
+                try {
+                    // Verifica se o cliente JÁ RESPONDEU alguma vez na vida. 
+                    // Traz só o ID para economizar dados de tráfego.
+                    const { data: temResposta } = await supabase
+                        .from('messages')
+                        .select('id')
+                        .eq('whatsapp_id', lf.whatsapp_id)
+                        .eq('role', 'user')
+                        .limit(1);
+
+                    // Se NÃO tem nenhuma resposta do cliente, manda a isca de urgência!
+                    if (!temResposta || temResposta.length === 0) {
+                        const instancia = sessions.get(lf.instance_id);
+                        if (instancia && instancia.ready) {
+                            console.log(`🔔 [FOLLOW-UP] Acordando lead ${lf.name} que visualizou e não respondeu...`);
+                            
+                            let primeiroNomeDono = lf.dono && lf.dono.trim().length > 2 ? lf.dono.trim().split(' ')[0] : 'Opa';
+                            primeiroNomeDono = primeiroNomeDono.charAt(0).toUpperCase() + primeiroNomeDono.slice(1);
+                            
+                            const msgFollowUp = `${primeiroNomeDono}, conseguiu dar uma olhada na mensagem acima? Como a gente tem uma cota de isenção pra região, queria só confirmar se faz sentido pra vcs ou se posso passar a vaga pro próximo comércio da lista.`;
+
+                            await instancia.sock.sendPresenceUpdate('composing', lf.whatsapp_id);
+                            await delay(6000);
+                            await enviarMensagemIA(instancia.sock, lf.whatsapp_id, { text: msgFollowUp });
+                            await db.saveMessage(lf.whatsapp_id, 'assistant', msgFollowUp, lf.instance_id);
+
+                            // Atualiza a data de contato para "agora". Assim ele sai da lista de follow-up e não recebe a mensagem repetida no próximo loop.
+                            await supabase.from('leads').update({ last_contact_at: new Date().toISOString() }).eq('id', lf.id);
+                            await delay(12000); // Respiro anti-ban entre os envios
+                        }
+                    }
+                } catch (errFollow) {
+                    console.error(`❌ Erro no Follow-up de ${lf.name}:`, errFollow.message);
+                }
+            }
+        }
+
+        // ====================================================================
+        // 👤 3. RETOMADA APÓS INTERVENÇÃO HUMANA (10 MINUTOS)
+        // ====================================================================
         const { data: leadsPausados } = await supabase
             .from('leads')
-            .select('*')
+            .select('id, name, whatsapp_id, instance_id, is_paused, manual_pause, last_human_interaction')
             .eq('is_paused', true);
 
         if (leadsPausados) {
-            for (const l of leadsPausados) {
-                try {
-                    // Se não houver registro de interação humana, ignoramos para segurança
-                    if (!l.last_human_interaction) continue;
+            for (const lp of leadsPausados) {
+                // Trava absoluta do sócio comercial: Se ele deu /pausar, a IA NUNCA retoma sozinha.
+                if (!lp.last_human_interaction || lp.manual_pause) continue; 
 
-                    const dezMinutosEmMs = 10 * 60 * 1000; // Define o intervalo de 10 minutos
-                    const ultimaInteracao = new Date(l.last_human_interaction).getTime();
-                    const agora = new Date().getTime();
+                const dezMinutosEmMs = 10 * 60 * 1000; 
+                const ultimaInteracao = new Date(lp.last_human_interaction).getTime();
+                const agora = new Date().getTime();
 
-                    // Se o tempo de silêncio humano for maior que 10 minutos, devolvemos para a IA
-                    if (agora - ultimaInteracao > dezMinutosEmMs) {
-    // 🔴 TRAVA MANUAL: Se o operador pausou manualmente, NUNCA auto-retoma
-    if (l.manual_pause) {
-        console.log(`🔴 [PAUSA MANUAL] ${l.name} está sob controle humano. Loop de recuperação ignorando.`);
-        continue;
-    }
+                if (agora - ultimaInteracao > dezMinutosEmMs) {
+                    if (iaRespondendo.has(lp.whatsapp_id)) continue;
+                    
+                    console.log(`🔄 [RETOMADA] Tempo de humano esgotado para ${lp.name}. Devolvendo para IA...`);
+                    await supabase.from('leads').update({ is_paused: false }).eq('id', lp.id);
 
-    if (iaRespondendo.has(l.whatsapp_id)) continue;
-    console.log(`🔄 [SDR] Tempo de intervenção humana esgotado para ${l.name}. Retomando IA...`);
-    
-    await supabase.from('leads')
-        .update({ is_paused: false })
-        .eq('id', l.id);
-
-    const instancia = sessions.get(l.instance_id);
-    if (instancia && instancia.ready) {
-        await processarMensagemManual(instancia.sock, l);
-    }
-}
-                } catch (errLeadPausado) {
-                    console.error(`❌ [ERRO] Falha ao destravar pausa de ${l.name}:`, errLeadPausado.message);
-                    continue; // 🛡️ BLINDAGEM: Se der erro ao destravar um, pula pro próximo!
+                    const instancia = sessions.get(lp.instance_id);
+                    if (instancia && instancia.ready) {
+                        await processarMensagemManual(instancia.sock, lp);
+                    }
                 }
             }
         }
+
     } catch (errGeral) {
-        console.error("❌ [ERRO CRÍTICO] O motor de recuperação sofreu uma queda de rede/banco:", errGeral.message);
-        // 🛡️ BLINDAGEM MÁXIMA: Engole o erro e permite que o setTimeout abaixo rode de qualquer jeito.
+        console.error("❌ [ERRO CRÍTICO] Loop de recuperação falhou:", errGeral.message);
     } finally {
-        // Roda a cada 5 minutos para não sobrecarregar o banco (GARANTIDO QUE VAI RODAR AGORA)
-        setTimeout(loopRecuperacaoConversas, 1000 * 60 * 5);
+        // Blinda a máquina: o setTimeout aqui garante que o ciclo nunca vai quebrar ou encavalar
+        setTimeout(loopRecuperacaoConversas, 1000 * 60 * 5); 
     }
 }
 
@@ -1255,7 +1334,7 @@ async function processarMensagemManual(sock, lead) {
     try {
         console.log(`🧠 [IA] Gerando resposta de recuperação para ${lead.name}...`);
         const historico = histRaw.map(m => ({ role: m.role, content: m.content }));
-        const instanceData = await db.getInstanceRules(instanceId);
+        const instanceData = await getRegrasEmCache(instanceId);
         
         // Gera a resposta de "venda"
         let resposta = await gerarRespostaIA(historico, lead, instanceData);
@@ -1377,24 +1456,43 @@ async function processarMensagemManual(sock, lead) {
 }
 
 // 👇 Adicione esta variável de controle aqui fora
+
 let loopIniciado = false;
 
 module.exports = {
-    initMultiTenancy: async (io) => {
+    // 👇 Recebe a porta de comunicação (io) e o Alarme (sdrEvents)
+    initMultiTenancy: async (io, sdrEvents) => {
         ioSocket = io;
+        
         const insts = await db.getActiveInstances(); 
         for (const i of insts) { 
             await startInstance(i.id, i.name); 
             await delay(3000); 
             
-            // 🚀 LIGA A TURBINA INDEPENDENTE PARA ESTE CHIP!
-            motorAtaquePorChip(i.id); 
+            // 🚀 ARRANQUE INICIAL: Liga a turbina para este chip!
+            processarFilaDeAtaque(i.id); 
         }
         
-        // 🛑 TRAVA DO LOOP APLICADA AQUI (Motor 2)
+        // 🛑 BLINDAGEM MÁXIMA: Garante que o Vigia e o Ouvinte sejam criados UMA ÚNICA VEZ
         if (!loopIniciado) {
             loopIniciado = true;
             loopRecuperacaoConversas(); 
+
+            // ⏰ VIGIA NOTURNO: Varredura de segurança a cada 30 minutos
+            setInterval(() => {
+                console.log("⏰ [VIGIA] Varredura de segurança ativada...");
+                for (const id of sessions.keys()) {
+                    processarFilaDeAtaque(id);
+                }
+            }, 30 * 60 * 1000);
+
+            // 🔔 OUVINTE DO ALARME RAM: Escuta o grito do Scraper
+            if (sdrEvents) {
+                sdrEvents.on('NOVO_LEAD_DISPONIVEL', (chipIdDestino) => {
+                    console.log(`🔔 [ALARME RAM] Novo lead recebido! Acordando o chip ${chipIdDestino}...`);
+                    processarFilaDeAtaque(chipIdDestino);
+                });
+            }
         }
     },
     enviarMensagemSDR: async () => {},
@@ -1414,7 +1512,11 @@ module.exports = {
     criarNovaInstancia: async (n, t, userId) => {
         const { data } = await supabase.from('instances').insert([{ name: n, owner_phone: t, user_id: userId }]).select().single();
     
-        if (data) startInstance(data.id, data.name); 
+        if (data) {
+            await startInstance(data.id, data.name); 
+            // 👇 MELHORIA: Dá o arranque imediato assim que um chip novo é criado no painel
+            processarFilaDeAtaque(data.id);
+        }
         return data; 
     }
 };
