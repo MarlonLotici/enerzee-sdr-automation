@@ -144,7 +144,7 @@ async function getRegrasEmCache(instanceId) {
 
 async function gerarRespostaIA(historico, contextoLead, instanceData) {
     const concessionariaLocal = MAPA_CONCESSIONARIAS[contextoLead.estado] || 'concessionária de energia';
-    // 1. ANÁLISE DE DADOS E CONTEXTO (Data Intelligence)
+
     const nomeLead = (contextoLead.dono && typeof contextoLead.dono === 'string') 
         ? contextoLead.dono.split(' ')[0] 
         : (contextoLead.name || "Gestor");
@@ -154,150 +154,157 @@ async function gerarRespostaIA(historico, contextoLead, instanceData) {
         .trim();
 
     const bairroLead = contextoLead.bairro || "sua região";
+
+    // Injeta contexto de reversão se já foi tentada — segurança extra além do histórico
+    const reversaoJaTentada = contextoLead.objection_reversed 
+        ? '\n\nAVISO CRÍTICO: Este lead já recebeu UMA tentativa de reversão de objeção anteriormente (marcador [REVERSAO_TENTADA] no histórico). Se ele recusar novamente, encerre a conversa com cordialidade. PROIBIDO tentar reverter uma segunda vez.'
+        : '';
     
-    // 🏢 SAAS: Lê a identidade do chip do banco de dados
-    const agentName = instanceData?.agent_name || "Marlon";
+    const agentName  = instanceData?.agent_name  || "Marlon";
     const companyName = instanceData?.company_name || "Enerzee";
 
-    // Perfilamento Financeiro (High Ticket vs Mass Market)
     const isBigFish = (contextoLead.capital_social_numeric > 500000);
     const ancoraConta = isBigFish ? "R$ 3.000" : "R$ 700";
-    // Definição de Arquétipo de Venda
+
     const perfilComportamental = isBigFish 
-        ? "ARQUÉTIPO: O BANQUEIRO DE INVESTIMENTOS. Tom: Direto, focado em EBITDA, Redução de OPEX e Zero CAPEX." 
+        ? "ARQUÉTIPO: O BANQUEIRO DE INVESTIMENTOS. Tom: Direto, focado em redução de OPEX e Zero CAPEX." 
         : "ARQUÉTIPO: O CONSULTOR PARCEIRO. Tom: Educativo, focado em 'sobrar dinheiro no caixa' e alívio das contas.";
 
-        // ============================================================================
-// 🧠 SYSTEM PROMPT — SDR ENERZEE V2.0 (OTIMIZADO PARA CONVERSÃO)
-// Substitua o bloco const systemPrompt = `...` dentro de gerarRespostaIA()
-// ============================================================================
-
-const systemPrompt = `
-### 1. 🆔 IDENTIDADE E MISSÃO
-Você é Marlon, Consultor de Energia sênior da ENERZEE.
+    const systemPrompt = `
+### 1. IDENTIDADE E MISSÃO
+Você é ${agentName}, Consultor de Energia sênior da ${companyName}.
 Produto: Energia por Assinatura (Lei 14.300) — Geração Distribuída via Usinas WEG certificadas.
-Missão: Agendar uma consultoria gratuita de 20 minutos via Calendly oferecendo redução de custo de energia com ZERO custo de adesão e ZERO obras.
-Tom: Direto, humano, B2B brasileiro. Use "vc", "tá", "né", "pra". NUNCA use palavras como "reunião", "compliance", "EBITDA" a menos que o perfil do lead indique isso.
-Contexto: Você enviou a mensagem inicial dizendo que viu o cadastro da empresa num levantamento regional e que a concessionária local vem cobrando uma tarifa que já podia ter sido reduzida. Perguntou se eles pagam conta cheia ou já recebem desconto. O lead ainda não sabe exatamente o que é — apenas que há algo sobre a conta de luz.
+Missão: Agendar uma consultoria gratuita de 30 minutos via Calendly com ZERO custo de adesão e ZERO obras.
+Tom: Direto, humano, B2B brasileiro. Use "vc", "tá", "né", "pra". NUNCA use "reunião", "compliance", "EBITDA" a menos que o perfil do lead indique.
 
+Contexto do primeiro contato: Você enviou uma mensagem curta dizendo que viu algo sobre a conta de energia da empresa e perguntou se estava falando com o responsável pelas contas fixas. O lead ainda não sabe o que é — apenas que há algo sobre a conta de luz.
 
 FILOSOFIA DE VENDA — CHALLENGER SALE:
-Você não dá aulas técnicas sobre leis. Você ENSINA que comércios do porte da ${nomeEmpresa} estão perdendo dinheiro e pagando 20% a mais na conta de luz. APENAS de ensinar a dor, você faz a pergunta para confirmar se o lead aprova.
+Você não dá aulas técnicas. Você ENSINA que empresas do porte da ${nomeEmpresa} estão pagando 20% a mais na conta de luz sem saber. Só depois de causar a dor você apresenta a solução.
 
 ---
 
-### 2. 🚨 REGRAS ABSOLUTAS DE FORMATO (RISCO DE FALHA CRÍTICA)
+### 2. REGRAS ABSOLUTAS DE FORMATO
 1. MÁXIMO DE 2 BALÕES: Use [QUEBRA] para separar. NUNCA gere 3 balões.
-2. LIMITE DE TAMANHO: Cada balão deve ter NO MÁXIMO 2 frases curtas (aprox. 20 palavras). Se precisar de mais, corte. Seja direto.
-3. TEXTO PURO: É PROIBIDO usar asteriscos (*), sublinhados (_), crases (\`) ou markdown.
-4. UMA ÚNICA PERGUNTA: Nunca faça duas perguntas no mesmo envio.
-5. NÃO REPITA: Nunca repita o mesmo argumento ou áudio que já foi usado no histórico.
-6. DIFERENTES TAMANHOS DE TEXTO: Um ser humano sempre envia frases de tamanhos diferentes, evite enviar blocos de texto com tamanhos semelhantes.
+2. TAMANHO: Cada balão tem NO MÁXIMO 2 frases curtas (~20 palavras). Corte o resto.
+3. TEXTO PURO: PROIBIDO asteriscos (*), sublinhados (_), crases ou markdown.
+4. UMA PERGUNTA: Nunca duas perguntas no mesmo envio.
+5. NÃO REPITA: Nunca repita argumento ou áudio já usado no histórico.
+6. VARIAÇÃO: Frases de tamanhos diferentes — humanos não falam em blocos uniformes.
 
 ---
 
-### 3. 🛑 REGRAS DE OURO (PRIORIDADE MÁXIMA)
-1. ROBÔ / MENU AUTOMÁTICO: Se a mensagem do cliente contiver menu numerado, cardápio, lista de produtos/serviços, frase de boas-vindas automática ("agradece seu contato", "retornaremos", 
-      comercial", "sua mensagem foi recebida", "em breve retornamos")
-   - Horários de funcionamento como resposta isolada
-   - Qualquer resposta que claramente não foi digitada por uma pessoa real, retorne APENAS a tag [ROBO]. Nada mais.
+### 3. REGRAS DE OURO (PRIORIDADE MÁXIMA)
 
-2. RESPEITO AO "NÃO":
-   — Se o lead disser "Não tenho interesse" e AINDA NÃO houve tentativa de reversão: faça UMA pergunta curta. Ex: "Entendo. Mas só por curiosidade, a conta aí hoje passa de R$ 800?"
-   — Se insistir na recusa ou a tentativa já foi feita: Responda APENAS: "Compreendo! Desejo ótimos negócios para a ${nomeEmpresa}. Qualquer coisa, estou por aqui!" e ENCERRE.
+1. ROBÔ / AUTORESPOSTA: Se a mensagem contiver menu numerado, cardápio, boas-vindas automáticas ("agradece seu contato", "retornaremos", "em horário comercial", "mensagem recebida"), horários de funcionamento isolados ou qualquer resposta claramente não digitada por uma pessoa: retorne APENAS [ROBO]. Nada mais.
 
-3. KNOCK-OUT (JÁ TEM SOLAR): Se o lead disser que já possui placa solar, usina própria ou geração ativa:
-   Responda APENAS: "Entendi! Como a ${nomeEmpresa} já possui compensação ativa, a regulação da ANEEL não permite acumular dois benefícios. Parabéns pela gestão energética!" e ENCERRE.
+2. RESPEITO AO NÃO:
+   — Primeira recusa ("não tenho interesse"): faça UMA pergunta curta de reversão. Ex: "Entendo. Só curiosidade, a conta aí passa de R$ 800?"
+   — Segunda recusa ou se [REVERSAO_TENTADA] estiver no histórico: responda APENAS "Compreendo! Desejo ótimos negócios pra ${nomeEmpresa}. Qualquer coisa, estou por aqui!" e ENCERRE.
 
-4. FLEXIBILIDADE DO FUNIL (REGRA DO ELÁSTICO): Clientes reais pulam etapas. Se o lead perguntar "quanto custa?" ou "tem obra?" logo de cara, NÃO seja robótico. Responda a dúvida dele em 1 frase (ex: "é zero custo de adesão e sem obra") e, logo depois (usando [QUEBRA]), puxe a conversa de volta com a pergunta de diagnóstico do funil (ex: valor da conta).
-5. FILTRO DE IDENTIDADE: Se o lead disser que a pessoa procurada não está, não trabalha lá ou que é apenas um funcionário, responda absorvendo a informação e avançando: "Sem problemas! Consegue me colocar em contato com o responsável? (se a pessoa indicar que é mulher trate como a responsável, se indicar que é homem trate como o responsável) 
+3. KNOCK-OUT (JÁ TEM SOLAR): Se o lead disser que já tem placa solar, usina própria ou geração ativa: responda APENAS "Entendi! Como a ${nomeEmpresa} já possui compensação ativa, a regulação da ANEEL não permite acumular dois benefícios. Parabéns pela gestão energética!" e ENCERRE.
+
+4. REGRA DO ELÁSTICO: Se o lead perguntar "quanto custa?" ou "tem obra?" antes do pitch, responda em 1 frase ("zero custo de adesão, sem obra") e com [QUEBRA] volte para a pergunta do funil.
+
+5. FILTRO DE IDENTIDADE: Se disserem que a pessoa procurada não está ou é só funcionário: "Sem problemas! Consegue me colocar em contato com o responsável pelas contas?"
+
 ---
 
+### 4. A LINHA DO TEMPO DA VENDA (SPIN SELLING)
+Antes de gerar qualquer resposta, identifique o estágio atual e avance APENAS UM por vez.
 
+[ESTÁGIO 0 — QUALIFICAÇÃO DO INTERLOCUTOR]
+Gatilho: Primeira resposta do lead ao contato inicial.
+Objetivo: confirmar se é o decisor ANTES de qualquer pitch.
 
-### 4. 🌪️ A LINHA DO TEMPO DA VENDA (SPIN SELLING OBRIGATÓRIO)
-ESTA É A ESPINHA DORSAL DA CONVERSA. Antes de gerar qualquer palavra, analise o histórico, descubra em qual estágio o lead está e avance APENAS UM ESTÁGIO por vez. PROIBIDO pular etapas ou revelar a solução antes de causar a dor.
+CENÁRIO A — É o decisor ("sou eu", "pode falar", "sim"):
+→ Vá direto ao ESTÁGIO 1.
+Exemplo: "Que bom! A ${concessionariaLocal} não costuma avisar, mas vem cobrando uma tarifa que já podia ter caído. A conta de luz aí costuma passar de ${ancoraConta}?"
 
-[ESTÁGIO 1 — SITUAÇÃO / INVESTIGAÇÃO DO PROBLEMA]
-Gatilho: O lead respondeu QUALQUER COISA à isca inicial — "oi", "pago cheio", "como assim?", "que tarifa?", "não sei".
-NUNCA responda "qual dado?" ou faça outra pergunta antes de revelar a dor.
-Ação: Assuma a liderança. Confirme que a concessionária lucra no silêncio e pergunte o valor da conta para qualificar.
-Balão 1: "Pois é, a ${concessionariaLocal} não avisa porque pra eles é melhor você continuar pagando a tarifa cheia. A gente identificou isso no cadastro de vocês."
+CENÁRIO B — É gatekeeper ("não sou eu", "aqui é a recepção"):
+→ "Entendi! Como é sobre redução de custo na conta de energia, o ideal é falar com quem cuida disso. [QUEBRA] Consegue me passar o WhatsApp do responsável?"
+→ Se recusar: "Sem problema! Qualquer coisa, estou por aqui." e ENCERRE.
+
+NUNCA inicie o ESTÁGIO 1 sem o interlocutor confirmado.
+
+[ESTÁGIO 1 — SITUAÇÃO]
+Gatilho: Decisor confirmado e respondeu qualquer coisa ("pago cheio", "como assim?", "não sei").
+Ação: Revele que a concessionária lucra no silêncio. Pergunte o valor da conta.
+Balão 1: "Pois é, a ${concessionariaLocal} não avisa porque pra eles é melhor vc continuar pagando a tarifa cheia. A gente identificou isso no cadastro de vcs."
 [QUEBRA]
-Balão 2: "Só pra confirmar se vocês têm o perfil certo, a conta de luz aí hoje costuma passar de ${ancoraConta}?"
+Balão 2: "Só pra confirmar se têm o perfil certo — a conta de luz aí costuma passar de ${ancoraConta}?"
 
+[ESTÁGIO 2 — IMPLICAÇÃO / A DOR]
+Gatilho: Lead informou o valor aproximado da conta.
+Ação: Calcule 20% do valor EXATO que o lead informou para economia mensal, e multiplique por 12 para o rombo anual. Use os números reais — NUNCA invente valores fixos.
+Exemplo (se lead disse "pago R$ 1.500"): "Quem paga tarifa cheia nessa faixa tá deixando uns R$ 300 na mesa todo mês — são R$ 3.600 no ano indo pro bolso da ${concessionariaLocal}. [QUEBRA] Vcs já tinham parado pra calcular isso?"
+Exemplo (se lead disse "pago R$ 800"): "Nessa faixa, são uns R$ 160 por mês que ficam na concessionária sem precisar. Quase R$ 2.000 no ano. [QUEBRA] Vcs já tinham visto isso?"
+REGRA: Sempre use o valor que o lead mencionou como base do cálculo. Se o lead não informou valor exato, use uma faixa aproximada com "uns" ou "em torno de".
 
-[ESTÁGIO 2 — IMPLICAÇÃO / GIRANDO A FACA (A DOR)]
-Gatilho: Lead informou o valor aproximado da conta (ex: "vem uns 1500", "acima de 2 mil", "uns 900").
-Ação: NÃO venda ainda. Calcule a perda (20% do valor) mensal e o rombo anual. Faça ele sentir a dor.
-Exemplo: "Entendi. Quem paga tarifa cheia nessa faixa tá deixando uns R$ 300 na mesa todo mês. São quase R$ 4.000 no ano que a concessionária leva. [QUEBRA] Vcs já tinham parado pra fazer essa conta do quanto de dinheiro perdem nessa brincadeira?"
+[ESTÁGIO 3 — SOLUÇÃO]
+Gatilho: Lead concordou com a dor ("nossa", "é muito", "o que faço?", "como funciona?").
+Ação: Apresente o remédio via áudio. Sempre envie texto junto com a tag.
+- "Como funciona?" → [AUDIO_COMO_FUNCIONA] [QUEBRA] Como não tem obra nenhuma, faz sentido a gente simular o valor exato da ${nomeEmpresa}?
+- "É seguro?" / "É golpe?" → [AUDIO_SEGURANCA] [QUEBRA] Faz sentido economizar mantendo a segurança da concessionária atual?
+- "Precisa de placa?" / "Tem obra?" → [AUDIO_OBRAS_PLACAS] [QUEBRA] Como não tem obra, consegue me dizer o valor aproximado da conta mensal?
 
-[ESTÁGIO 3 — NECESSIDADE / REVELANDO A SOLUÇÃO (OS ÁUDIOS)]
-Gatilho: Lead concordou com a dor, ficou assustado com o valor ("nossa", "é muito"), ou perguntou "o que eu faço?", "como funciona?", "que isenção é essa?".
-Ação: AGORA SIM, você apresenta o remédio usando os Gatilhos de Áudio. Se ele perguntou como funciona, mande o [AUDIO_COMO_FUNCIONA].
-Atenção: Lembre-se da regra vital. Sempre envie o texto junto com o áudio.
-Exemplo de Texto Pós-Áudio: "Como não precisa furar telhado nem gastar nada, faz sentido a gente abrir o simulador oficial pra ver o valor exato que vcs deixariam de pagar?"
+[ESTÁGIO 4 — AGENDAMENTO]
+Gatilho: Lead concordou em ver a simulação ou pediu próximo passo.
+Ação: Venda os 30 minutos de consultoria. Crie escassez leve.
+Exemplo: "Pra não ficar no achismo, a gente abre o simulador oficial junto e vê o número exato da ${nomeEmpresa} em 30 minutos. [QUEBRA] Fica melhor amanhã de manhã ou à tarde?"
 
-[ESTÁGIO 4 — VENDENDO O SIMULADOR / AGENDAMENTO]
-Gatilho: Lead concordou em ver a simulação ou pediu o próximo passo.
-Ação: Aumente o valor do seu tempo e venda a consultoria de 20 minutos.
-Exemplo: "Pra não ficar no achismo, a gente abre o simulador oficial junto e vê o número exato da ${nomeEmpresa} em 20 minutos. [QUEBRA] Fica melhor amanhã de manhã ou à tarde? Já adianta separar a fatura de luz — com ela na mão o cálculo fica preciso."
+[ESTÁGIO 5 — FECHAMENTO]
+Gatilho: Lead definiu período ("pode ser de manhã", "amanhã", "semana que vem").
+Ação: Envie o link limpo no Balão 1. Instrução da fatura no Balão 2. Sem mais pitch.
+Resposta EXATA:
+"Perfeito! Escolhe o horário que funcionar melhor aqui: https://calendly.com/marlonlotici6/30min [QUEBRA] Depois de agendar me manda uma foto da fatura de energia — já deixo a simulação da ${nomeEmpresa} pronta pra nossa conversa."
+---
 
-
-[ESTÁGIO 5 — FECHAMENTO / LINK]
-Gatilho: Lead definiu um período ("pode ser de manhã", "amanhã").
-Ação: Envie o link. Ponto final.
-Resposta: "Perfeito! Escolhe o horário que funcionar melhor aqui na agenda: [QUEBRA] 🔗 https://calendly.com/marlonlotici6/30min [QUEBRA] Depois de agendar me envia uma cópia da fatura de energia que já deixo a simulação da ${nomeEmpresa} pronta, ou se preferir leva para a nossa conversa que faço na hora."
-
-
-### 5. 🎙️ GATILHOS DE ÁUDIO E MATRIZ DE OBJEÇÕES
-
-REGRA DE ÁUDIO VITAL: Você tem 3 áudios gravados. Sempre que a resposta for uma tag de áudio, você DEVE enviar o texto junto (com [QUEBRA]) contendo uma pergunta. NUNCA envie só a tag. NUNCA invente tags.
-- "Como funciona?" / "De onde vem a energia?" → [AUDIO_COMO_FUNCIONA] [QUEBRA] Sabendo que é custo zero, a conta de vcs hoje é em torno de quanto?
-- "É seguro?" / "É golpe?" / "Tem multa?" → [AUDIO_SEGURANCA] [QUEBRA] Faz sentido pra vc economizar mantendo a segurança da concessionária atual?
-- "Precisa de placa?" / "Tem obra?" / "Fura o telhado?" → [AUDIO_OBRAS_PLACAS] [QUEBRA] Como não tem obra nenhuma, a gente consegue simular sua economia agora. Qual o valor aproximado da conta mensal?
-
-REGRA ANTI-REPETIÇÃO: Se o histórico tiver "<<Áudio Como Funciona Enviado>>", NÃO use a tag. Diga: "Como expliquei no áudio ali em cima, a ideia é essa. Ficou alguma dúvida ou podemos agendar um horário?"
-
-OBJEÇÕES COMUNS:
-1. "QUERO POR E-MAIL" / "MANDA MATERIAL": "Posso preparar algo sim! [QUEBRA] Mas o relatório fica muito mais completo quando a gente abre o simulador junto. São só 15 minutinhos. Fica melhor amanhã cedo ou tarde?"
-2. GATEKEEPER (recepção, secretária): "Entendo! Como o assunto é o mapeamento técnico da fatura, o ideal é falar com quem cuida dos custos fixos. [QUEBRA] Vc consegue me passar o WhatsApp deles?" (Se recusar: Agradeça e ENCERRE).
-3. "NÃO TENHO TEMPO": "Entendo! São literalmente 15 minutos e pode ser quando der melhor pra vc. [QUEBRA] Semana que vem funciona?"
-4. "DEIXA EU PENSAR" / "VOU VER COM MEU SÓCIO": "Claro! [QUEBRA] Só pra registrar: a cota pra região da ${nomeEmpresa} tem mais 3 vagas dependendo do tamanho de consumo do próximo estabelecimento que entrar. Se quiser garantir antes, são só 15 minutos. Fica melhor amanhã cedo ou tarde?"
-5. "QUANTO CUSTA?": "Zero custo de adesão — o desconto vem na fatura da concessionária todo mês. [QUEBRA] Pra ver o valor exato, preciso de 15 minutos com vc. Fica melhor amanhã ou outro dia?"
+### 5. ANTI-REPETIÇÃO DE ÁUDIO
+Se o histórico contiver "<<Áudio Como Funciona Enviado>>": NÃO use [AUDIO_COMO_FUNCIONA]. Diga: "Como expliquei no áudio ali em cima, é isso mesmo. Ficou alguma dúvida ou a gente agenda?"
+Se contiver "<<Áudio Segurança Enviado>>": NÃO use [AUDIO_SEGURANCA].
+Se contiver "<<Áudio Obras/Placas Enviado>>": NÃO use [AUDIO_OBRAS_PLACAS].
 
 ---
 
-### 6. 🏆 REGRAS REGIONAIS E PROVA SOCIAL
-- PROVA SOCIAL (Use máx 1x): "Só aqui no ${bairroLead}, já mapeamos comércios similares economizando entre R$ 200 e R$ 600 por mês — sem obra e sem fidelidade."
-- DESCONTOS (Use como âncora "Até 20% de redução", não explique as frações a menos que exijam): MS, MT, GO, PA (12-15%); PR (15%); SC e RS (10-15%); PE, BA, CE, MG (25% nos primeiros 2 meses).
+### 6. OBJEÇÕES
+1. "MANDA POR E-MAIL" / "MANDA MATERIAL": "Posso sim! [QUEBRA] Mas o relatório fica bem mais completo quando a gente abre o simulador junto — são 15 minutos. Fica melhor amanhã cedo ou tarde?"
+2. "NÃO TENHO TEMPO": "Entendo! São literalmente 15 minutos quando der melhor pra vc. [QUEBRA] Semana que vem funciona?"
+3. "DEIXA EU PENSAR" / "VOU VER COM O SÓCIO": "Claro! [QUEBRA] Só pra registrar: a cota da região da ${nomeEmpresa} tem mais 3 vagas. Se quiser garantir antes, são só 15 minutos. Amanhã cedo ou tarde?"
+4. "QUANTO CUSTA?": "Zero custo de adesão — o desconto vem direto na fatura todo mês. [QUEBRA] Pra ver o valor exato da ${nomeEmpresa}, preciso de 15 minutos. Amanhã funciona?"
+5. [REVERSAO_TENTADA] no histórico + nova recusa: encerre com cordialidade. Não tente de novo.
 
 ---
 
-### 7. 👤 DADOS GERAIS DO LEAD (USE PARA PERSONALIZAR)
+### 7. PROVA SOCIAL E DESCONTOS REGIONAIS
+- Prova social (máx 1x por conversa): "Só aqui no ${bairroLead}, mapeamos comércios similares economizando entre R$ 200 e R$ 600 por mês — sem obra e sem fidelidade."
+- Âncora de desconto: "até 20% de redução". Não detalhe as frações a menos que o lead pergunte.
+- Por estado: MS/MT/GO/PA (12-15%), PR (15%), SC/RS (10-15%), PE/BA/CE/MG (25% primeiros 2 meses).
+
+---
+
+### 8. DADOS DO LEAD
 Nome: ${nomeLead}
 Empresa: ${nomeEmpresa}
 Localização: ${bairroLead}
-Perfil Comportamental: ${perfilComportamental}
-Adapte seu tom a este perfil: Se BANQUEIRO DE INVESTIMENTOS (foco em redução de custo fixo e retorno imediato); Se CONSULTOR PARCEIRO (foco em sobrar dinheiro no caixa e sem dor de cabeça).
+Perfil: ${perfilComportamental}
+${reversaoJaTentada}
 `;
 
-
-const MAX_TENTATIVAS = 3;
+    const MAX_TENTATIVAS = 3;
     
     for (let tentativa = 1; tentativa <= MAX_TENTATIVAS; tentativa++) {
         try {
-
             const chatCompletion = await together.chat.completions.create({
-            messages: [
+                messages: [
                     { role: 'system', content: systemPrompt },
                     ...historico 
                 ],
                 model: MODELO_CEREBRO,
-                temperature: 0.2,
-                max_tokens: 120,
-                presence_penalty: 0.05,
-                frequency_penalty: 0.1
+                temperature: 0.3,
+                max_tokens: 180,
+                presence_penalty: 0.1,
+                frequency_penalty: 0.15
             });
             
             let respostaDaIA = chatCompletion.choices[0].message.content;
@@ -308,7 +315,7 @@ const MAX_TENTATIVAS = 3;
             console.error(`❌ [GROQ] Tentativa ${tentativa}/${MAX_TENTATIVAS} falhou para ${nomeLead}: ${e.message}`);
             
             if (tentativa < MAX_TENTATIVAS) {
-                const espera = tentativa * 3000; // 3s, 6s entre tentativas
+                const espera = tentativa * 3000;
                 console.log(`⏳ [GROQ] Aguardando ${espera/1000}s antes de tentar novamente...`);
                 await new Promise(resolve => setTimeout(resolve, espera));
             }
@@ -318,8 +325,7 @@ const MAX_TENTATIVAS = 3;
     console.error(`🔴 [GROQ] Todas as ${MAX_TENTATIVAS} tentativas falharam para ${nomeLead}. Retornando null.`);
     return null;
 
-} // <-- Fim da função gerarRespostaIA
-
+}
 // ============================================================================
 // 🕵️ EXTRAÇÃO DE DADOS (VISION E PDF) - SEM SIMPLIFICAÇÃO
 // ============================================================================
@@ -537,6 +543,134 @@ async function enviarMensagemIA(sock, jid, content) {
         return null;
     }
 }
+
+// ============================================================================
+// 🧠 NÚCLEO UNIFICADO DE RESPOSTA — elimina duplicação entre processarMensagem
+// e processarMensagemManual. Toda lógica de áudio e envio vive aqui.
+// ============================================================================
+async function filtrarEEnviarResposta(sock, remoteJid, resposta, historico, lead, instanceId) {
+    if (!resposta) return;
+
+    // ── 1. INTERCEPTADOR [ROBO] ──────────────────────────────────────────────
+    if (resposta.includes('[ROBO]')) {
+        console.log(`🤖 [SILÊNCIO] Autoresposta detectada para ${lead.name}. Aguardando humano...`);
+        return;
+    }
+
+    const memoriaHistorico = JSON.stringify(historico);
+
+    // ── 2. ANTI-REPETIÇÃO DE ÁUDIO ───────────────────────────────────────────
+    if (memoriaHistorico.includes('<<Áudio Como Funciona Enviado>>') && 
+        /\[AUDIO[_\w]*?(FUNCIONA|COMO)[_\w]*?\]/i.test(resposta)) {
+        console.log("🛡️ [SDR] Bloqueando repetição do áudio 1...");
+        resposta = 'Como te expliquei no áudio ali em cima, a gente usa a energia das nossas usinas WEG pra injetar na sua rede e te dar o desconto direto. [QUEBRA] Ficou alguma dúvida sobre essa parte?';
+    }
+    if (memoriaHistorico.includes('<<Áudio Segurança Enviado>>') && 
+        /\[AUDIO[_\w]*?SEGURA[NÇC]A[_\w]*?\]/i.test(resposta)) {
+        console.log("🛡️ [SDR] Bloqueando repetição do áudio 2...");
+        resposta = 'Conforme te falei no áudio agora há pouco, é super seguro e não tem fidelidade. [QUEBRA] Vc tem a conta fácil aí pra gente ver se a empresa aprova?';
+    }
+    if (memoriaHistorico.includes('<<Áudio Obras/Placas Enviado>>') && 
+        /\[AUDIO[_\w]*?(PLACA|OBRA)[_\w]*?\]/i.test(resposta)) {
+        console.log("🛡️ [SDR] Bloqueando repetição do áudio 3...");
+        resposta = 'Como comentei no áudio anterior, é zero obras. Não precisa de placa no telhado. [QUEBRA] Consegue me mandar a foto da fatura pra gente simular?';
+    }
+
+    // ── 3. MOTOR DE ÁUDIO (CATCH-ALL BLINDADO) ───────────────────────────────
+    const todasAsTagsAudio = resposta.match(/\[AUDIO.*?\]/gi);
+
+    if (todasAsTagsAudio) {
+        for (const tag of todasAsTagsAudio) {
+            console.log(`🎤 [SDR] Tag de áudio detectada: ${tag}`);
+
+            const tagStr = tag.toUpperCase();
+            let audioFile = '';
+            let memoriaTag = '';
+
+            if (tagStr.includes('FUNCIONA') || tagStr.includes('COMO')) {
+                audioFile = './assets/audio_como_funciona.ogg';
+                memoriaTag = '<<Áudio Como Funciona Enviado>>';
+            } else if (tagStr.includes('SEGUR')) {
+                audioFile = './assets/audio_seguranca.ogg';
+                memoriaTag = '<<Áudio Segurança Enviado>>';
+            } else if (tagStr.includes('PLACA') || tagStr.includes('OBRA')) {
+                audioFile = './assets/audio_obras_placas.ogg';
+                memoriaTag = '<<Áudio Obras/Placas Enviado>>';
+            }
+
+            // Remove a tag do texto — lead nunca vê colchetes
+            resposta = resposta.replace(tag, '').trim();
+
+            if (audioFile && fs.existsSync(audioFile)) {
+                await sock.sendPresenceUpdate('recording', remoteJid);
+                await delay(6000);
+                try {
+                    const audioBuffer = fs.readFileSync(audioFile);
+                    await sock.sendMessage(remoteJid, {
+                        audio: audioBuffer,
+                        mimetype: 'audio/ogg; codecs=opus',
+                        ptt: true
+                    });
+                    console.log(`✅ [SDR] Áudio enviado: ${memoriaTag}`);
+                    await db.saveMessage(lead.whatsapp_id, 'assistant', memoriaTag, instanceId);
+                    await delay(2000);
+                } catch (erroAudio) {
+                    console.error("❌ [ERRO ÁUDIO]:", erroAudio.message);
+                }
+            } else {
+                console.log(`⚠️ [BLINDAGEM] Tag inválida ou arquivo inexistente: ${tag}. Ignorado.`);
+            }
+        }
+    }
+
+    // ── 4. SE A IA GEROU APENAS TAG (texto ficou vazio após remoção) ─────────
+    if (resposta.trim().length === 0) return;
+
+    // ── 5. FATIADOR E SIMULADOR HUMANO DE DIGITAÇÃO ──────────────────────────
+    const mensagensSplit = resposta
+        .split('[QUEBRA]')
+        .map(t => t.trim())
+        .filter(t => t.length > 0)
+        .slice(0, 2);
+
+    for (let i = 0; i < mensagensSplit.length; i++) {
+        const trecho = mensagensSplit[i];
+        const tempoDigitacao = (trecho.length * 80) + 4000;
+
+        await sock.sendPresenceUpdate('composing', remoteJid);
+        await delay(Math.max(5000, Math.min(tempoDigitacao, 14000)));
+
+        await enviarMensagemIA(sock, remoteJid, { text: trecho });
+        await db.saveMessage(lead.whatsapp_id, 'assistant', trecho, instanceId);
+
+        if (i < mensagensSplit.length - 1) {
+            await sock.sendPresenceUpdate('paused', remoteJid);
+            await delay(Math.random() * 3000 + 3500);
+
+            // ── 6. DETECTOR DE REVERSÃO DE OBJEÇÃO ──────────────────────────────────
+    // Se a IA acabou de tentar reverter uma recusa, marca no banco.
+    // Assim, na próxima vez que a IA ver o histórico, sabe que já tentou.
+    const respostaFinal = mensagensSplit.join(' ').toLowerCase();
+    const sinaisDeReversao = [
+        'só por curiosidade',
+        'só curiosidade', 
+        'a conta aí passa',
+        'a conta passa de',
+        'antes de encerrar'
+    ];
+    const tentouReverter = sinaisDeReversao.some(s => respostaFinal.includes(s));
+
+    if (tentouReverter && !lead.objection_reversed) {
+        console.log(`🔄 [REVERSÃO] IA tentou reverter objeção de ${lead.name}. Marcando no banco...`);
+        await supabase.from('leads').update({ objection_reversed: true }).eq('id', lead.id);
+        
+        // Salva marcador no histórico para a IA ver na próxima chamada
+        await db.saveMessage(lead.whatsapp_id, 'assistant', '[REVERSAO_TENTADA]', instanceId);
+    }
+        }
+    }
+}
+
 async function processarMensagem(sock, msg, instanceId, textoConsolidado = null) {    const remoteJid = msg.key.remoteJid;
     if (remoteJid.includes('@g.us')) return; 
 
@@ -816,125 +950,8 @@ if (fromMe) {
         const historico = histRaw.map(m => ({ role: m.role, content: m.content }));
         const instanceData = await getRegrasEmCache(instanceId);
         
-   let resposta = await gerarRespostaIA(historico, lead, instanceData);
-
-        // 🛑 INTERCEPTADOR [ROBO]: Silêncio total — aguarda humano
-if (resposta && resposta.includes('[ROBO]')) {
-    console.log(`🤖 [SILÊNCIO IA] Autoresposta detectada pela IA para ${lead.name}. Aguardando humano...`);
-    await db.saveMessage(lead.whatsapp_id, 'user', `[AUTORESPOSTA] ${texto}`, instanceId);
-    return;
-}
-        if (resposta) {
-
-
-                // ========================================================================
-// 🛑 ANTI-REPETIÇÃO DE ÁUDIO (CORRIGIDO)
-// ========================================================================
-const memoriaHistorico = JSON.stringify(historico);
-
-if (memoriaHistorico.includes('<<Áudio Como Funciona Enviado>>') && /\[AUDIO[_\w]*?(FUNCIONA|COMO)[_\w]*?\]/i.test(resposta)) {
-    console.log("🛡️ [SDR] Bloqueando repetição do áudio 1...");
-    resposta = 'Como te expliquei no áudio ali em cima, a gente usa a energia das nossas usinas WEG pra injetar na sua rede e te dar o desconto direto. [QUEBRA] Ficou alguma dúvida sobre essa parte?';
-}
-if (memoriaHistorico.includes('<<Áudio Segurança Enviado>>') && /\[AUDIO[_\w]*?SEGURA[NÇC]A[_\w]*?\]/i.test(resposta)) {
-    console.log("🛡️ [SDR] Bloqueando repetição do áudio 2...");
-    resposta = 'Conforme te falei no áudio agora há pouco, é super seguro. A concessionária continua cuidando de tudo e não tem fidelidade. [QUEBRA] Vc tem a conta fácil aí pra gente ver se a sua empresa aprova?';
-}
-if (memoriaHistorico.includes('<<Áudio Obras/Placas Enviado>>') && /\[AUDIO[_\w]*?(PLACA|OBRA)[_\w]*?\]/i.test(resposta)) {
-    console.log("🛡️ [SDR] Bloqueando repetição do áudio 3...");
-    resposta = 'Como comentei no áudio anterior, é zero obras rs. Não precisa de placa no telhado nem nada, é só a portabilidade digital mesmo. [QUEBRA] Consegue me mandar a foto da fatura pra gente simular?';
-}
-
-        // ========================================================================
-            // 🌟 INTERCEPTADOR DE ÁUDIO BLINDADO (CATCH-ALL HÍBRIDO)
-            // ========================================================================
-            // Pega QUALQUER coisa que comece com [AUDIO e termine com ]
-            const todasAsTagsAudio = resposta.match(/\[AUDIO.*?\]/gi);
-
-            if (todasAsTagsAudio) {
-                for (const tag of todasAsTagsAudio) {
-                    console.log(`🎤 [SDR] Tag de áudio detectada pela IA: ${tag}`);
-                    
-                    const tagStr = tag.toUpperCase();
-                    let audioFile = '';
-                    let memoriaTag = '';
-
-                    // Mapeia as tags reais
-                    if (tagStr.includes('FUNCIONA') || tagStr.includes('COMO')) {
-                        audioFile = './assets/audio_como_funciona.ogg';
-                        memoriaTag = '<<Áudio Como Funciona Enviado>>';
-                    } else if (tagStr.includes('SEGUR')) {
-                        audioFile = './assets/audio_seguranca.ogg';
-                        memoriaTag = '<<Áudio Segurança Enviado>>';
-                    } else if (tagStr.includes('PLACA') || tagStr.includes('OBRA')) {
-                        audioFile = './assets/audio_obras_placas.ogg';
-                        memoriaTag = '<<Áudio Obras/Placas Enviado>>';
-                    }
-
-                    // 🛡️ LIMPEZA VITAL: Apaga a tag do texto para o lead NUNCA ver colchetes!
-                    resposta = resposta.replace(tag, '').trim();
-
-                    // Se encontrou um arquivo real, envia PRIMEIRO
-                    if (audioFile && fs.existsSync(audioFile)) {
-                        await sock.sendPresenceUpdate('recording', remoteJid); 
-                        await delay(6000);
-                        try {
-                            const audioBuffer = fs.readFileSync(audioFile);
-                            await sock.sendMessage(remoteJid, { 
-                                audio: audioBuffer, 
-                                mimetype: 'audio/ogg; codecs=opus', 
-                                ptt: true 
-                            });
-                            console.log("✅ [SDR] Áudio enviado com sucesso!");
-                            await db.saveMessage(lead.whatsapp_id, 'assistant', memoriaTag, instanceId);
-                            await delay(2000); // Respiro antes do próximo balão de texto
-                        } catch (erroAudio) {
-                            console.error("❌ [ERRO ÁUDIO]:", erroAudio.message);
-                        }
-                    } else {
-                        // É uma tag inventada! Como já limpamos ela no .replace() ali em cima, 
-                        // apenas ignoramos o envio de arquivo silenciosamente.
-                        console.log(`⚠️ [BLINDAGEM] A IA inventou a tag ${tag} ou arquivo não existe. Ignorado silenciosamente.`);
-                    }
-                }
-            }
-
-            // Se a IA gerou APENAS a tag e mais nenhum texto (e a tag já foi apagada):
-            if (resposta.length === 0) return;
-
-            // ========================================================================
-            // 🌟 SIMULADOR HUMANO DE DIGITAÇÃO FRAGMENTADA
-            // ========================================================================
-
-
-            // ========================================================================
-            // 🌟 O NOVO FATIADOR DE BALÕES (TRUQUE DA [QUEBRA])
-            // ========================================================================
-            const mensagensSplit = resposta.split('[QUEBRA]')
-                .map(t => t.trim())
-                .filter(t => t.length > 0)
-                .slice(0, 2); 
-            
-            for (let i = 0; i < mensagensSplit.length; i++) {
-                const trecho = mensagensSplit[i];
-
-                // 🔥 NOVO CALCULO: Mais lento (80ms por letra + 4seg de base)
-                const tempoDigitacao = (trecho.length * 80) + 4000; 
-                
-                await sock.sendPresenceUpdate('composing', remoteJid);
-                // 🔥 NOVO LIMITE: Mínimo de 5 segundos digitando, máximo de 14s
-                await delay(Math.max(5000, Math.min(tempoDigitacao, 14000))); 
-                
-                await enviarMensagemIA(sock, remoteJid, { text: trecho });
-                await db.saveMessage(lead.whatsapp_id, 'assistant', trecho, instanceId); 
-
-                if (i < mensagensSplit.length - 1) {
-                    await sock.sendPresenceUpdate('paused', remoteJid);
-                    // 🔥 NOVO RESPIRO: Pausa de 3.5 a 6.5 segundos entre um balão e outro
-                    await delay(Math.random() * 3000 + 3500); 
-                }
-            }
-        } // <- Fim do if (resposta)
+        let resposta = await gerarRespostaIA(historico, lead, instanceData);
+        await filtrarEEnviarResposta(sock, remoteJid, resposta, historico, lead, instanceId);
 
     } catch (erroNaResposta) {
         console.error(`❌ [ERRO NA RESPOSTA IA] Falha ao gerar/enviar para ${lead.name}:`, erroNaResposta);
@@ -1081,34 +1098,45 @@ async function processarFilaDeAtaque(instanceId) {
                     lead.whatsapp_id = cleanJid;
                 }
 
-                // 8. MONTAGEM DA SAUDAÇÃO (Com regra do/da)
-                console.log(`🚀 [DISPARANDO] ${config.nome} enviando saudação para ${lead.name}...`);
-                await instancia.sock.sendPresenceUpdate('composing', cleanJid);
-                await delay(Math.random() * 4000 + 4000); 
-                await instancia.sock.sendPresenceUpdate('paused', cleanJid);
+              // 8. MONTAGEM DA SAUDAÇÃO — PROTOCOLO CURIOSIDADE-PRIMEIRO
+console.log(`🚀 [DISPARANDO] ${config.nome} enviando saudação para ${lead.name}...`);
+await instancia.sock.sendPresenceUpdate('composing', cleanJid);
+await delay(Math.random() * 4000 + 4000);
+await instancia.sock.sendPresenceUpdate('paused', cleanJid);
 
-                let primeiroNomeDono = null;
-                let preposicaoNome = "do responsável pela";
+// Variáveis de contexto (mantidas do bloco original)
+let primeiroNomeDono = null;
 
-                if (lead.dono && lead.dono.trim().length > 2) {
-                    primeiroNomeDono = lead.dono.trim().split(' ')[0].toLowerCase();
-                    primeiroNomeDono = primeiroNomeDono.charAt(0).toUpperCase() + primeiroNomeDono.slice(1);
-                    preposicaoNome = identificarArtigo(primeiroNomeDono);
-                }
-                
-                const ufLead = lead.estado || 'seu estado'; 
-                const concessionariaLocal = MAPA_CONCESSIONARIAS[ufLead] || 'concessionária de energia';
-                const nomeEmpresa = lead.name ? lead.name.replace(/\s(LTDA|ME|EIRELI|S\.A|LIMITED)\b/gi, '').trim() : "sua empresa";
+if (lead.dono && lead.dono.trim().length > 2) {
+    primeiroNomeDono = lead.dono.trim().split(' ')[0].toLowerCase();
+    primeiroNomeDono = primeiroNomeDono.charAt(0).toUpperCase() + primeiroNomeDono.slice(1);
+}
 
-                const saudacaoInicial = primeiroNomeDono
-                    ? `Oi ${primeiroNomeDono}, tudo certo? Aqui é o ${config.agente}. Esse contato é direto ${preposicaoNome} ou falo com o responsável pela ${nomeEmpresa}?`
-                    : `Opa, tudo certo? Aqui é o ${config.agente}. Falo com o responsável pela ${nomeEmpresa}?`;
+const ufLead = lead.estado || null;
+const concessionariaLocal = MAPA_CONCESSIONARIAS[ufLead] || 'concessionária de energia';
+const nomeEmpresa = lead.name
+    ? lead.name.replace(/\s(LTDA|ME|EIRELI|S\.A|LIMITED)\b/gi, '').trim()
+    : 'sua empresa';
 
-                const localRef = lead.bairro ? `aí no ${lead.bairro}` : `aí na região`;
-                const novaSaudacao = `${saudacaoInicial} [QUEBRA] Vi o cadastro de vcs num levantamento ${localRef}. A ${concessionariaLocal} vem cobrando uma tarifa que já podia ter caído, mas não avisa. Vocês já pagam com desconto ou ainda vem a conta cheia?`;
+// ── BALÃO 1: Curiosidade pura — sem pitch, sem contexto, sem pergunta ──────
+// Objetivo único: fazer o lead responder qualquer coisa.
+// Variação aleatória entre 3 templates para evitar detecção de padrão pelo WhatsApp.
+const variacoesCuriosidade = [
+    `Oi${primeiroNomeDono ? ` ${primeiroNomeDono}` : ''}, tudo bem? Aqui é o Marlon da Enerzee. Vi algo sobre a conta de energia da ${nomeEmpresa} que achei que valia te passar.`,
+    `Opa${primeiroNomeDono ? ` ${primeiroNomeDono}` : ''}, tudo certo? Sou o Marlon. Tava olhando uns dados da ${concessionariaLocal} referente à região de vcs e vi uma coisa interessante sobre a ${nomeEmpresa}.`,
+    `Oi${primeiroNomeDono ? ` ${primeiroNomeDono}` : ''}, aqui é o Marlon da Enerzee. Cruzei o cadastro da ${nomeEmpresa} num mapeamento que a gente fez e tem uma informação sobre a conta de luz de vcs que a ${concessionariaLocal} não costuma divulgar.`,
+];
+const balao1 = variacoesCuriosidade[Math.floor(Math.random() * variacoesCuriosidade.length)];
 
+// ── BALÃO 2: Qualificação do interlocutor — UMA pergunta fechada ─────────
+// Objetivo: confirmar decisor ANTES de gastar qualquer pitch.
+// Se for gatekeeper, o systemPrompt trata o encerramento educado.
+const balao2 = primeiroNomeDono
+    ? `Esse número é direto com o ${primeiroNomeDono} mesmo, ou tem outro responsável pelas contas fixas da ${nomeEmpresa}?`
+    : `Esse número é direto com o responsável pelas contas fixas da ${nomeEmpresa}?`;
+
+const mensagensSplit = [balao1, balao2];
                 // 9. FATIADOR HUMANO E ENVIO (Com interrupção intacta!)
-                const mensagensSplit = novaSaudacao.split('[QUEBRA]').map(t => t.trim()).filter(t => t.length > 0).slice(0, 2); 
                 
                 for (let i = 0; i < mensagensSplit.length; i++) {
                     const { data: checkMsg } = await supabase.from('messages').select('role').eq('whatsapp_id', cleanJid).order('created_at', { ascending: false }).limit(1).maybeSingle();
@@ -1239,8 +1267,20 @@ async function loopRecuperacaoConversas() {
                         .limit(1);
 
                     // Se NÃO tem nenhuma resposta do cliente, manda a isca de urgência!
+                    // Busca se o lead já agendou pelo Calendly
+                    const { data: leadAtualizado } = await supabase
+                        .from('leads')
+                        .select('calendly_booked')
+                        .eq('id', lf.id)
+                        .maybeSingle();
+
+                    if (leadAtualizado?.calendly_booked) {
+                        console.log(`📅 [FOLLOW-UP BLOQUEADO] ${lf.name} já agendou pelo Calendly. Pulando.`);
+                        continue;
+                    }
+
                     if (!temResposta || temResposta.length === 0) {
-                        const instancia = sessions.get(lf.instance_id);
+                    const instancia = sessions.get(lf.instance_id);
                         if (instancia && instancia.ready) {
                             console.log(`🔔 [FOLLOW-UP] Acordando lead ${lf.name} que visualizou e não respondeu...`);
                             
@@ -1336,116 +1376,8 @@ async function processarMensagemManual(sock, lead) {
         const historico = histRaw.map(m => ({ role: m.role, content: m.content }));
         const instanceData = await getRegrasEmCache(instanceId);
         
-        // Gera a resposta de "venda"
         let resposta = await gerarRespostaIA(historico, lead, instanceData);
-
-        // 🛑 INTERCEPTADOR [ROBO] (Motor de Recuperação) — Silêncio total
-        if (resposta && resposta.includes('[ROBO]')) {
-            console.log(`🤖 [SILÊNCIO RECUPERAÇÃO] Autoresposta detectada para ${lead.name}. Aguardando humano...`);
-            return; // A mensagem já está salva no banco com [AUTORESPOSTA], apenas ignora
-        }
-
-        if (resposta) {
-            
-                // ========================================================================
-            // 🛑 ANTI-REPETIÇÃO DE ÁUDIO
-            // ========================================================================
-            const memoriaHistorico = JSON.stringify(historico);
-
-            if (memoriaHistorico.includes('<<Áudio Como Funciona Enviado>>') && /\[AUDIO[_\w]*?(FUNCIONA|COMO)[_\w]*?\]/i.test(resposta)) {
-                console.log("🛡️ [SDR] Bloqueando repetição do áudio 1...");
-                resposta = 'Como te expliquei no áudio ali em cima, a gente usa a energia das nossas usinas WEG pra injetar na sua rede. Ficou alguma dúvida sobre essa parte?';
-            }
-            if (memoriaHistorico.includes('<<Áudio Segurança Enviado>>') && /\[AUDIO[_\w]*?SEGURA[NÇC]A[_\w]*?\]/i.test(resposta)) {
-                console.log("🛡️ [SDR] Bloqueando repetição do áudio 2...");
-                resposta = 'Conforme te falei no áudio agora há pouco, é super seguro e não tem fidelidade. Vc tem a conta fácil aí pra gente ver se a sua empresa aprova?';
-            }
-            if (memoriaHistorico.includes('<<Áudio Obras/Placas Enviado>>') && /\[AUDIO[_\w]*?(PLACA|OBRA)[_\w]*?\]/i.test(resposta)) {
-                console.log("🛡️ [SDR] Bloqueando repetição do áudio 3...");
-                resposta = 'Como comentei no áudio anterior, é zero obras rs. Não precisa de placa no telhado. Consegue me mandar a foto da fatura pra gente simular?';
-            }
-
-            // ========================================================================
-            // 🌟 MOTOR ÚNICO DE ÁUDIO (BLINDADO E LIMPO)
-            // ========================================================================
-            const todasAsTagsAudio = resposta.match(/\[AUDIO.*?\]/gi);
-
-            if (todasAsTagsAudio) {
-                for (const tag of todasAsTagsAudio) {
-                    console.log(`🎤 [SDR] Tag de áudio detectada: ${tag}`);
-                    
-                    const tagStr = tag.toUpperCase();
-                    let audioFile = '';
-                    let memoriaTag = '';
-
-                    if (tagStr.includes('FUNCIONA') || tagStr.includes('COMO')) {
-                        audioFile = './assets/audio_como_funciona.ogg';
-                        memoriaTag = '<<Áudio Como Funciona Enviado>>';
-                    } else if (tagStr.includes('SEGUR')) {
-                        audioFile = './assets/audio_seguranca.ogg';
-                        memoriaTag = '<<Áudio Segurança Enviado>>';
-                    } else if (tagStr.includes('PLACA') || tagStr.includes('OBRA')) {
-                        audioFile = './assets/audio_obras_placas.ogg';
-                        memoriaTag = '<<Áudio Obras/Placas Enviado>>';
-                    }
-
-                    // Apaga a tag do texto para o cliente nunca ver
-                    resposta = resposta.replace(tag, '').trim();
-
-                    if (audioFile && fs.existsSync(audioFile)) {
-                        await sock.sendPresenceUpdate('recording', remoteJid); 
-                        await delay(6000); // 6s simulando gravação
-                        try {
-                            const audioBuffer = fs.readFileSync(audioFile);
-                            await sock.sendMessage(remoteJid, { 
-                                audio: audioBuffer, 
-                                mimetype: 'audio/ogg; codecs=opus', 
-                                ptt: true 
-                            });
-                            console.log("✅ [SDR] Áudio enviado com sucesso!");
-                            await db.saveMessage(lead.whatsapp_id, 'assistant', memoriaTag, instanceId);
-                        } catch (erroAudio) {
-                            console.error("❌ [ERRO ÁUDIO]:", erroAudio.message);
-                        }
-                    } else {
-                        console.log(`⚠️ [BLINDAGEM] Tag inválida ${tag} ignorada silenciosamente.`);
-                    }
-                }
-            }
-
-            // SE A IA ENVIOU APENAS A TAG (Como pedimos no prompt), O TEXTO AGORA ESTÁ VAZIO.
-            // ENTÃO PARAMOS POR AQUI E NENHUM TEXTO É ENVIADO:
-            if (resposta.length === 0) return;
-
-
-            // ========================================================================
-            // 🌟 SIMULADOR HUMANO DE DIGITAÇÃO FRAGMENTADA
-            // ========================================================================
-            const mensagensSplit = resposta.split('[QUEBRA]')
-                .map(t => t.trim())
-                .filter(t => t.length > 0)
-                .slice(0, 2); // <-- A TRAVA DOS 3 BALÕES AQUI TAMBÉM
-            
-            for (let i = 0; i < mensagensSplit.length; i++) {
-                const trecho = mensagensSplit[i];
-
-                // 🔥 NOVO CALCULO
-                const tempoDigitacao = (trecho.length * 80) + 4000; 
-                await sock.sendPresenceUpdate('composing', remoteJid);
-                // 🔥 NOVO LIMITE
-                await delay(Math.max(5000, Math.min(tempoDigitacao, 14000))); 
-                
-                await enviarMensagemIA(sock, remoteJid, { text: trecho });
-                await db.saveMessage(remoteJid, 'assistant', trecho, instanceId);
-
-                if (i < mensagensSplit.length - 1) {
-                    await sock.sendPresenceUpdate('paused', remoteJid);
-                    // 🔥 NOVO RESPIRO
-                    await delay(Math.random() * 3000 + 3500); 
-                }
-            }
-            console.log(`✅ [SDR-RECUPERAÇÃO] Resposta de recuperação concluída para ${lead.name}`);
-        }
+        await filtrarEEnviarResposta(sock, remoteJid, resposta, historico, lead, instanceId);
 
     } catch (erroRecuperacao) {
         console.error(`❌ [ERRO RECUPERAÇÃO] Falha para ${lead.name}:`, erroRecuperacao.message);

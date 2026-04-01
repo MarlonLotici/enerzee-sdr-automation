@@ -241,3 +241,82 @@ app.get(/.*/, (req, res) => {
 server.listen(PORT, () => {
     console.log(`\n🚀 SERVIDOR SDR RODANDO NA PORTA ${PORT}`);
 });
+
+// ============================================================================
+// 📅 WEBHOOK CALENDLY — Marca leads que agendaram
+// ============================================================================
+app.post('/webhook/calendly', express.json(), async (req, res) => {
+    try {
+        const evento = req.body;
+
+        // Calendly envia event = 'invitee.created' quando alguém agenda
+        if (evento?.event !== 'invitee.created') {
+            return res.status(200).json({ ok: true, ignorado: true });
+        }
+
+        const payload = evento.payload;
+        const emailConvidado = payload?.email?.toLowerCase()?.trim();
+        const telefoneRaw    = payload?.text_reminder_number || '';
+        const nomeEvento     = payload?.event_type?.name || 'Consultoria';
+        const dataEvento     = payload?.scheduled_event?.start_time || new Date().toISOString();
+
+        // Limpa o telefone para formato de busca (só números)
+        const telefoneLimpo = telefoneRaw.replace(/\D/g, '');
+
+        console.log(`📅 [CALENDLY] Agendamento recebido — email: ${emailConvidado} | fone: ${telefoneLimpo}`);
+
+        // Tenta encontrar o lead pelo telefone primeiro, depois pelo email
+        let lead = null;
+
+        if (telefoneLimpo.length >= 10) {
+            // Monta variações do JID para buscar no banco
+            const variacoes = [
+                `${telefoneLimpo}@s.whatsapp.net`,
+                `55${telefoneLimpo}@s.whatsapp.net`,
+                // Remove o 9 extra do celular brasileiro se tiver 11 dígitos
+                telefoneLimpo.length === 11 
+                    ? `55${telefoneLimpo.slice(0,2)}${telefoneLimpo.slice(3)}@s.whatsapp.net`
+                    : null
+            ].filter(Boolean);
+
+            for (const jid of variacoes) {
+                const { data } = await supabase
+                    .from('leads')
+                    .select('id, name, whatsapp_id')
+                    .eq('whatsapp_id', jid)
+                    .maybeSingle();
+                if (data) { lead = data; break; }
+            }
+        }
+
+        // Fallback: busca por email se tiver
+        if (!lead && emailConvidado) {
+            const { data } = await supabase
+                .from('leads')
+                .select('id, name, whatsapp_id')
+                .eq('email', emailConvidado)
+                .maybeSingle();
+            if (data) lead = data;
+        }
+
+        if (!lead) {
+            console.log(`⚠️ [CALENDLY] Lead não encontrado no banco. Email: ${emailConvidado} | Fone: ${telefoneLimpo}`);
+            return res.status(200).json({ ok: true, encontrado: false });
+        }
+
+        // Marca o lead como agendado
+        await supabase.from('leads').update({
+            calendly_booked: true,
+            calendly_event_at: dataEvento,
+            calendly_event_name: nomeEvento,
+            status: 'booked'
+        }).eq('id', lead.id);
+
+        console.log(`✅ [CALENDLY] Lead ${lead.name} marcado como agendado! Evento: ${nomeEvento} em ${dataEvento}`);
+        return res.status(200).json({ ok: true, lead: lead.name });
+
+    } catch (err) {
+        console.error('❌ [CALENDLY WEBHOOK] Erro:', err.message);
+        return res.status(500).json({ erro: err.message });
+    }
+});
