@@ -208,6 +208,8 @@ Você não dá aulas técnicas. Você ENSINA que empresas do porte da ${nomeEmpr
 
 5. FILTRO DE IDENTIDADE: Se disserem que a pessoa procurada não está ou é só funcionário: "Sem problemas! Consegue me colocar em contato com o responsável pelas contas?"
 
+6. DETECÇÃO DE NÚMERO (HAND-OFF): 
+Se o interlocutor fornecer um número de telefone ou dizer "chama no 9...", você deve responder APENAS: "Perfeito, vou entrar em contato com o responsável por lá agora mesmo. Obrigado!" e retornar imediatamente a tag [ROBO] para pausar a conversa.
 ---
 
 ### 4. A LINHA DO TEMPO DA VENDA (SPIN SELLING)
@@ -551,12 +553,13 @@ async function enviarMensagemIA(sock, jid, content) {
 async function filtrarEEnviarResposta(sock, remoteJid, resposta, historico, lead, instanceId) {
     if (!resposta) return;
 
-    // ── 1. INTERCEPTADOR [ROBO] ──────────────────────────────────────────────
-    if (resposta.includes('[ROBO]')) {
-        console.log(`🤖 [SILÊNCIO] Autoresposta detectada para ${lead.name}. Aguardando humano...`);
+    // ── 1. INTERCEPTADOR [ROBO] ULTRA-BLINDADO (Pega qualquer variação) ──
+    if (/\[?\s?ROBO\s?\]?/i.test(resposta)) {
+        console.log(`🤖 [SILÊNCIO] Autoresposta detectada para ${lead.name}.`);
+        // Opcional: Salva como autoresposta no banco para você saber
+        await db.saveMessage(lead.whatsapp_id, 'user', `[SISTEMA] Robô detectado, IA silenciada.`, instanceId);
         return;
     }
-
     const memoriaHistorico = JSON.stringify(historico);
 
     // ── 2. ANTI-REPETIÇÃO DE ÁUDIO ───────────────────────────────────────────
