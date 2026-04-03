@@ -59,7 +59,7 @@ const db = {
     },
 
     getDailyContactCount: async (instanceId) => {
-        const hoje = new Date().toISOString().split('T')[0]; // Pega apenas a data YYYY-MM-DD
+        const hoje = new Date(Date.now() - 3 * 60 * 60 * 1000).toISOString().split('T')[0]; // Data em BRT (UTC-3)
         
         const { count, error } = await supabase
             .from('leads')
@@ -70,7 +70,7 @@ const db = {
 
         if (error) {
             console.error(`[DB] Erro ao contar envios do chip ${instanceId}:`, error.message);
-            return 999; // Trava por segurança se der erro na busca para não banir o chip
+            return 0; // Retorna 0 para não travar o motor por erro transitório de leitura
         }
         return count || 0;
     },

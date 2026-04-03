@@ -18,6 +18,7 @@ const fs = require('fs');
 const Groq = require('groq-sdk');
 const pdf = require('pdf-parse');
 const db = require('./database');
+const { gerarAudioTTS } = require('./tts');
 const { createClient } = require('@supabase/supabase-js');
 const motoresEmExecucao = new Set(); // 🛡️ Impede que o mesmo chip ligue dois loops infinitos
 const MAPA_CONCESSIONARIAS = {
@@ -51,6 +52,54 @@ const mapaRastreioLID = new Map();
 const gavetaDeMensagens = new Map(); // 🧠 OUVIDO PACIENTE: Gaveta temporária de mensagens
 const cacheRegrasInstancia = new Map(); // 🧠 Memória de curto prazo para regras
 let sdrEventsGlobal = null; // 🛡️ Adicione esta linha aqui no topo
+async function salvarDecisor(numeroRaw, leadOrigem, instanceId) {
+    const phonePuro = numeroRaw.replace(/\D/g, '');
+    if (phonePuro.length < 10 || phonePuro.length > 13) return null;
+
+    // Garante formato com DDI 55
+    const phoneNormalizado = phonePuro.startsWith('55') ? phonePuro : `55${phonePuro}`;
+    const zapId = `${phoneNormalizado}@s.whatsapp.net`;
+
+    // Checa se já existe no banco (evita duplicata)
+    const { data: jaExiste } = await supabase
+        .from('leads')
+        .select('id, status')
+        .eq('whatsapp_id', zapId)
+        .maybeSingle();
+
+    if (jaExiste) {
+        console.log(`⚠️ [DECISOR] Número ${phoneNormalizado} já existe no banco (status: ${jaExiste.status}). Pulando.`);
+        return null;
+    }
+
+    const { data: novoLead, error } = await supabase
+        .from('leads')
+        .insert([{
+            whatsapp_id: zapId,
+            phone: phoneNormalizado,
+            name: leadOrigem.origin_company_name || leadOrigem.name || 'Decisor',
+            instance_id: instanceId,
+            status: 'new',
+            is_decisor: true,
+            origin_lead_id: leadOrigem.id,
+            origin_company_name: leadOrigem.name,
+            niche: leadOrigem.niche || 'Empresa',
+            bairro: leadOrigem.bairro || null,
+            estado: leadOrigem.estado || null,
+            capital_social_numeric: leadOrigem.capital_social_numeric || 0,
+        }])
+        .select()
+        .single();
+
+    if (error) {
+        console.error(`❌ [DECISOR] Erro ao salvar decisor ${phoneNormalizado}:`, error.message);
+        return null;
+    }
+
+    console.log(`✅ [DECISOR] Novo decisor salvo: ${phoneNormalizado} (empresa: ${leadOrigem.name})`);
+    return novoLead;
+}
+
 if (!fs.existsSync('./wpp_sessions')) fs.mkdirSync('./wpp_sessions');
 
 // 🧹 LIXEIRO AUTOMÁTICO (Evita que o servidor trave por falta de memória RAM)
@@ -65,10 +114,9 @@ const sessions = new Map();
 const instanciasLigando = new Set();
 let ioSocket = null;
 function getHoraBrasil() {
-    const agora = new Date();
-    // Subtrai 3 horas do UTC para forçar o horário de Brasília
-    agora.setHours(agora.getUTCHours() - 3); 
-    return agora;
+    // Cria novo Date subtraindo 3h em milissegundos (BRT = UTC-3)
+    // Evita o bug do setHours() que corrompe a data quando UTC < 03:00
+    return new Date(Date.now() - 3 * 60 * 60 * 1000);
 }
 
 function dentroDoExpediente() {
@@ -546,6 +594,30 @@ async function enviarMensagemIA(sock, jid, content) {
     }
 }
 
+async function enviarAudioTTS(sock, remoteJid, texto, lead, instanceId) {
+    try {
+        console.log(`🎙️ [TTS] Gerando áudio para ${lead.name}: "${texto.substring(0, 50)}..."`);
+        
+        await sock.sendPresenceUpdate('recording', remoteJid);
+        
+        const buffer = await gerarAudioTTS(texto);
+        
+        await sock.sendMessage(remoteJid, {
+            audio: buffer,
+            mimetype: 'audio/mpeg',
+            ptt: true  // aparece como mensagem de voz, não arquivo
+        });
+
+        // Salva no histórico marcado como áudio TTS para a IA não repetir
+        await db.saveMessage(lead.whatsapp_id, 'assistant', `[AUDIO_TTS] ${texto}`, instanceId);
+        console.log(`✅ [TTS] Áudio enviado para ${lead.name}`);
+        
+        return true;
+    } catch (err) {
+        console.error(`❌ [TTS] Falha ao gerar/enviar áudio:`, err.message);
+        return false;
+    }
+}
 // ============================================================================
 // 🧠 NÚCLEO UNIFICADO DE RESPOSTA — elimina duplicação entre processarMensagem
 // e processarMensagemManual. Toda lógica de áudio e envio vive aqui.
@@ -553,12 +625,23 @@ async function enviarMensagemIA(sock, jid, content) {
 async function filtrarEEnviarResposta(sock, remoteJid, resposta, historico, lead, instanceId) {
     if (!resposta) return;
 
-    // ── 1. INTERCEPTADOR [ROBO] ULTRA-BLINDADO (Pega qualquer variação) ──
-    if (/\[?\s?ROBO\s?\]?/i.test(resposta)) {
-        console.log(`🤖 [SILÊNCIO] Autoresposta detectada para ${lead.name}.`);
-        // Opcional: Salva como autoresposta no banco para você saber
-        await db.saveMessage(lead.whatsapp_id, 'user', `[SISTEMA] Robô detectado, IA silenciada.`, instanceId);
-        return;
+    // ── 1. INTERCEPTADOR [ROBO] ULTRA-BLINDADO (Pega qualquer variação, incluindo ROBÔ com acento) ──
+    // Detecta o sinal mas NÃO silencia imediatamente — primeiro verifica se há despedida a enviar
+    const sinalizouEncerramento = /\[?\s?ROB[OÔô]\s?\]?/i.test(resposta);
+
+    if (sinalizouEncerramento) {
+        // Remove a tag do texto — o lead nunca deve ver [ROBO] ou [ROBÔ]
+        resposta = resposta.replace(/\[?\s?ROB[OÔô]\s?\]?/gi, '').trim();
+
+        if (!resposta || resposta.trim().length === 0) {
+            // Autoresposta pura (IA só retornou a tag): silencia completamente
+            console.log(`🤖 [SILÊNCIO] Autoresposta detectada para ${lead.name}. Sem texto — IA silenciada.`);
+            await db.saveMessage(lead.whatsapp_id, 'user', `[SISTEMA] Robô detectado, IA silenciada.`, instanceId);
+            return;
+        }
+
+        // Há texto restante (ex: despedida hand-off): envia a mensagem e pausa depois
+        console.log(`🤖 [HAND-OFF] IA sinalizou encerramento para ${lead.name}. Enviando despedida antes de pausar.`);
     }
     const memoriaHistorico = JSON.stringify(historico);
 
@@ -629,12 +712,41 @@ async function filtrarEEnviarResposta(sock, remoteJid, resposta, historico, lead
     // ── 4. SE A IA GEROU APENAS TAG (texto ficou vazio após remoção) ─────────
     if (resposta.trim().length === 0) return;
 
-    // ── 5. FATIADOR E SIMULADOR HUMANO DE DIGITAÇÃO ──────────────────────────
+ // ── 5. FATIADOR E SIMULADOR HUMANO DE DIGITAÇÃO ──────────────────────────
     const mensagensSplit = resposta
         .split('[QUEBRA]')
         .map(t => t.trim())
         .filter(t => t.length > 0)
         .slice(0, 2);
+
+    // ── DECISÃO TTS ──────────────────────────────────────────────────────────
+    const ultimaMsgLead = historico.filter(m => m.role === 'user').slice(-1)[0];
+    const leadMandouAudio = ultimaMsgLead?.content?.startsWith('(Áudio)');
+
+    const respostaTexto = mensagensSplit.join(' ').toLowerCase();
+    const estaNoEstagio3ou4 = (
+        respostaTexto.includes('como funciona') ||
+        respostaTexto.includes('sem obra') ||
+        respostaTexto.includes('simulador') ||
+        respostaTexto.includes('calendly') ||
+        respostaTexto.includes('30 minutos') ||
+        respostaTexto.includes('amanhã')
+    );
+    const disparoEspontaneo = estaNoEstagio3ou4 && Math.random() < 0.30;
+
+    const audiosRecentes = historico
+        .filter(m => m.role === 'assistant' && m.content?.startsWith('[AUDIO_TTS]'))
+        .length;
+    const podeUsarTTS = audiosRecentes < 2;
+    const usarTTS = podeUsarTTS && (leadMandouAudio || disparoEspontaneo);
+
+    if (usarTTS) {
+        const textoParaAudio = mensagensSplit.join('. ');
+        console.log(`🎙️ [TTS] Modo ${leadMandouAudio ? 'espelho' : 'espontâneo'} ativado para ${lead.name}`);
+        const enviouAudio = await enviarAudioTTS(sock, remoteJid, textoParaAudio, lead, instanceId);
+        if (enviouAudio) return;
+        console.log(`⚠️ [TTS] Fallback para texto após falha no áudio`);
+    }
 
     for (let i = 0; i < mensagensSplit.length; i++) {
         const trecho = mensagensSplit[i];
@@ -649,14 +761,14 @@ async function filtrarEEnviarResposta(sock, remoteJid, resposta, historico, lead
         if (i < mensagensSplit.length - 1) {
             await sock.sendPresenceUpdate('paused', remoteJid);
             await delay(Math.random() * 3000 + 3500);
+        }
+    }
 
-            // ── 6. DETECTOR DE REVERSÃO DE OBJEÇÃO ──────────────────────────────────
-    // Se a IA acabou de tentar reverter uma recusa, marca no banco.
-    // Assim, na próxima vez que a IA ver o histórico, sabe que já tentou.
+    // ── 6. DETECTOR DE REVERSÃO DE OBJEÇÃO ──────────────────────────────────
     const respostaFinal = mensagensSplit.join(' ').toLowerCase();
     const sinaisDeReversao = [
         'só por curiosidade',
-        'só curiosidade', 
+        'só curiosidade',
         'a conta aí passa',
         'a conta passa de',
         'antes de encerrar'
@@ -666,14 +778,46 @@ async function filtrarEEnviarResposta(sock, remoteJid, resposta, historico, lead
     if (tentouReverter && !lead.objection_reversed) {
         console.log(`🔄 [REVERSÃO] IA tentou reverter objeção de ${lead.name}. Marcando no banco...`);
         await supabase.from('leads').update({ objection_reversed: true }).eq('id', lead.id);
-        
-        // Salva marcador no histórico para a IA ver na próxima chamada
         await db.saveMessage(lead.whatsapp_id, 'assistant', '[REVERSAO_TENTADA]', instanceId);
     }
-        }
+
+    // ── 7. PAUSA PÓS HAND-OFF ────────────────────────────────────────────────
+    if (sinalizouEncerramento) {
+        await supabase.from('leads').update({ is_paused: true }).eq('id', lead.id);
+        console.log(`⏸️ [PAUSA HAND-OFF] Conversa com ${lead.name} pausada após despedida enviada.`);
     }
 }
 
+// ── 8. DETECTOR DE NÚMERO DO DECISOR ─────────────────────────────────────
+    // Se a IA sinalizou hand-off E há um número no texto da conversa, salva e dispara
+    if (sinalizouEncerramento) {
+        // Busca número brasileiro na última mensagem do usuário (não na resposta da IA)
+        const ultimaMsgUsuario = historico
+            .filter(m => m.role === 'user')
+            .slice(-1)[0]?.content || '';
+
+        const regexTelefone = /(?:\+?55\s?)?(?:\(?\d{2}\)?\s?)?(?:9\s?)?\d{4}[-\s]?\d{4}/g;
+        const numerosEncontrados = ultimaMsgUsuario.match(regexTelefone);
+
+        if (numerosEncontrados && numerosEncontrados.length > 0) {
+            const numeroRaw = numerosEncontrados[0];
+            console.log(`📱 [DECISOR] Número detectado na conversa: ${numeroRaw}. Iniciando captura...`);
+
+            // Salva o decisor no banco linkado à empresa do lead atual
+            const novoDecisor = await salvarDecisor(numeroRaw, lead, instanceId);
+
+            if (novoDecisor && sdrEventsGlobal) {
+                // Delay humanizado antes de chamar o decisor (entre 1 e 3 minutos)
+                const delayMs = Math.floor(Math.random() * 120000) + 60000;
+                console.log(`⏳ [DECISOR] Aguardando ${Math.round(delayMs/1000)}s antes de chamar o decisor...`);
+
+                setTimeout(() => {
+                    console.log(`🔔 [DECISOR] Acordando motor para chamar decisor da ${lead.name}...`);
+                    sdrEventsGlobal.emit('NOVO_LEAD_DISPONIVEL', instanceId);
+                }, delayMs);
+            }
+        }
+    }
 async function processarMensagem(sock, msg, instanceId, textoConsolidado = null) {    const remoteJid = msg.key.remoteJid;
     if (remoteJid.includes('@g.us')) return; 
 
@@ -969,8 +1113,7 @@ if (fromMe) {
 // ============================================================================
 // 🔄 MOTOR DE ATAQUE INDEPENDENTE (PARALELISMO POR CHIP)
 // ============================================================================
-const chipsEsgotadosHoje = new Set();
-let dataControleLimites = new Date().toISOString().split('T')[0];
+let dataControleLimites = new Date(Date.now() - 3 * 60 * 60 * 1000).toISOString().split('T')[0]; // BRT
 
 // ============================================================================
 // 🔄 MOTOR HÍBRIDO DE ATAQUE (RAM + DB) - PRESERVANDO 100% DAS TRAVAS
@@ -985,9 +1128,8 @@ async function processarFilaDeAtaque(instanceId) {
     console.log(`🚀 [MOTOR HÍBRIDO] Fila de ataque ativada para o chip ${instanceId}`);
     
     // ⏰ DESPERTADOR
-    const hojeAgora = new Date().toISOString().split('T')[0];
+    const hojeAgora = new Date(Date.now() - 3 * 60 * 60 * 1000).toISOString().split('T')[0]; // Data em BRT (UTC-3)
     if (dataControleLimites !== hojeAgora) {
-        chipsEsgotadosHoje.clear();
         dataControleLimites = hojeAgora;
         console.log(`🌅 [NOVO DIA] Metas diárias zeradas. Chips acordados!`);
     }
@@ -1124,11 +1266,21 @@ const nomeEmpresa = lead.name
 // ── BALÃO 1: Curiosidade pura — sem pitch, sem contexto, sem pergunta ──────
 // Objetivo único: fazer o lead responder qualquer coisa.
 // Variação aleatória entre 3 templates para evitar detecção de padrão pelo WhatsApp.
-const variacoesCuriosidade = [
-    `Oi${primeiroNomeDono ? ` ${primeiroNomeDono}` : ''}, tudo bem? Aqui é o Marlon da Enerzee. Vi algo sobre a conta de energia da ${nomeEmpresa} que achei que valia te passar.`,
-    `Opa${primeiroNomeDono ? ` ${primeiroNomeDono}` : ''}, tudo certo? Sou o Marlon. Tava olhando uns dados da ${concessionariaLocal} referente à região de vcs e vi uma coisa interessante sobre a ${nomeEmpresa}.`,
-    `Oi${primeiroNomeDono ? ` ${primeiroNomeDono}` : ''}, aqui é o Marlon da Enerzee. Cruzei o cadastro da ${nomeEmpresa} num mapeamento que a gente fez e tem uma informação sobre a conta de luz de vcs que a ${concessionariaLocal} não costuma divulgar.`,
-];
+let variacoesCuriosidade;
+
+if (lead.is_decisor && lead.origin_company_name) {
+    // Abordagem especial: já sabe que veio indicado pelo atendente
+    variacoesCuriosidade = [
+        `Oi${primeiroNomeDono ? ` ${primeiroNomeDono}` : ''}, tudo bem? Aqui é o Marlon da Enerzee. A equipe da ${lead.origin_company_name} passou seu contato pra mim — tenho uma informação sobre a conta de energia de vcs que queria compartilhar.`,
+        `Opa${primeiroNomeDono ? ` ${primeiroNomeDono}` : ''}, sou o Marlon da Enerzee. Falei com o pessoal da ${lead.origin_company_name} e me passaram seu contato. É sobre a conta de luz de vcs — tem algo que a ${concessionariaLocal} não costuma divulgar.`,
+    ];
+} else {
+    variacoesCuriosidade = [
+        `Oi${primeiroNomeDono ? ` ${primeiroNomeDono}` : ''}, tudo bem? Aqui é o Marlon da Enerzee. Vi algo sobre a conta de energia da ${nomeEmpresa} que achei que valia te passar.`,
+        `Opa${primeiroNomeDono ? ` ${primeiroNomeDono}` : ''}, tudo certo? Sou o Marlon. Tava olhando uns dados da ${concessionariaLocal} referente à região de vcs e vi uma coisa interessante sobre a ${nomeEmpresa}.`,
+        `Oi${primeiroNomeDono ? ` ${primeiroNomeDono}` : ''}, aqui é o Marlon da Enerzee. Cruzei o cadastro da ${nomeEmpresa} num mapeamento que a gente fez e tem uma informação sobre a conta de luz de vcs que a ${concessionariaLocal} não costuma divulgar.`,
+    ];
+}
 const balao1 = variacoesCuriosidade[Math.floor(Math.random() * variacoesCuriosidade.length)];
 
 // ── BALÃO 2: Qualificação do interlocutor — UMA pergunta fechada ─────────
@@ -1398,6 +1550,7 @@ module.exports = {
     // 👇 Recebe a porta de comunicação (io) e o Alarme (sdrEvents)
     initMultiTenancy: async (io, sdrEvents) => {
         ioSocket = io;
+         sdrEventsGlobal = sdrEvents;
         
         const insts = await db.getActiveInstances(); 
         for (const i of insts) { 

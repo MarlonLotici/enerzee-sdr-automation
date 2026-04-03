@@ -1,8 +1,8 @@
 [phases.setup]
-nixPkgs = ["google-chrome-stable"]
+nixPkgs = ["google-chrome-stable", "python3", "python3Packages.pip", "ffmpeg"]
 
 [phases.install]
-cmds = ["npm install"]
+cmds = ["npm install", "pip install edge-tts"]
 
 [phases.build]
 cmds = ["npm run build"]
