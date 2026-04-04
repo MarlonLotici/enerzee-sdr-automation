@@ -726,7 +726,9 @@ async function filtrarEEnviarResposta(sock, remoteJid, resposta, historico, lead
         if (!resposta || resposta.trim().length === 0) {
             // Autoresposta pura (IA só retornou a tag): silencia completamente
             console.log(`🤖 [SILÊNCIO] Autoresposta detectada para ${lead.name}. Sem texto — IA silenciada.`);
-            await db.saveMessage(lead.whatsapp_id, 'user', `[SISTEMA] Robô detectado, IA silenciada.`, instanceId);
+            // FIX: Troca a tag para o Vigia ignorar e PAUSA o lead no banco
+            await db.saveMessage(lead.whatsapp_id, 'user', `[AUTORESPOSTA] Robô detectado, IA silenciada.`, instanceId);
+            await supabase.from('leads').update({ is_paused: true }).eq('id', lead.id);
             return;
         }
 
@@ -1078,11 +1080,12 @@ if (fromMe) {
                 const intencao = analisarIntencaoRegex(texto);
             console.log(`🎯 [Filtro] A IA classificou a mensagem de ${lead.name} como: ${intencao}`);
             
-        if (intencao === "[ROBO]") {
-    console.log(`🤖 [SILÊNCIO] Autoresposta detectada para ${lead.name}. Bot aguardando humano silenciosamente...`);
-    await db.saveMessage(lead.whatsapp_id, 'user', `[AUTORESPOSTA] ${texto}`, instanceId);
-    return; // Silêncio total — não arquiva, não responde, apenas aguarda
-}
+      if (intencao === "[ROBO]") {
+            console.log(`🤖 [SILÊNCIO] Autoresposta detectada para ${lead.name}. Bot aguardando humano silenciosamente...`);
+            await db.saveMessage(lead.whatsapp_id, 'user', `[AUTORESPOSTA] ${texto}`, instanceId);
+            await supabase.from('leads').update({ is_paused: true }).eq('id', lead.id); // BLINDAGEM EXTRA: Pausa o lead
+            return; // Silêncio total — não arquiva, não responde, apenas aguarda
+        }
         }
     }
    // --- 3. PROCESSAMENTO DE MÍDIA INTELIGENTE ---
