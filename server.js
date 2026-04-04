@@ -17,7 +17,7 @@ const { enriquecerLeadIndividual } = require('./3_enrich');
 const db = require('./database'); 
 
 // 🚀 O NOVO MOTOR V12 (BAILEYS MULTI-TENANCY)
-const sdr = require('./4_sdr'); 
+let sdr = null;
 
 const app = express();
 const server = http.createServer(app);
@@ -65,10 +65,16 @@ const emitLog = (message) => {
     io.emit('notification', message); 
 };
 // 👆 FIM DA MEMÓRIA GLOBAL 👆
-// 🔥 LIGA A IGNIÇÃO DO MOTOR MULTI-CHIP
-// Passamos o sdrEvents para que o motor consiga "ouvir" o scraper
-sdr.initMultiTenancy(io, sdrEvents);
-// =======================================================
+// 🔥 LIGA A IGNIÇÃO DO MOTOR MULTI-CHIP (Modo Assíncrono Anti-Crash)
+import('./4_sdr.js').then((moduloSdr) => {
+    // O Node 22 entende isso perfeitamente, independentemente das bibliotecas
+    sdr = moduloSdr.default || moduloSdr; 
+    sdr.initMultiTenancy(io, sdrEvents);
+    console.log("✅ Motor SDR V12 carregado via Import Dinâmico sem curtos-circuitos!");
+}).catch(err => {
+    console.error("🔥 Crash evitado! Erro ao carregar o Módulo SDR:", err);
+});
+
 // =======================================================
 // 2. SOCKET.IO (COMUNICAÇÃO REAL-TIME)
 // =======================================================
