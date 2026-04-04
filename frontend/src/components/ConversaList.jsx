@@ -135,6 +135,22 @@ function ConversaCard({ lead, ultimaMsg, isActive, onClick }) {
                         {estado.label}
                     </span>
                 </div>
+                {/* Badge de temperatura */}
+                {lead.lead_temperature && lead.lead_temperature !== 'cold' && (
+                    <div style={{
+                        display: 'inline-flex', alignItems: 'center', gap: 3,
+                        background: lead.lead_temperature === 'hot' ? '#ef444418' : lead.lead_temperature === 'warm' ? '#f59e0b18' : '#64748b18',
+                        border: `1px solid ${lead.lead_temperature === 'hot' ? '#ef444430' : lead.lead_temperature === 'warm' ? '#f59e0b30' : '#64748b30'}`,
+                        borderRadius: '999px', padding: '2px 6px',
+                        marginLeft: 4,
+                    }}>
+                        <span style={{ fontSize: 8, fontWeight: 900, textTransform: 'uppercase', letterSpacing: '0.1em',
+                            color: lead.lead_temperature === 'hot' ? '#ef4444' : lead.lead_temperature === 'warm' ? '#f59e0b' : '#64748b',
+                        }}>
+                            {lead.lead_temperature === 'hot' ? '🔥' : lead.lead_temperature === 'warm' ? '🟡' : '💀'} {lead.lead_temperature}
+                        </span>
+                    </div>
+                )}
             </div>
 
             {/* Indicador de não-lida: última msg é do lead e IA ainda não respondeu */}
@@ -169,7 +185,7 @@ export default function ConversaList({ onSelect, activeId, socket }) {
             // 1. Busca leads em atendimento ativo
             const { data: leads, error } = await supabase
                 .from('leads')
-                .select('id, name, whatsapp_id, status, is_paused, manual_pause, last_contact_at, instance_id, dono, niche, bairro, phone, cnpj, capital_social_numeric, porte')
+                .select('id, name, whatsapp_id, status, is_paused, manual_pause, last_contact_at, instance_id, dono, niche, bairro, phone, cnpj, capital_social_numeric, porte, current_stage, lead_temperature')
                 .in('status', ['contact', 'waiting_analysis'])
                 .order('last_contact_at', { ascending: false })
                 .limit(50)

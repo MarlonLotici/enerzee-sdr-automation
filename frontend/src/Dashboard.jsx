@@ -5,7 +5,7 @@ import {
     XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer, Legend
 } from 'recharts'
 import {
-    TrendingUp, Users, Calendar, Bot, PhoneOff, Zap,
+    TrendingUp, Users, Calendar, Bot, PhoneOff, Zap, Flame,
     Clock, Target, ChevronUp, ChevronDown, RefreshCw,
     Wifi, WifiOff, PauseCircle, CheckCircle2, XCircle,
     BarChart2, Activity, AlertTriangle
@@ -134,7 +134,7 @@ export default function Dashboard() {
                 { data: mensagens },
                 { data: instancias },
             ] = await Promise.all([
-                supabase.from('leads').select('id, status, created_at, instance_id, is_paused, manual_pause, last_contact_at'),
+                supabase.from('leads').select('id, status, created_at, instance_id, is_paused, manual_pause, last_contact_at, current_stage, lead_temperature, followup_count'),
                 supabase.from('messages').select('role, content, created_at, whatsapp_id'),
                 supabase.from('instances').select('id, name, whatsapp_status'),
             ])
@@ -235,10 +235,25 @@ export default function Dashboard() {
                 }
             }
             const tempoMedioResposta = contTempos > 0 ? Math.round(somaTempos / contTempos) : null
+            // === TEMPERATURA DOS LEADS ===
+            const tempCounts = { hot: 0, warm: 0, cold: 0, dead: 0 }
+            leads?.forEach(l => {
+                const t = l.lead_temperature || 'cold'
+                if (tempCounts[t] !== undefined) tempCounts[t]++
+            })
 
+            // === FUNIL SPIN (0-5) ===
+            const spinLabels = ['Qualificação', 'Situação', 'Dor', 'Solução', 'Agendamento', 'Fechamento']
+            const spinCores  = [CORES.slate, CORES.azul, CORES.ciano, CORES.roxo, CORES.amarelo, CORES.verde]
+            const spinFunil = spinLabels.map((nome, i) => ({
+                nome,
+                valor: leads?.filter(l => (l.current_stage || 0) === i).length || 0,
+                cor: spinCores[i],
+            }))
             setDados({
-                kpis: { totalDisparados, taxaResposta, agendados, leadsQueResponderam, aguardandoHumano, pausadoManual, leadsRobo, tempoMedioResposta },
+                kpis: { totalDisparados, taxaResposta, agendados, leadsQueResponderam, aguardandoHumano, pausadoManual, leadsRobo, tempoMedioResposta, tempCounts },
                 funil,
+                spinFunil,
                 disparosPorDia,
                 respostasPorHora,
                 statusDist,
@@ -306,12 +321,12 @@ export default function Dashboard() {
                 <KpiCard icon={Clock}       label="Tempo Médio Resposta" value={d?.kpis.tempoMedioResposta ? `${d.kpis.tempoMedioResposta}min` : '--'} sub="do disparo à 1ª resposta" color={CORES.ciano} />
             </div>
 
-            {/* === KPIs SECUNDÁRIOS === */}
+            {/* === KPIs SECUNDÁRIOS + TEMPERATURA === */}
             <div className="grid grid-cols-2 lg:grid-cols-4 gap-4">
-                <KpiCard icon={Bot}         label="Robôs Detectados"   value={d?.kpis.leadsRobo || 0}           sub="silenciados automaticamente"    color={CORES.vermelho} />
-                <KpiCard icon={PauseCircle} label="Pausa Manual"        value={d?.kpis.pausadoManual || 0}       sub="sob controle humano"            color={CORES.roxo}     />
-                <KpiCard icon={AlertTriangle} label="Aguardando Humano" value={d?.kpis.aguardandoHumano || 0}   sub="pós autoresposta"               color={CORES.amarelo}  />
-                <KpiCard icon={Target}      label="Em Atendimento IA"   value={d?.kpis.totalDisparados - (d?.kpis.agendados || 0) - (d?.kpis.leadsRobo || 0) || 0} sub="conversas ativas" color={CORES.azul} />
+                <KpiCard icon={Flame}         label="Leads Hot 🔥"       value={d?.kpis.tempCounts?.hot || 0}      sub="prontos pra fechar"             color={CORES.vermelho} />
+                <KpiCard icon={Target}        label="Leads Warm 🟡"      value={d?.kpis.tempCounts?.warm || 0}     sub="engajaram mas pararam"          color={CORES.amarelo}  />
+                <KpiCard icon={Bot}           label="Robôs Detectados"   value={d?.kpis.leadsRobo || 0}            sub="silenciados automaticamente"    color={CORES.slate}    />
+                <KpiCard icon={PauseCircle}   label="Pausa Manual"       value={d?.kpis.pausadoManual || 0}        sub="sob controle humano"            color={CORES.roxo}     />
             </div>
 
             {/* === LINHA 1: FUNIL + DISTRIBUIÇÃO === */}
@@ -381,6 +396,32 @@ export default function Dashboard() {
                             </div>
                         ))}
                     </div>
+                </div>
+            </div>
+                        {/* === FUNIL SPIN (ESTÁGIO 0-5) === */}
+            <div className="glass-panel rounded-3xl p-6 border border-white/5">
+                <p className="text-[10px] font-black text-blue-400 uppercase tracking-[0.3em] mb-6 flex items-center gap-2">
+                    <Target className="h-4 w-4" /> Funil SPIN — Estágio da Conversa
+                </p>
+                <div className="grid grid-cols-6 gap-3">
+                    {d?.spinFunil?.map((etapa, i) => {
+                        const max = Math.max(...(d?.spinFunil?.map(e => e.valor) || [1]))
+                        const pct = max > 0 ? Math.round(etapa.valor / max * 100) : 0
+                        return (
+                            <div key={i} className="flex flex-col items-center gap-2">
+                                <span className="text-2xl font-black text-white">{etapa.valor}</span>
+                                <div className="w-full h-24 bg-slate-800/60 rounded-xl overflow-hidden flex flex-col justify-end">
+                                    <div
+                                        className="w-full rounded-t-lg transition-all duration-1000"
+                                        style={{ height: `${Math.max(pct, 4)}%`, background: etapa.cor, boxShadow: `0 0 10px ${etapa.cor}50` }}
+                                    />
+                                </div>
+                                <span className="text-[8px] font-black text-slate-500 uppercase tracking-wider text-center leading-tight">
+                                    {etapa.nome}
+                                </span>
+                            </div>
+                        )
+                    })}
                 </div>
             </div>
 

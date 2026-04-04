@@ -26,6 +26,33 @@ const MAPA_CONCESSIONARIAS = {
     'RS': 'RGE/Ceee', 'BA': 'Coelba', 'PE': 'Neoenergia', 'MG': 'Cemig',
     'CE': 'Enel', 'PA': 'Equatorial', 'GO': 'Equatorial', 'RJ': 'Light/Enel', 'SP': 'Enel/CPFL'
 };
+// 🎯 FIX #12: Percentuais REAIS por estado (substitui o 20% fixo do prompt)
+const MAPA_DESCONTO_REGIONAL = {
+    'PE': 0.25, 'BA': 0.25, 'CE': 0.25, 'MG': 0.25,
+    'MT': 0.15, 'MS': 0.15, 'GO': 0.15, 'PA': 0.15,
+    'PR': 0.16,
+    'SC': 0.12, 'RS': 0.12,
+    'SP': 0.15, 'RJ': 0.15
+};
+
+// 🎯 FIX #11: Contexto por nicho — injeta vocabulário do setor no prompt
+function gerarContextoNicho(niche) {
+    if (!niche) return '';
+    const n = niche.toLowerCase();
+    if (n.includes('restaurante') || n.includes('alimenta') || n.includes('padaria') || n.includes('lanchonete'))
+        return '\nCONTEXTO DE NICHO: Empresa do ramo alimentício. Mencione custos de câmara fria, forno elétrico, coifa. Use "o gasto com energia na cozinha industrial".';
+    if (n.includes('oficina') || n.includes('auto') || n.includes('mecânic'))
+        return '\nCONTEXTO DE NICHO: Oficina mecânica/auto center. Mencione compressor, elevador, ar comprimido. Use "equipamento pesado puxa muita energia".';
+    if (n.includes('salão') || n.includes('beleza') || n.includes('estétic') || n.includes('barbearia'))
+        return '\nCONTEXTO DE NICHO: Salão de beleza/estética. Mencione secador, chapinha, ar condicionado. Use "ar condicionado ligado o dia todo".';
+    if (n.includes('mercado') || n.includes('super') || n.includes('minimercado'))
+        return '\nCONTEXTO DE NICHO: Supermercado/mercado. Mencione freezers, câmaras frias, iluminação. Use "freezer funcionando 24h consome muito".';
+    if (n.includes('hotel') || n.includes('pousada') || n.includes('hosped'))
+        return '\nCONTEXTO DE NICHO: Hotelaria/pousada. Mencione ar condicionado dos quartos, lavanderia, iluminação. Use "com vários quartos climatizados".';
+    if (n.includes('farmácia') || n.includes('drogaria'))
+        return '\nCONTEXTO DE NICHO: Farmácia. Mencione refrigeração de medicamentos, ar condicionado, iluminação. Use "refrigeração obrigatória consome bastante".';
+    return `\nCONTEXTO DE NICHO: Empresa do ramo de ${niche}. Adapte a linguagem ao setor quando possível.`;
+}
 
 function identificarArtigo(nome) {
     if (!nome) return "do responsável pela";
@@ -137,32 +164,31 @@ function dentroDaJanelaDeDisparo() {
 // 🧠 NÚCLEO IA: INTENÇÃO E RESPOSTA (SEU "CLOSER V11" INTEGRAL)
 // ============================================================================
 
-async function analisarIntencao(historico) {
-    const prompt = `Analise a mensagem abaixo e classifique em: [ROBO] ou [HUMANO].
-
-Classifique como [ROBO] se contiver qualquer um desses sinais:
-- Menu numerado ("digite 1", "opção 2", "1 -", "2 -")
-- Cardápio ou lista de produtos/serviços
-- Frase de boas-vindas automática ("agradece seu contato", "retornaremos", "em horário comercial", "sua mensagem foi recebida", "em breve retornamos", "bem-vindo ao atendimento")
-- Horários de funcionamento como resposta isolada
-- Link de cardápio digital
-- Qualquer resposta que claramente não foi digitada por uma pessoa real
-
-Classifique como [HUMANO] para qualquer outra coisa, incluindo respostas curtas como "ok", "oi", "não sei".
-
-Responda APENAS a tag, nada mais.
-
-Mensagem: ${historico}`;
-    try {
-        const res = await together.chat.completions.create({
-            messages: [{ role: 'user', content: prompt }],
-            model: MODELO_CEREBRO,
-            temperature: 0
-        });
-        const raw = res.choices[0].message.content;
-        const match = raw.match(/\[(ROBO|HUMANO)\]/);
-        return match ? match[0] : "[HUMANO]";
-    } catch (e) { return "[HUMANO]"; }
+// 🎯 FIX #7: Detector de robô por REGEX (custo zero, latência zero)
+// Substitui a chamada LLM que custava ~$0.002 por mensagem recebida
+function analisarIntencaoRegex(texto) {
+    if (!texto || texto.trim().length === 0) return "[HUMANO]";
+    const t = texto.toLowerCase().trim();
+    const PADROES_ROBO = [
+        /(?:digite|opcao|opção)\s*\d/i,
+        /^\s*\d\s*[-–—\.]\s*.+/m,
+        /(?:1\s*[-–]\s*.+\n\s*2\s*[-–])/,
+        /agradec\w+\s+(?:seu|sua|o)\s+contato/i,
+        /(?:retornaremos|em\s+breve\s+retorn|entraremos\s+em\s+contato)/i,
+        /(?:em\s+)?hor[aá]rio\s+comercial/i,
+        /sua\s+mensagem\s+foi\s+recebida/i,
+        /bem[- ]?vind[oa]\s+(?:ao?|à)/i,
+        /atendimento\s+(?:das|de)\s+\d/i,
+        /^(?:seg\s+[aà]\s+sex|segunda\s+[aà]|funciona\w+\s+das?\s+\d)/i,
+        /(?:cardapio|card[áa]pio)\s*(?:digital|online|aqui)/i,
+        /(?:acesse|confira)\s+(?:nosso|o)\s+(?:cardápio|menu)/i,
+        /(?:n[ãa]o\s+(?:é|e)\s+poss[ií]vel\s+atend|fora\s+do\s+hor[aá]rio)/i,
+        /(?:para\s+falar\s+com\s+(?:um|nosso)\s+atendente)/i,
+    ];
+    for (const padrao of PADROES_ROBO) {
+        if (padrao.test(t)) return "[ROBO]";
+    }
+    return "[HUMANO]";
 }
 
 // ============================================================================
@@ -218,6 +244,57 @@ async function gerarRespostaIA(historico, contextoLead, instanceData) {
         ? "ARQUÉTIPO: O BANQUEIRO DE INVESTIMENTOS. Tom: Direto, focado em redução de OPEX e Zero CAPEX." 
         : "ARQUÉTIPO: O CONSULTOR PARCEIRO. Tom: Educativo, focado em 'sobrar dinheiro no caixa' e alívio das contas.";
 
+        // 🎯 FIX #12: Percentual REAL do estado
+    const percentualReal = MAPA_DESCONTO_REGIONAL[contextoLead.estado] || 0.15;
+    const percentualTexto = Math.round(percentualReal * 100);
+
+    // 🎯 FIX #11: Contexto de nicho
+    const nicheContext = gerarContextoNicho(contextoLead.niche);
+
+    // 🎯 FIX #4: Estágio atual do funil
+    const estagioAtual = contextoLead.current_stage || 0;
+
+    // 🎯 SAAS: Se o cliente tem prompt customizado no banco, usa ele
+    if (instanceData?.system_prompt && instanceData.system_prompt.trim().length > 100) {
+        let promptCustom = instanceData.system_prompt
+            .replace(/\$\{agentName\}/g, agentName)
+            .replace(/\$\{companyName\}/g, companyName)
+            .replace(/\$\{nomeLead\}/g, nomeLead)
+            .replace(/\$\{nomeEmpresa\}/g, nomeEmpresa)
+            .replace(/\$\{bairroLead\}/g, bairroLead)
+            .replace(/\$\{concessionariaLocal\}/g, concessionariaLocal)
+            .replace(/\$\{ancoraConta\}/g, ancoraConta)
+            .replace(/\$\{perfilComportamental\}/g, perfilComportamental)
+            .replace(/\$\{percentualTexto\}/g, String(percentualTexto))
+            .replace(/\$\{reversaoJaTentada\}/g, reversaoJaTentada)
+            .replace(/\$\{estagioAtual\}/g, String(estagioAtual))
+            .replace(/\$\{nicheContext\}/g, nicheContext);
+
+        // Usa o prompt do banco e pula o hardcoded
+        const MAX_TENTATIVAS = 3;
+        for (let tentativa = 1; tentativa <= MAX_TENTATIVAS; tentativa++) {
+            try {
+                const chatCompletion = await together.chat.completions.create({
+                    messages: [
+                        { role: 'system', content: promptCustom },
+                        ...historico 
+                    ],
+                    model: MODELO_CEREBRO,
+                    temperature: 0.3,
+                    max_tokens: 180,
+                    presence_penalty: 0.1,
+                    frequency_penalty: 0.15
+                });
+                let respostaDaIA = chatCompletion.choices[0].message.content;
+                respostaDaIA = respostaDaIA.replace(/[\*_~`]/g, '');
+                return respostaDaIA;
+            } catch (e) {
+                console.error(`❌ [LLM] Tentativa ${tentativa}/${MAX_TENTATIVAS} falhou (prompt custom): ${e.message}`);
+                if (tentativa < MAX_TENTATIVAS) await new Promise(r => setTimeout(r, tentativa * 3000));
+            }
+        }
+        return null;
+    }
     const systemPrompt = `
 ### 1. IDENTIDADE E MISSÃO
 Você é ${agentName}, Consultor de Energia sênior da ${companyName}.
@@ -228,8 +305,11 @@ Tom: Direto, humano, B2B brasileiro. Use "vc", "tá", "né", "pra". NUNCA use "r
 Contexto do primeiro contato: Você enviou uma mensagem curta dizendo que viu algo sobre a conta de energia da empresa e perguntou se estava falando com o responsável pelas contas fixas. O lead ainda não sabe o que é — apenas que há algo sobre a conta de luz.
 
 FILOSOFIA DE VENDA — CHALLENGER SALE:
-Você não dá aulas técnicas. Você ENSINA que empresas do porte da ${nomeEmpresa} estão pagando 20% a mais na conta de luz sem saber. Só depois de causar a dor você apresenta a solução.
+Você não dá aulas técnicas. Você ENSINA que empresas do porte da ${nomeEmpresa} estão pagando ${percentualTexto}% a mais na conta de luz sem saber.
+${nicheContext}
 
+ESTÁGIO ATUAL DO FUNIL: ${estagioAtual}
+Avance APENAS UM estágio por vez. Ao final da resposta, retorne a tag [ESTAGIO:N] com o número do estágio que a conversa ATINGIU após sua resposta.
 ---
 
 ### 2. REGRAS ABSOLUTAS DE FORMATO
@@ -258,6 +338,10 @@ Você não dá aulas técnicas. Você ENSINA que empresas do porte da ${nomeEmpr
 
 6. DETECÇÃO DE NÚMERO (HAND-OFF): 
 Se o interlocutor fornecer um número de telefone ou dizer "chama no 9...", você deve responder APENAS: "Perfeito, vou entrar em contato com o responsável por lá agora mesmo. Obrigado!" e retornar imediatamente a tag [ROBO] para pausar a conversa.
+
+7. "QUEM TE DEU MEU NÚMERO?" / "COMO CONSEGUIU MEU CONTATO?":
+Responda: "O cadastro da ${nomeEmpresa} apareceu num mapeamento que a gente fez de empresas da região que podem estar pagando tarifa cheia na ${concessionariaLocal}. Não é telemarketing — é mais um alerta sobre uma cobrança que pode estar sendo evitada."
+Depois com [QUEBRA]: "Vc que cuida dessa parte de contas fixas aí?"
 ---
 
 ### 4. A LINHA DO TEMPO DA VENDA (SPIN SELLING)
@@ -267,11 +351,12 @@ Antes de gerar qualquer resposta, identifique o estágio atual e avance APENAS U
 Gatilho: Primeira resposta do lead ao contato inicial.
 Objetivo: confirmar se é o decisor ANTES de qualquer pitch.
 
-CENÁRIO A — É o decisor ("sou eu", "pode falar", "sim"):
+CENÁRIO A — É o decisor ("sou eu", "pode falar", "sim") OU demonstrou curiosidade ("o que é?", "como assim?", "explica"):
 → Vá direto ao ESTÁGIO 1.
+Curiosidade = decisor confirmado implicitamente. Vá direto ao ESTÁGIO 1.
 Exemplo: "Que bom! A ${concessionariaLocal} não costuma avisar, mas vem cobrando uma tarifa que já podia ter caído. A conta de luz aí costuma passar de ${ancoraConta}?"
 
-CENÁRIO B — É gatekeeper ("não sou eu", "aqui é a recepção"):
+CENÁRIO B — É gatekeeper ("não sou eu", "aqui é a recepção", "não é comigo", "ele não está", "não tenho essa informação"):
 → "Entendi! Como é sobre redução de custo na conta de energia, o ideal é falar com quem cuida disso. [QUEBRA] Consegue me passar o WhatsApp do responsável?"
 → Se recusar: "Sem problema! Qualquer coisa, estou por aqui." e ENCERRE.
 
@@ -556,17 +641,22 @@ async function startInstance(instanceId, instanceName) {
             console.log(`⏳ [OUVIDO PACIENTE] Lead ${remoteJid.split('@')[0]} enviou mensagem. Aguardando 15s para ver se ele manda mais...`);
 
             // Inicia o cronômetro de 15 segundos
+            
             gaveta.timer = setTimeout(async () => {
-                const textoConsolidado = gaveta.textos.join(' \n'); // Junta tudo separando por linha
-                const msgFinal = gaveta.ultimaMsg;
-                
-                gavetaDeMensagens.delete(remoteJid); // Esvazia a gaveta
-                
-                console.log(`🧠 [OUVIDO PACIENTE] Lead concluiu raciocínio. Processando bloco: "${textoConsolidado}"`);
-                
-                // Manda o textão inteiro de uma vez só para a IA
-                await processarMensagem(sock, msgFinal, instanceId, textoConsolidado);
-            }, 15000); // <-- 15 segundos de paciência
+                try {
+                    const textoConsolidado = gaveta.textos.join(' \n');
+                    const msgFinal = gaveta.ultimaMsg;
+                    
+                    gavetaDeMensagens.delete(remoteJid);
+                    
+                    console.log(`🧠 [OUVIDO PACIENTE] Lead concluiu raciocínio. Processando bloco: "${textoConsolidado}"`);
+                    
+                    await processarMensagem(sock, msgFinal, instanceId, textoConsolidado);
+                } catch (errGaveta) {
+                    console.error(`❌ [GAVETA] Erro ao processar bloco consolidado:`, errGaveta.message);
+                    gavetaDeMensagens.delete(remoteJid); // Limpa mesmo com erro
+                }
+            }, 15000);// <-- 15 segundos de paciência
         }
     });
    
@@ -712,6 +802,22 @@ async function filtrarEEnviarResposta(sock, remoteJid, resposta, historico, lead
     // ── 4. SE A IA GEROU APENAS TAG (texto ficou vazio após remoção) ─────────
     if (resposta.trim().length === 0) return;
 
+    // ── 4.5. PARSER DE ESTÁGIO DO FUNIL (FIX #4) ─────────────────────────────
+    const matchEstagio = resposta.match(/\[ESTAGIO:(\d)\]/i);
+    if (matchEstagio) {
+        const novoEstagio = parseInt(matchEstagio[1]);
+        resposta = resposta.replace(/\[ESTAGIO:\d\]/gi, '').trim(); // Remove a tag — lead não vê
+        
+        // Atualiza estágio no banco + temperatura
+        const tempUpdate = novoEstagio >= 3 ? 'hot' : novoEstagio >= 1 ? 'warm' : 'cold';
+        await supabase.from('leads').update({ 
+            current_stage: novoEstagio,
+            lead_temperature: tempUpdate
+        }).eq('id', lead.id);
+        
+        console.log(`📊 [FUNIL] ${lead.name} avançou para estágio ${novoEstagio} (${tempUpdate})`);
+    }
+
  // ── 5. FATIADOR E SIMULADOR HUMANO DE DIGITAÇÃO ──────────────────────────
     const mensagensSplit = resposta
         .split('[QUEBRA]')
@@ -785,8 +891,8 @@ async function filtrarEEnviarResposta(sock, remoteJid, resposta, historico, lead
     if (sinalizouEncerramento) {
         await supabase.from('leads').update({ is_paused: true }).eq('id', lead.id);
         console.log(`⏸️ [PAUSA HAND-OFF] Conversa com ${lead.name} pausada após despedida enviada.`);
+
     }
-}
 
 // ── 8. DETECTOR DE NÚMERO DO DECISOR ─────────────────────────────────────
     // Se a IA sinalizou hand-off E há um número no texto da conversa, salva e dispara
@@ -818,6 +924,10 @@ async function filtrarEEnviarResposta(sock, remoteJid, resposta, historico, lead
             }
         }
     }
+
+}
+
+
 async function processarMensagem(sock, msg, instanceId, textoConsolidado = null) {    const remoteJid = msg.key.remoteJid;
     if (remoteJid.includes('@g.us')) return; 
 
@@ -965,7 +1075,7 @@ if (fromMe) {
         if (lead.is_paused) {
             console.log(`⏸️ [TRAVA HUMANA] A IA ignorou ${lead.name} porque o lead está pausado no banco (is_paused = true).`);
         } else {
-            const intencao = await analisarIntencao(texto);
+                const intencao = analisarIntencaoRegex(texto);
             console.log(`🎯 [Filtro] A IA classificou a mensagem de ${lead.name} como: ${intencao}`);
             
         if (intencao === "[ROBO]") {
@@ -1092,7 +1202,10 @@ if (fromMe) {
     try {
         console.log(`🧠 [IA] Gerando resposta para ${lead.name}...`);
         if (messageType !== 'audioMessage') await db.saveMessage(lead.whatsapp_id, 'user', texto, instanceId);
-
+        // 🎯 OPP #3: Atualiza temperatura quando lead responde pela primeira vez
+        if (lead.lead_temperature === 'cold' || !lead.lead_temperature) {
+            await supabase.from('leads').update({ lead_temperature: 'warm' }).eq('id', lead.id);
+        }
         const histRaw = await db.getHistory(lead.whatsapp_id, instanceId);
         const historico = histRaw.map(m => ({ role: m.role, content: m.content }));
         const instanceData = await getRegrasEmCache(instanceId);
@@ -1243,15 +1356,13 @@ async function processarFilaDeAtaque(instanceId) {
                     lead.whatsapp_id = cleanJid;
                 }
 
-              // 8. MONTAGEM DA SAUDAÇÃO — PROTOCOLO CURIOSIDADE-PRIMEIRO
+              // 8. MONTAGEM DA SAUDAÇÃO — BALÃO ÚNICO (FIX #1 + #2 + #10)
 console.log(`🚀 [DISPARANDO] ${config.nome} enviando saudação para ${lead.name}...`);
 await instancia.sock.sendPresenceUpdate('composing', cleanJid);
 await delay(Math.random() * 4000 + 4000);
 await instancia.sock.sendPresenceUpdate('paused', cleanJid);
 
-// Variáveis de contexto (mantidas do bloco original)
 let primeiroNomeDono = null;
-
 if (lead.dono && lead.dono.trim().length > 2) {
     primeiroNomeDono = lead.dono.trim().split(' ')[0].toLowerCase();
     primeiroNomeDono = primeiroNomeDono.charAt(0).toUpperCase() + primeiroNomeDono.slice(1);
@@ -1263,34 +1374,28 @@ const nomeEmpresa = lead.name
     ? lead.name.replace(/\s(LTDA|ME|EIRELI|S\.A|LIMITED)\b/gi, '').trim()
     : 'sua empresa';
 
-// ── BALÃO 1: Curiosidade pura — sem pitch, sem contexto, sem pergunta ──────
-// Objetivo único: fazer o lead responder qualquer coisa.
-// Variação aleatória entre 3 templates para evitar detecção de padrão pelo WhatsApp.
-let variacoesCuriosidade;
+// ── BALÃO ÚNICO: curiosidade + qualificação casual numa só mensagem ──
+let variacoesAbertura;
+const saudacao = primeiroNomeDono ? `Oi ${primeiroNomeDono}` : 'Oi, tudo bem?';
 
 if (lead.is_decisor && lead.origin_company_name) {
-    // Abordagem especial: já sabe que veio indicado pelo atendente
-    variacoesCuriosidade = [
-        `Oi${primeiroNomeDono ? ` ${primeiroNomeDono}` : ''}, tudo bem? Aqui é o Marlon da Enerzee. A equipe da ${lead.origin_company_name} passou seu contato pra mim — tenho uma informação sobre a conta de energia de vcs que queria compartilhar.`,
-        `Opa${primeiroNomeDono ? ` ${primeiroNomeDono}` : ''}, sou o Marlon da Enerzee. Falei com o pessoal da ${lead.origin_company_name} e me passaram seu contato. É sobre a conta de luz de vcs — tem algo que a ${concessionariaLocal} não costuma divulgar.`,
+    variacoesAbertura = [
+        `${saudacao}, o pessoal da ${lead.origin_company_name} me passou seu contato. Vi algo sobre a conta de energia de vcs que achei que valia compartilhar — vc que cuida dessa parte?`,
+        `${saudacao}, falei com a equipe da ${lead.origin_company_name} e me indicaram vc. Tem uma informação sobre a ${concessionariaLocal} que a maioria das empresas não sabe — vc cuida das contas fixas aí?`,
     ];
 } else {
-    variacoesCuriosidade = [
-        `Oi${primeiroNomeDono ? ` ${primeiroNomeDono}` : ''}, tudo bem? Aqui é o Marlon da Enerzee. Vi algo sobre a conta de energia da ${nomeEmpresa} que achei que valia te passar.`,
-        `Opa${primeiroNomeDono ? ` ${primeiroNomeDono}` : ''}, tudo certo? Sou o Marlon. Tava olhando uns dados da ${concessionariaLocal} referente à região de vcs e vi uma coisa interessante sobre a ${nomeEmpresa}.`,
-        `Oi${primeiroNomeDono ? ` ${primeiroNomeDono}` : ''}, aqui é o Marlon da Enerzee. Cruzei o cadastro da ${nomeEmpresa} num mapeamento que a gente fez e tem uma informação sobre a conta de luz de vcs que a ${concessionariaLocal} não costuma divulgar.`,
+    variacoesAbertura = [
+        `${saudacao}, vi algo sobre a conta de energia da ${nomeEmpresa} que achei que valia te passar. Vc cuida dessa parte de contas fixas aí?`,
+        `${saudacao}, cruzei o cadastro da ${nomeEmpresa} num mapeamento da região e tem uma info sobre a ${concessionariaLocal} que queria compartilhar. Tô falando com a pessoa certa?`,
+        `${saudacao}, achei uma coisa sobre a conta de luz da ${nomeEmpresa} que normalmente a ${concessionariaLocal} não avisa. Vc é quem cuida disso aí?`,
     ];
 }
-const balao1 = variacoesCuriosidade[Math.floor(Math.random() * variacoesCuriosidade.length)];
 
-// ── BALÃO 2: Qualificação do interlocutor — UMA pergunta fechada ─────────
-// Objetivo: confirmar decisor ANTES de gastar qualquer pitch.
-// Se for gatekeeper, o systemPrompt trata o encerramento educado.
-const balao2 = primeiroNomeDono
-    ? `Esse número é direto com o ${primeiroNomeDono} mesmo, ou tem outro responsável pelas contas fixas da ${nomeEmpresa}?`
-    : `Esse número é direto com o responsável pelas contas fixas da ${nomeEmpresa}?`;
+const templateIndex = Math.floor(Math.random() * variacoesAbertura.length);
+const balaoUnico = variacoesAbertura[templateIndex];
+const templateName = `abertura_v${templateIndex + 1}${lead.is_decisor ? '_decisor' : ''}`;
+const mensagensSplit = [balaoUnico]; // ← BALÃO ÚNICO (era [balao1, balao2])
 
-const mensagensSplit = [balao1, balao2];
                 // 9. FATIADOR HUMANO E ENVIO (Com interrupção intacta!)
                 
                 for (let i = 0; i < mensagensSplit.length; i++) {
@@ -1316,7 +1421,7 @@ const mensagensSplit = [balao1, balao2];
                 }
 
                 // 10. CONCLUSÃO E SUCESSO
-                await supabase.from('leads').update({ status: 'contact', last_contact_at: new Date().toISOString() }).eq('id', lead.id);
+                await supabase.from('leads').update({ status: 'contact', last_contact_at: new Date().toISOString(), opening_template: templateName }).eq('id', lead.id);
                 console.log(`✅ [SUCESSO REAL] Entregue por ${config.nome} para ${lead.name}!`);
                 leadsEmProcessamento.delete(lead.id);
                 falhasConsecutivas = 0;
@@ -1395,25 +1500,25 @@ async function loopRecuperacaoConversas() {
         }
 
         // ====================================================================
-        // 🚀 2. FOLLOW-UP 24 HORAS (O Cliente ignorou o Bot) - MÁQUINA DE VENDAS
+        // 🚀 2. FOLLOW-UP INTELIGENTE D1/D3/D7 (FIX #5)
         // ====================================================================
-        // Calcula o tempo exato: leads contatados entre 24h e 48h atrás
-        const ontem = new Date(Date.now() - 24 * 60 * 60 * 1000).toISOString();
-        const anteontem = new Date(Date.now() - 48 * 60 * 60 * 1000).toISOString();
+        const agora = Date.now();
+        const UM_DIA = 24 * 60 * 60 * 1000;
 
+        // Busca leads que foram contatados mas nunca responderam
         const { data: leadsFollowUp } = await supabase
             .from('leads')
-            .select('id, name, whatsapp_id, instance_id, dono')
+            .select('id, name, whatsapp_id, instance_id, dono, followup_count, last_contact_at, niche')
             .eq('status', 'contact')
-            .lte('last_contact_at', ontem)
-            .gte('last_contact_at', anteontem)
+            .eq('calendly_booked', false)
+            .lt('followup_count', 3) // Máximo 3 follow-ups
+            .order('last_contact_at', { ascending: true })
             .limit(15);
 
         if (leadsFollowUp) {
             for (const lf of leadsFollowUp) {
                 try {
-                    // Verifica se o cliente JÁ RESPONDEU alguma vez na vida. 
-                    // Traz só o ID para economizar dados de tráfego.
+                    // Verifica se o lead já respondeu alguma vez
                     const { data: temResposta } = await supabase
                         .from('messages')
                         .select('id')
@@ -1421,45 +1526,66 @@ async function loopRecuperacaoConversas() {
                         .eq('role', 'user')
                         .limit(1);
 
-                    // Se NÃO tem nenhuma resposta do cliente, manda a isca de urgência!
-                    // Busca se o lead já agendou pelo Calendly
-                    const { data: leadAtualizado } = await supabase
-                        .from('leads')
-                        .select('calendly_booked')
-                        .eq('id', lf.id)
-                        .maybeSingle();
+                    // Só faz follow-up se NUNCA respondeu
+                    if (temResposta && temResposta.length > 0) continue;
 
-                    if (leadAtualizado?.calendly_booked) {
-                        console.log(`📅 [FOLLOW-UP BLOQUEADO] ${lf.name} já agendou pelo Calendly. Pulando.`);
-                        continue;
-                    }
+                    const lastContact = new Date(lf.last_contact_at).getTime();
+                    const diasPassados = (agora - lastContact) / UM_DIA;
+                    const followupAtual = lf.followup_count || 0;
 
-                    if (!temResposta || temResposta.length === 0) {
+                    // Cadência: D1 (24h), D3 (72h), D7 (168h)
+                    let deveEnviar = false;
+                    if (followupAtual === 0 && diasPassados >= 1) deveEnviar = true;
+                    if (followupAtual === 1 && diasPassados >= 3) deveEnviar = true;
+                    if (followupAtual === 2 && diasPassados >= 7) deveEnviar = true;
+
+                    if (!deveEnviar) continue;
+
                     const instancia = sessions.get(lf.instance_id);
-                        if (instancia && instancia.ready) {
-                            console.log(`🔔 [FOLLOW-UP] Acordando lead ${lf.name} que visualizou e não respondeu...`);
-                            
-                            let primeiroNomeDono = lf.dono && lf.dono.trim().length > 2 ? lf.dono.trim().split(' ')[0] : 'Opa';
-                            primeiroNomeDono = primeiroNomeDono.charAt(0).toUpperCase() + primeiroNomeDono.slice(1);
-                            
-                            const msgFollowUp = `${primeiroNomeDono}, conseguiu dar uma olhada na mensagem acima? Como a gente tem uma cota de isenção pra região, queria só confirmar se faz sentido pra vcs ou se posso passar a vaga pro próximo comércio da lista.`;
+                    if (!instancia || !instancia.ready) continue;
 
-                            await instancia.sock.sendPresenceUpdate('composing', lf.whatsapp_id);
-                            await delay(6000);
-                            await enviarMensagemIA(instancia.sock, lf.whatsapp_id, { text: msgFollowUp });
-                            await db.saveMessage(lf.whatsapp_id, 'assistant', msgFollowUp, lf.instance_id);
+                    let primeiroNome = lf.dono && lf.dono.trim().length > 2 
+                        ? lf.dono.trim().split(' ')[0] : 'Opa';
+                    primeiroNome = primeiroNome.charAt(0).toUpperCase() + primeiroNome.slice(1);
 
-                            // Atualiza a data de contato para "agora". Assim ele sai da lista de follow-up e não recebe a mensagem repetida no próximo loop.
-                            await supabase.from('leads').update({ last_contact_at: new Date().toISOString() }).eq('id', lf.id);
-                            await delay(12000); // Respiro anti-ban entre os envios
-                        }
-                    }
+                    const nomeEmpresa = (lf.name || 'empresa')
+                        .replace(/\s(LTDA|ME|EIRELI|S\.A|LIMITED)\b/gi, '').trim();
+
+                    // Mensagens curtas e diferentes para cada dia
+                    const mensagensFollowUp = [
+                        // D1: Curiosidade + urgência leve
+                        `${primeiroNome}, conseguiu ver a mensagem? Como a gente tem poucas vagas pra região, queria confirmar se faz sentido pra ${nomeEmpresa} antes de liberar pro próximo.`,
+                        // D3: Prova social
+                        `${primeiroNome}, só passando pra dizer que essa semana mais 2 empresas aí da região aderiram ao desconto. Se quiser que eu veja se a ${nomeEmpresa} tem perfil, me avisa!`,
+                        // D7: Última tentativa + encerramento
+                        `${primeiroNome}, como não tive retorno, vou fechar seu cadastro aqui. Se no futuro quiser reduzir a conta de luz sem obra e sem custo, é só me chamar. Bons negócios!`
+                    ];
+
+                    const msgFollowUp = mensagensFollowUp[followupAtual];
+
+                    console.log(`🔔 [FOLLOW-UP D${followupAtual === 0 ? '1' : followupAtual === 1 ? '3' : '7'}] ${lf.name}`);
+                    
+                    await instancia.sock.sendPresenceUpdate('composing', lf.whatsapp_id);
+                    await delay(6000);
+                    await enviarMensagemIA(instancia.sock, lf.whatsapp_id, { text: msgFollowUp });
+                    await db.saveMessage(lf.whatsapp_id, 'assistant', msgFollowUp, lf.instance_id);
+
+                    // Atualiza contadores
+                    const novoStatus = followupAtual === 2 ? 'dead' : 'contact';
+                    const novaTemp = followupAtual === 2 ? 'dead' : 'cold';
+                    await supabase.from('leads').update({ 
+                        followup_count: followupAtual + 1,
+                        last_contact_at: new Date().toISOString(),
+                        status: novoStatus,
+                        lead_temperature: novaTemp
+                    }).eq('id', lf.id);
+
+                    await delay(12000);
                 } catch (errFollow) {
                     console.error(`❌ Erro no Follow-up de ${lf.name}:`, errFollow.message);
                 }
             }
         }
-
         // ====================================================================
         // 👤 3. RETOMADA APÓS INTERVENÇÃO HUMANA (10 MINUTOS)
         // ====================================================================
@@ -1552,6 +1678,13 @@ module.exports = {
         ioSocket = io;
          sdrEventsGlobal = sdrEvents;
         
+         // 🎯 BUG #2 FIX: Destravar leads que ficaram presos como "reservado" após crash/restart
+        const { data: travados } = await supabase.from('leads').select('id').eq('status', 'reservado');
+        if (travados && travados.length > 0) {
+            await supabase.from('leads').update({ status: 'new' }).eq('status', 'reservado');
+            console.log(`🔓 [STARTUP] ${travados.length} leads destravados de status "reservado" → "new"`);
+        }
+
         const insts = await db.getActiveInstances(); 
         for (const i of insts) { 
             await startInstance(i.id, i.name); 

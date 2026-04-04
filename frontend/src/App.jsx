@@ -263,8 +263,8 @@ const [botLogs, setBotLogs] = useState([]);
 
     const fetchLeadsFromDB = async () => {
         const { data } = await supabase.from('leads')
-    .select('id, name, phone, status, niche, dono, cnpj, bairro, cep, porte, capital_social_numeric, whatsapp_id, instance_id, lat, lng, created_at, last_contact_at, is_paused, manual_pause')
-    .order('created_at', { ascending: false });
+        .select('id, name, phone, status, niche, dono, cnpj, bairro, cep, porte, capital_social_numeric, whatsapp_id, instance_id, lat, lng, created_at, last_contact_at, is_paused, manual_pause, current_stage, lead_temperature, followup_count, opening_template')
+        .order('created_at', { ascending: false });
         if (data) setLeads(data);
     };
 
@@ -988,7 +988,41 @@ const [botLogs, setBotLogs] = useState([]);
                     </div>
                 </div>
             </div>
-
+            {/* DADOS DE CONVERSÃO (NOVAS MÉTRICAS V13) */}
+            {(viewingLeadDetail?.current_stage > 0 || viewingLeadDetail?.lead_temperature || viewingLeadDetail?.followup_count > 0 || viewingLeadDetail?.opening_template) && (
+                <div className="grid grid-cols-4 gap-3">
+                    <div className="glass-card p-3 rounded-2xl border-white/5">
+                        <span className="text-[8px] text-slate-600 uppercase font-black block mb-1">Estágio Funil</span>
+                        <div className="flex items-center gap-2">
+                            <span className="text-lg font-black text-white">{viewingLeadDetail?.current_stage || 0}</span>
+                            <span className="text-[9px] text-slate-500 uppercase font-bold">
+                                {['Qualif.','Situação','Dor','Solução','Agenda','Fechado'][viewingLeadDetail?.current_stage || 0]}
+                            </span>
+                        </div>
+                    </div>
+                    <div className="glass-card p-3 rounded-2xl border-white/5">
+                        <span className="text-[8px] text-slate-600 uppercase font-black block mb-1">Temperatura</span>
+                        <span className={`text-lg font-black ${
+                            viewingLeadDetail?.lead_temperature === 'hot' ? 'text-red-400' :
+                            viewingLeadDetail?.lead_temperature === 'warm' ? 'text-amber-400' :
+                            viewingLeadDetail?.lead_temperature === 'dead' ? 'text-slate-500' :
+                            'text-blue-400'
+                        }`}>
+                            {viewingLeadDetail?.lead_temperature === 'hot' ? '🔥 Hot' :
+                             viewingLeadDetail?.lead_temperature === 'warm' ? '🟡 Warm' :
+                             viewingLeadDetail?.lead_temperature === 'dead' ? '💀 Dead' : '❄️ Cold'}
+                        </span>
+                    </div>
+                    <div className="glass-card p-3 rounded-2xl border-white/5">
+                        <span className="text-[8px] text-slate-600 uppercase font-black block mb-1">Follow-ups</span>
+                        <span className="text-lg font-black text-white">{viewingLeadDetail?.followup_count || 0}<span className="text-[10px] text-slate-500">/3</span></span>
+                    </div>
+                    <div className="glass-card p-3 rounded-2xl border-white/5">
+                        <span className="text-[8px] text-slate-600 uppercase font-black block mb-1">Template</span>
+                        <span className="text-[10px] font-black text-blue-400 uppercase">{viewingLeadDetail?.opening_template || '—'}</span>
+                    </div>
+                </div>
+            )}
             {/* CONTATO DIRETO - Altura e padding reduzidos */}
             <div className="bg-blue-600/5 p-4 rounded-3xl border border-blue-500/20 flex items-center justify-between">
                 <div className="flex items-center gap-4">
@@ -1081,6 +1115,16 @@ function LeadCard({ lead, isSelected, onSelect, onView, onEdit }) {
                     </div>
                 </div>
                 <Badge className="bg-yellow-500/10 text-yellow-500 border-none text-[8px] h-4 px-1.5 font-black uppercase tracking-tighter">⭐ {lead?.rating || '4.5'}</Badge>
+                {lead?.lead_temperature && lead.lead_temperature !== 'cold' && (
+                    <Badge className={`border-none text-[7px] h-4 px-1.5 font-black uppercase tracking-tighter ${
+                        lead.lead_temperature === 'hot'  ? 'bg-red-500/15 text-red-400' :
+                        lead.lead_temperature === 'warm' ? 'bg-amber-500/15 text-amber-400' :
+                        lead.lead_temperature === 'dead' ? 'bg-slate-500/15 text-slate-500' :
+                        'bg-slate-500/10 text-slate-600'
+                    }`}>
+                        {lead.lead_temperature === 'hot' ? '🔥 Hot' : lead.lead_temperature === 'warm' ? '🟡 Warm' : lead.lead_temperature === 'dead' ? '💀 Dead' : lead.lead_temperature}
+                    </Badge>
+                )}
             </div>
 
             {/* LINHA 2: IDENTIFICAÇÃO E CONTATO RÁPIDO */}
@@ -1098,7 +1142,28 @@ function LeadCard({ lead, isSelected, onSelect, onView, onEdit }) {
                     </div>
                 </div>
             </div>
-
+                {/* LINHA 2.5: ESTÁGIO DO FUNIL + FOLLOW-UP */}
+            {(lead?.current_stage > 0 || lead?.followup_count > 0) && (
+                <div className="flex items-center gap-2 mb-2">
+                    {lead?.current_stage > 0 && (
+                        <div className="flex items-center gap-1">
+                            {[1,2,3,4,5].map(s => (
+                                <div key={s} className={`h-1 w-4 rounded-full transition-all ${
+                                    s <= lead.current_stage 
+                                        ? s <= 2 ? 'bg-blue-500' : s <= 4 ? 'bg-amber-500' : 'bg-emerald-500'
+                                        : 'bg-slate-800'
+                                }`} />
+                            ))}
+                            <span className="text-[8px] font-black text-slate-500 ml-1 uppercase">E{lead.current_stage}</span>
+                        </div>
+                    )}
+                    {lead?.followup_count > 0 && (
+                        <span className="text-[7px] font-black text-slate-600 uppercase bg-slate-800/60 px-1.5 py-0.5 rounded">
+                            FU{lead.followup_count}
+                        </span>
+                    )}
+                </div>
+            )}
             {/* LINHA 3: POTENCIAL FINANCEIRO CORRIGIDO */}
             <div className="bg-black/40 p-2 rounded-xl border border-white/5 mb-2 flex justify-between items-center">
                 <div>
