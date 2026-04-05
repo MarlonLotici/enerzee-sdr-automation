@@ -532,7 +532,7 @@ if (session?.user?.id) checkBriefing()
                                 required
                                 value={loginEmail}
                                 onChange={(e) => setLoginEmail(e.target.value)}
-                                className="glass-card h-14 rounded-xl bg-black/40 border-white/10 text-white font-bold px-4 focus:border-blue-500 transition-colors" 
+                                className="glass-card h-14 rounded-xl bg-black/40 border-white/10 text-white font-bold px-4 focus:border-amber-500 transition-colors" 
                                 placeholder="marlon@enerzee.com"
                             />
                         </div>
@@ -544,7 +544,7 @@ if (session?.user?.id) checkBriefing()
                                 required
                                 value={loginPassword}
                                 onChange={(e) => setLoginPassword(e.target.value)}
-                                className="glass-card h-14 rounded-xl bg-black/40 border-white/10 text-white font-bold px-4 focus:border-blue-500 transition-colors" 
+                                className="glass-card h-14 rounded-xl bg-black/40 border-white/10 text-white font-bold px-4 focus:border-amber-500 transition-colors" 
                                 placeholder="••••••••"
                             />
                         </div>
@@ -695,9 +695,25 @@ return (
                        <Input placeholder="Buscar por Nome, Sócio, CNPJ ou Celular..." className="bg-transparent border-none pl-12 text-white h-11 focus:ring-0 font-bold text-sm" value={filterText} onChange={e => setFilterText(e.target.value)} />
     </div>
     <div className="flex gap-3">
-        <Button onClick={() => alert("Gerando Excel Comercial...")} className="glass-card hover:bg-white/10 text-white h-9 px-5 rounded-lg font-black text-[10px] tracking-widest uppercase border-white/10">
-            <Download className="mr-2 h-4 w-4 text-amber-400" /> Exportar
-        </Button>
+        <Button onClick={() => {
+    if (filteredLeads.length === 0) return alert('Nenhum lead para exportar')
+    const header = ['Nome','Telefone','CNPJ','Nicho','Dono','Bairro','Status','Temperatura','Estagio']
+    const rows = filteredLeads.map(function(l) {
+        return [l.name||'', l.phone||'', l.cnpj||'', l.niche||'', l.dono||'', l.bairro||'', l.status||'', l.lead_temperature||'', String(l.current_stage||0)]
+    })
+    const lines = [header].concat(rows)
+    const csvText = lines.map(function(row) {
+        return row.map(function(cell) { return '"' + cell.replace(/"/g, '""') + '"' }).join(',')
+    }).join('\n')
+    var blob = new Blob(['\ufeff' + csvText], { type: 'text/csv;charset=utf-8' })
+    var link = document.createElement('a')
+    link.href = URL.createObjectURL(blob)
+    link.download = 'leads_antix.csv'
+    link.click()
+}} className="glass-card hover:bg-white/10 text-white h-9 px-5 rounded-lg font-black text-[10px] tracking-widest uppercase border-white/10">
+    <Download className="mr-2 h-4 w-4 text-amber-400" /> Exportar
+</Button>
+
         <Button onClick={handleClearLeads} className="h-9 px-4 rounded-lg font-black text-[10px] text-red-500 hover:bg-red-500/10 glass-card border-transparent">
             <Trash2 className="mr-2 h-3.5 w-3.5" /> Limpar
         </Button>
@@ -1072,7 +1088,7 @@ return (
                     </div>
                     <div className="bg-amber-500/10 p-3 rounded-xl border border-amber-500/20">
                             <p className="text-[8px] text-amber-400 font-black uppercase mb-0.5">Nicho</p>
-                            <p className="text-sm font-black text-amber-300 italic leading-none"></p>
+                            <p className="text-sm font-black text-amber-300 italic leading-none">{activeChat.niche || '—'}</p>
                     </div>
                     <div className="space-y-1">
                         <span className="text-[8px] text-slate-500 uppercase font-black block tracking-widest">Telefone</span>
