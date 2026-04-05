@@ -4,47 +4,47 @@
 
 @layer base {
   :root {
-    --background: 222.2 84% 4.9%;
-    --foreground: 210 40% 98%;
-    --card: 222.2 84% 4.9%;
-    --card-foreground: 210 40% 98%;
-    --popover: 222.2 84% 4.9%;
-    --popover-foreground: 210 40% 98%;
-    --primary: 217.2 91.2% 59.8%;
-    --primary-foreground: 222.2 47.4% 11.2%;
-    --secondary: 217.2 32.6% 17.5%;
-    --secondary-foreground: 210 40% 98%;
-    --muted: 217.2 32.6% 17.5%;
-    --muted-foreground: 215 20.2% 65.1%;
-    --accent: 217.2 32.6% 17.5%;
-    --accent-foreground: 210 40% 98%;
-    --destructive: 0 62.8% 30.6%;
-    --destructive-foreground: 210 40% 98%;
-    --border: 217.2 32.6% 17.5%;
-    --input: 217.2 32.6% 17.5%;
-    --ring: 224.3 76.3% 48%;
+    --background: 0 0% 4%;
+    --foreground: 40 20% 95%;
+    --card: 0 0% 6%;
+    --card-foreground: 40 20% 95%;
+    --popover: 0 0% 5%;
+    --popover-foreground: 40 20% 95%;
+    --primary: 38 92% 50%;
+    --primary-foreground: 0 0% 4%;
+    --secondary: 0 0% 12%;
+    --secondary-foreground: 40 20% 95%;
+    --muted: 0 0% 12%;
+    --muted-foreground: 38 10% 55%;
+    --accent: 0 0% 12%;
+    --accent-foreground: 40 20% 95%;
+    --destructive: 0 62% 30%;
+    --destructive-foreground: 40 20% 95%;
+    --border: 0 0% 14%;
+    --input: 0 0% 14%;
+    --ring: 38 92% 50%;
     --radius: 0.5rem;
   }
 }
 
 :root {
-  --deep-bg: #020617;
+  --deep-bg: #0A0A0A;
 }
 
 body {
-  @apply bg-[#020617] text-slate-100 font-sans;
+  @apply bg-[#0A0A0A] text-slate-100 font-sans;
   background: 
-    radial-gradient(circle at 15% 50%, rgba(59, 130, 246, 0.15), transparent 40%),
-    radial-gradient(circle at 85% 30%, rgba(139, 92, 246, 0.15), transparent 40%),
-    linear-gradient(to bottom, #0f172a, #020617);
+    radial-gradient(circle at 15% 50%, rgba(245, 158, 11, 0.08), transparent 40%),
+    radial-gradient(circle at 85% 30%, rgba(217, 119, 6, 0.06), transparent 40%),
+    linear-gradient(to bottom, #111111, #0A0A0A);
   min-height: 100vh;
-  overflow-x: hidden;
+  overflow: hidden;
 }
 
 
 /* Painéis de Vidro */
 .glass-panel {
-    @apply bg-slate-900/70 border border-white/10 shadow-2xl;
+    @apply bg-[#111111]/85 border border-white/[0.06] shadow-2xl;
     backdrop-filter: blur(20px);
 }
 
@@ -54,7 +54,7 @@ body {
 }
 
 .glass-card:hover {
-    @apply border-blue-500/40 bg-slate-800/60 shadow-[0_0_30px_rgba(59,130,246,0.15)] -translate-y-1;
+    @apply border-amber-500/30 bg-white/[0.04] shadow-[0_0_30px_rgba(245,158,11,0.08)] -translate-y-1;
 }
 
 .glass-card-selected {
@@ -65,16 +65,16 @@ body {
 .custom-scrollbar::-webkit-scrollbar { width: 8px; height: 8px; }
 .custom-scrollbar::-webkit-scrollbar-track { background: rgba(15, 23, 42, 0.5); border-radius: 4px; }
 .custom-scrollbar::-webkit-scrollbar-thumb {
-  background: linear-gradient(to bottom, #3b82f6, #06b6d4);
+  background: linear-gradient(to bottom, #F59E0B, #D97706);
   border-radius: 4px;
 }
 
 /* Animações */
-.neon-text { text-shadow: 0 0 10px rgba(59, 130, 246, 0.8); }
+.neon-text { text-shadow: 0 0 10px rgba(245, 158, 11, 0.6); }
 .animate-spin-slow { animation: spin 3s linear infinite; }
 @keyframes radar-ping {
-    0% { box-shadow: 0 0 0 0px rgba(59, 130, 246, 0.4); opacity: 1; }
-    100% { box-shadow: 0 0 0 50px rgba(59, 130, 246, 0); opacity: 0; }
+    0% { box-shadow: 0 0 0 0px rgba(245, 158, 11, 0.4); opacity: 1; }
+    100% { box-shadow: 0 0 0 50px rgba(245, 158, 11, 0); opacity: 0; }
 }
 .radar-active { animation: radar-ping 2s infinite cubic-bezier(0, 0, 0.2, 1); }
 
@@ -88,10 +88,78 @@ html {
 body {
     height: 100%;
     min-height: unset;
+    overflow: hidden;
 }
 
 #root {
     height: 100%;
     display: flex;
     flex-direction: column;
+}
+
+/* Kanban scroll suave */
+.kanban-scroll {
+    -webkit-overflow-scrolling: touch;
+    scroll-snap-type: x proximity;
+}
+
+.kanban-scroll > * {
+    scroll-snap-align: start;
+}
+
+/* ── SIDEBAR ── */
+.sidebar {
+    width: 72px;
+    transition: width 0.3s cubic-bezier(0.4, 0, 0.2, 1);
+    overflow: hidden;
+}
+
+.sidebar:hover {
+    width: 220px;
+}
+
+.sidebar-item {
+    display: flex;
+    align-items: center;
+    gap: 12px;
+    padding: 10px 14px;
+    border-radius: 10px;
+    cursor: pointer;
+    color: rgba(255, 255, 255, 0.35);
+    transition: all 0.15s ease;
+    white-space: nowrap;
+    overflow: hidden;
+    font-size: 12px;
+    font-weight: 700;
+}
+
+.sidebar-item:hover {
+    background: rgba(245, 158, 11, 0.08);
+    color: #FBBF24;
+}
+
+.sidebar-item.active {
+    background: rgba(245, 158, 11, 0.12);
+    color: #F59E0B;
+    box-shadow: inset 3px 0 0 #F59E0B;
+}
+
+.sidebar-item .label {
+    opacity: 0;
+    transition: opacity 0.15s ease 0.05s;
+    font-size: 11px;
+    font-weight: 800;
+    text-transform: uppercase;
+    letter-spacing: 0.06em;
+}
+
+.sidebar:hover .sidebar-item .label {
+    opacity: 1;
+}
+
+/* ── RESPONSIVE ── */
+@media (max-width: 1024px) {
+    .sidebar { width: 56px; }
+    .sidebar:hover { width: 56px; }
+    .sidebar-item .label { display: none; }
 }

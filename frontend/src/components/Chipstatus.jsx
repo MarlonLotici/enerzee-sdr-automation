@@ -13,7 +13,7 @@ const C = {
     connected:    '#10B981',
     disconnected: '#F43F5E',
     connecting:   '#F59E0B',
-    blue:         '#3B82F6',
+    brand:        '#F59E0B',
     grid:         'rgba(255,255,255,0.04)',
     border:       'rgba(255,255,255,0.07)',
     muted:        'rgba(255,255,255,0.35)',
@@ -120,7 +120,7 @@ function ChipCard({ instance, dailyCount, statusInfo }) {
             <div style={{ display: 'flex', gap: 10 }}>
                 <div style={{ flex: 1, background: 'rgba(255,255,255,0.03)', borderRadius: '0.75rem', padding: '8px 10px', border: '1px solid rgba(255,255,255,0.05)' }}>
                     <div style={{ display: 'flex', alignItems: 'center', gap: 5, marginBottom: 3 }}>
-                        <User size={9} color={C.blue} />
+                        <User size={9} color={C.brand} />
                         <span style={{ fontSize: 8, fontWeight: 900, color: 'rgba(255,255,255,0.3)', textTransform: 'uppercase', letterSpacing: '0.15em' }}>Agente</span>
                     </div>
                     <p style={{ fontSize: 11, fontWeight: 900, color: '#fff' }}>
@@ -129,7 +129,7 @@ function ChipCard({ instance, dailyCount, statusInfo }) {
                 </div>
                 <div style={{ flex: 1, background: 'rgba(255,255,255,0.03)', borderRadius: '0.75rem', padding: '8px 10px', border: '1px solid rgba(255,255,255,0.05)' }}>
                     <div style={{ display: 'flex', alignItems: 'center', gap: 5, marginBottom: 3 }}>
-                        <Building2 size={9} color={C.blue} />
+                        <Building2 size={9} color={C.brand} />
                         <span style={{ fontSize: 8, fontWeight: 900, color: 'rgba(255,255,255,0.3)', textTransform: 'uppercase', letterSpacing: '0.15em' }}>Empresa</span>
                     </div>
                     <p style={{ fontSize: 11, fontWeight: 900, color: '#fff' }}>
@@ -284,7 +284,7 @@ export default function ChipStatus({ instances = [], socket }) {
             <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 20 }}>
                 <div>
                     <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 3 }}>
-                        <Cpu size={16} color={C.blue} />
+                        <Cpu size={16} color={C.brand} />
                         <h2 style={{ fontSize: 14, fontWeight: 900, letterSpacing: '-0.02em', textTransform: 'uppercase' }}>
                             Status dos Chips
                         </h2>
@@ -315,7 +315,7 @@ export default function ChipStatus({ instances = [], socket }) {
             <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 8, marginBottom: 16 }}>
                 {[
                     { label: 'Chips Ativos',    value: `${totalConectados} / ${instances.length}`, color: C.connected,    icon: <Wifi size={11} color={C.connected} />, span: false },
-                    { label: 'Disparos Hoje',   value: totalDisparos,                               color: C.blue,         icon: <Zap  size={11} color={C.blue} />, span: false },
+                    { label: 'Disparos Hoje',   value: totalDisparos,                               color: C.brand,         icon: <Zap  size={11} color={C.brand} />, span: false },
                     { label: 'Capacidade Total',value: `${totalLimite}/dia`,                        color: 'rgba(255,255,255,0.5)', icon: <Target size={11} color="rgba(255,255,255,0.4)" />, span: true },
                 ].map(({ label, value, color, icon, span }) => (
                     <div key={label} style={{ gridColumn: span ? 'span 2' : 'auto', background: 'rgba(255,255,255,0.03)', border: '1px solid rgba(255,255,255,0.06)', borderRadius: '0.75rem', padding: '10px 12px', display: 'flex', alignItems: 'center', gap: 8 }}>

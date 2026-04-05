@@ -1,6 +1,6 @@
 import React, { useState, useEffect, useCallback } from 'react'
 import { createClient } from '@supabase/supabase-js'
-import { Search, BrainCircuit, Clock, RefreshCw } from 'lucide-react'
+import { Search, BrainCircuit, Clock, RefreshCw, Cpu } from 'lucide-react'
 
 
 // FORMA CORRETA - ALTA PERFORMANCE
@@ -77,10 +77,10 @@ function ConversaCard({ lead, ultimaMsg, isActive, onClick }) {
             <div style={{ position: 'relative', flexShrink: 0 }}>
                 <div style={{
                     width: 28, height: 28, borderRadius: '50%',
-                    background: isActive ? 'rgba(59,130,246,0.25)' : 'rgba(255,255,255,0.06)',
-                    border: `1px solid ${isActive ? 'rgba(59,130,246,0.4)' : 'rgba(255,255,255,0.1)'}`,
+                   background: isActive ? 'rgba(245,158,11,0.15)' : 'rgba(255,255,255,0.06)',
+                   border: `1px solid ${isActive ? 'rgba(245,158,11,0.3)' : 'rgba(255,255,255,0.1)'}`,                    
                     display: 'flex', alignItems: 'center', justifyContent: 'center',
-                    fontSize: 11, fontWeight: 900, color: isActive ? '#93C5FD' : 'rgba(255,255,255,0.6)',
+                    fontSize: 11, fontWeight: 900, color: isActive ? '#FBBF24' : 'rgba(255,255,255,0.6)',
                 }}>
                     {inicial}
                 </div>
@@ -174,28 +174,28 @@ function ConversaCard({ lead, ultimaMsg, isActive, onClick }) {
  *   activeId  string          — id do lead ativo para highlight
  *   socket    — instância socket.io para ouvir new_lead e atualizações em tempo real
  */
-export default function ConversaList({ onSelect, activeId, socket }) {
-    const [conversas, setConversas] = useState([])   // [{ lead, ultimaMsg }]
+export default function ConversaList({ onSelect, activeId, socket, instances = [] }) {
+    const [conversas, setConversas] = useState([])
     const [busca,     setBusca]     = useState('')
     const [loading,   setLoading]   = useState(true)
+    const [filtro,    setFiltro]    = useState('todos') // todos | a_responder | ia_ativa | pausadas | hot | warm | estagio_dor | estagio_solucao | estagio_agenda
+    const [chipFiltro, setChipFiltro] = useState('todos') // 'todos' | instance_id
 
     const fetchConversas = useCallback(async () => {
         setLoading(true)
         try {
-            // 1. Busca leads em atendimento ativo
             const { data: leads, error } = await supabase
                 .from('leads')
                 .select('id, name, whatsapp_id, status, is_paused, manual_pause, last_contact_at, instance_id, dono, niche, bairro, phone, cnpj, capital_social_numeric, porte, current_stage, lead_temperature')
                 .in('status', ['contact', 'waiting_analysis'])
                 .order('last_contact_at', { ascending: false })
-                .limit(50)
+                .limit(80)
 
             if (error || !leads?.length) {
                 setConversas([])
                 return
             }
 
-            // 2. Para cada lead, busca a última mensagem
             const comUltimaMsg = await Promise.all(
                 leads.map(async lead => {
                     const { data: msgs } = await supabase
@@ -218,19 +218,15 @@ export default function ConversaList({ onSelect, activeId, socket }) {
         }
     }, [])
 
-    // Fetch inicial + polling a cada 20s
     useEffect(() => {
         fetchConversas()
         const id = setInterval(fetchConversas, 20_000)
         return () => clearInterval(id)
     }, [fetchConversas])
 
-    // Quando IA responder para um lead, atualiza a lista em tempo real
     useEffect(() => {
         if (!socket) return
-        // Novo lead capturado → pode ter entrado em contact
         socket.on('new_lead', fetchConversas)
-        // Qualquer mudança de status via socket
         socket.on('whatsapp_status', fetchConversas)
         return () => {
             socket.off('new_lead', fetchConversas)
@@ -238,27 +234,69 @@ export default function ConversaList({ onSelect, activeId, socket }) {
         }
     }, [socket, fetchConversas])
 
-    // Filtra pelo campo de busca
-    const conversasFiltradas = conversas.filter(({ lead }) => {
-        if (!busca) return true
-        const q = busca.toLowerCase()
-        return (
-            lead.name?.toLowerCase().includes(q) ||
-            lead.dono?.toLowerCase().includes(q)  ||
-            lead.phone?.includes(q)
-        )
+    // === FILTROS ===
+    const conversasFiltradas = conversas.filter(({ lead, ultimaMsg }) => {
+        // Filtro por busca textual
+        if (busca) {
+            const q = busca.toLowerCase()
+            const match = lead.name?.toLowerCase().includes(q) || lead.dono?.toLowerCase().includes(q) || lead.phone?.includes(q)
+            if (!match) return false
+        }
+        // Filtro por chip
+        if (chipFiltro !== 'todos' && lead.instance_id !== chipFiltro) return false
+        // Filtro por estado/tipo
+        switch (filtro) {
+            case 'a_responder':
+                return !lead.is_paused && !lead.manual_pause && ultimaMsg?.role === 'user'
+            case 'ia_ativa':
+                return !lead.is_paused && !lead.manual_pause && ultimaMsg?.role === 'assistant'
+            case 'pausadas':
+                return lead.is_paused || lead.manual_pause
+            case 'hot':
+                return lead.lead_temperature === 'hot'
+            case 'warm':
+                return lead.lead_temperature === 'warm'
+            case 'estagio_dor':
+                return (lead.current_stage || 0) === 2
+            case 'estagio_solucao':
+                return (lead.current_stage || 0) === 3
+            case 'estagio_agenda':
+                return (lead.current_stage || 0) >= 4
+            default:
+                return true
+        }
     })
 
-    // Agrupa por estado para exibir seções
-    const aguardando = conversasFiltradas.filter(({ lead, ultimaMsg }) =>
-        !lead.is_paused && !lead.manual_pause && ultimaMsg?.role === 'user'
-    )
-    const iaAtiva = conversasFiltradas.filter(({ lead, ultimaMsg }) =>
-        !lead.is_paused && !lead.manual_pause && ultimaMsg?.role === 'assistant'
-    )
-    const pausadas = conversasFiltradas.filter(({ lead }) =>
-        lead.is_paused || lead.manual_pause
-    )
+    // Agrupa por chip para separação visual
+    const chipGroups = {}
+    conversasFiltradas.forEach(item => {
+        const chipId = item.lead.instance_id || 'sem_chip'
+        if (!chipGroups[chipId]) chipGroups[chipId] = []
+        chipGroups[chipId].push(item)
+    })
+
+    // Contadores para os badges dos filtros
+    const contadores = {
+        todos: conversas.length,
+        a_responder: conversas.filter(({ lead, ultimaMsg }) => !lead.is_paused && !lead.manual_pause && ultimaMsg?.role === 'user').length,
+        ia_ativa: conversas.filter(({ lead, ultimaMsg }) => !lead.is_paused && !lead.manual_pause && ultimaMsg?.role === 'assistant').length,
+        pausadas: conversas.filter(({ lead }) => lead.is_paused || lead.manual_pause).length,
+        hot: conversas.filter(({ lead }) => lead.lead_temperature === 'hot').length,
+        warm: conversas.filter(({ lead }) => lead.lead_temperature === 'warm').length,
+    }
+
+    // Definição dos filtros
+    const FILTROS = [
+        { key: 'todos',          label: 'Todos',      color: '#3B82F6' },
+        { key: 'a_responder',    label: 'A Responder', color: '#F59E0B' },
+        { key: 'ia_ativa',       label: 'IA Ativa',    color: '#10B981' },
+        { key: 'pausadas',       label: 'Pausadas',    color: '#F43F5E' },
+        { key: 'hot',            label: '🔥 Hot',      color: '#EF4444' },
+        { key: 'warm',           label: '🟡 Warm',     color: '#F59E0B' },
+        { key: 'estagio_dor',    label: 'Dor',         color: '#06B6D4' },
+        { key: 'estagio_solucao',label: 'Solução',     color: '#8B5CF6' },
+        { key: 'estagio_agenda', label: 'Agenda+',     color: '#10B981' },
+    ]
 
     return (
         <div style={{
@@ -266,33 +304,28 @@ export default function ConversaList({ onSelect, activeId, socket }) {
             fontFamily: "'DM Sans', system-ui, sans-serif",
         }}>
 
-         
-              {/* ── Header ── */}
-            <div style={{ padding: '8px 10px', borderBottom: '1px solid rgba(255,255,255,0.05)', flexShrink: 0 }}>
-
-                <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 10 }}>
+            {/* ── Header ── */}
+            <div style={{ padding: '8px 10px', borderBottom: '1px solid rgba(255,255,255,0.05)', flexShrink: 0 }}>
+                <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 8 }}>
                     <div style={{ display: 'flex', alignItems: 'center', gap: 7 }}>
-                        <BrainCircuit size={14} color='#3B82F6' />
+                           <BrainCircuit size={14} color='#F59E0B' />
                         <span style={{ fontSize: 11, fontWeight: 900, color: '#fff', textTransform: 'uppercase', letterSpacing: '0.1em' }}>
                             War Room
                         </span>
                         {conversas.length > 0 && (
                             <div style={{
-                                background: 'rgba(59,130,246,0.15)', border: '1px solid rgba(59,130,246,0.3)',
+                            background: 'rgba(245,158,11,0.15)', border: '1px solid rgba(245,158,11,0.3)',
                                 borderRadius: '999px', padding: '1px 7px',
-                                fontSize: 9, fontWeight: 900, color: '#93C5FD',
-                            }}>
-                                {conversas.length}
+                           fontSize: 9, fontWeight: 900, color: '#FBBF24',
+}}>
+                                {conversasFiltradas.length}{filtro !== 'todos' ? `/${conversas.length}` : ''}
                             </div>
                         )}
                     </div>
                     <button
                         onClick={fetchConversas}
                         disabled={loading}
-                        style={{
-                            background: 'none', border: 'none', cursor: 'pointer',
-                            color: 'rgba(255,255,255,0.3)', padding: 4,
-                        }}
+                        style={{ background: 'none', border: 'none', cursor: 'pointer', color: 'rgba(255,255,255,0.3)', padding: 4 }}
                         title="Atualizar"
                     >
                         <RefreshCw size={11} style={{ animation: loading ? 'spin 1s linear infinite' : 'none' }} />
@@ -300,27 +333,100 @@ export default function ConversaList({ onSelect, activeId, socket }) {
                 </div>
 
                 {/* Campo de busca */}
-                <div style={{ position: 'relative' }}>
+                <div style={{ position: 'relative', marginBottom: 8 }}>
                     <Search size={11} style={{ position: 'absolute', left: 9, top: '50%', transform: 'translateY(-50%)', color: 'rgba(255,255,255,0.25)' }} />
                     <input
                         value={busca}
                         onChange={e => setBusca(e.target.value)}
                         placeholder="Buscar conversa..."
                         style={{
-                            width: '100%', boxSizing: 'border-box',
-                            height: 28, paddingLeft: 26, paddingRight: 10,
-                            background: 'rgba(255,255,255,0.04)',
-                            border: '1px solid rgba(255,255,255,0.08)',
-                            borderRadius: '0.4rem',
-                            color: '#fff', fontSize: 10, fontWeight: 600,
-                            outline: 'none', fontFamily: 'inherit',
-                        }}
+                            width: '100%', boxSizing: 'border-box',
+                            height: 28, paddingLeft: 26, paddingRight: 10,
+                            background: 'rgba(255,255,255,0.04)',
+                            border: '1px solid rgba(255,255,255,0.08)',
+                            borderRadius: '0.4rem',
+                            color: '#fff', fontSize: 10, fontWeight: 600,
+                            outline: 'none', fontFamily: 'inherit',
+                        }}
                     />
                 </div>
+
+                {/* === FILTROS POR ESTADO === */}
+                <div style={{ display: 'flex', flexWrap: 'wrap', gap: 4, marginBottom: 6 }}>
+                    {FILTROS.map(f => {
+                        const count = contadores[f.key] ?? 0
+                        const isActive = filtro === f.key
+                        return (
+                            <button
+                                key={f.key}
+                                onClick={() => setFiltro(f.key)}
+                                style={{
+                                    display: 'flex', alignItems: 'center', gap: 3,
+                                    background: isActive ? f.color + '20' : 'transparent',
+                                    border: `1px solid ${isActive ? f.color + '50' : 'rgba(255,255,255,0.06)'}`,
+                                    borderRadius: '999px', padding: '2px 7px',
+                                    cursor: 'pointer', transition: 'all .15s',
+                                    fontSize: 8, fontWeight: 900,
+                                    color: isActive ? f.color : 'rgba(255,255,255,0.3)',
+                                    textTransform: 'uppercase', letterSpacing: '0.08em',
+                                }}
+                            >
+                                {f.label}
+                                {count > 0 && (
+                                    <span style={{
+                                        fontSize: 7, fontWeight: 900,
+                                        color: isActive ? f.color : 'rgba(255,255,255,0.2)',
+                                        marginLeft: 1,
+                                    }}>
+                                        {count}
+                                    </span>
+                                )}
+                            </button>
+                        )
+                    })}
+                </div>
+
+                {/* === FILTRO POR CHIP === */}
+                {instances.length > 1 && (
+                    <div style={{ display: 'flex', gap: 4, flexWrap: 'wrap' }}>
+                        <button
+                            onClick={() => setChipFiltro('todos')}
+                            style={{
+                                fontSize: 7, fontWeight: 900, textTransform: 'uppercase', letterSpacing: '0.1em',
+                                padding: '2px 6px', borderRadius: '999px', cursor: 'pointer',
+                                background: chipFiltro === 'todos' ? 'rgba(59,130,246,0.15)' : 'transparent',
+                                border: `1px solid ${chipFiltro === 'todos' ? 'rgba(59,130,246,0.4)' : 'rgba(255,255,255,0.06)'}`,
+                                color: chipFiltro === 'todos' ? '#93C5FD' : 'rgba(255,255,255,0.25)',
+                            }}
+                        >
+                            Todos chips
+                        </button>
+                        {instances.map(inst => (
+                            <button
+                                key={inst.id}
+                                onClick={() => setChipFiltro(inst.id)}
+                                style={{
+                                    display: 'flex', alignItems: 'center', gap: 3,
+                                    fontSize: 7, fontWeight: 900, textTransform: 'uppercase', letterSpacing: '0.1em',
+                                    padding: '2px 6px', borderRadius: '999px', cursor: 'pointer',
+                                    background: chipFiltro === inst.id ? 'rgba(59,130,246,0.15)' : 'transparent',
+                                    border: `1px solid ${chipFiltro === inst.id ? 'rgba(59,130,246,0.4)' : 'rgba(255,255,255,0.06)'}`,
+                                    color: chipFiltro === inst.id ? '#93C5FD' : 'rgba(255,255,255,0.25)',
+                                }}
+                            >
+                                <div style={{
+                                    width: 5, height: 5, borderRadius: '50%',
+                                    background: inst.whatsapp_status === 'CONNECTED' ? '#10B981' : '#F43F5E',
+                                }} />
+                                {inst.name}
+                            </button>
+                        ))}
+                    </div>
+                )}
             </div>
 
-            {/* ── Lista ── */}
-            <div style={{ flex: 1, overflowY: 'auto', padding: '8px 6px', minHeight: 0 }}>
+            {/* ── Lista agrupada por chip ── */}
+            <div style={{ flex: 1, overflowY: 'auto', padding: '4px 6px', minHeight: 0 }}>
 
                 {loading && conversas.length === 0 ? (
                     <div style={{ padding: '30px 0', textAlign: 'center', color: 'rgba(255,255,255,0.2)', fontSize: 10, fontWeight: 700, textTransform: 'uppercase', letterSpacing: '0.15em' }}>
@@ -330,15 +436,31 @@ export default function ConversaList({ onSelect, activeId, socket }) {
                     <div style={{ padding: '40px 0', textAlign: 'center' }}>
                         <BrainCircuit size={24} color='rgba(255,255,255,0.1)' style={{ margin: '0 auto 10px' }} />
                         <p style={{ color: 'rgba(255,255,255,0.15)', fontSize: 10, fontWeight: 700, textTransform: 'uppercase', letterSpacing: '0.15em' }}>
-                            {busca ? 'Sem resultados' : 'Nenhuma conversa ativa'}
+                            {busca ? 'Sem resultados' : filtro !== 'todos' ? 'Nenhuma conversa neste filtro' : 'Nenhuma conversa ativa'}
                         </p>
                     </div>
                 ) : (
-                    <>
-                        {/* Seção: Aguardando IA */}
-                        {aguardando.length > 0 && (
-                            <Section label="Aguardando IA" color="#F59E0B" count={aguardando.length}>
-                                {aguardando.map(({ lead, ultimaMsg }) => (
+                    Object.entries(chipGroups).map(([chipId, items]) => {
+                        const chipName = instances.find(i => i.id === chipId)?.name || 'Chip desconhecido'
+                        const showChipHeader = instances.length > 1 && chipFiltro === 'todos'
+                        return (
+                            <div key={chipId} style={{ marginBottom: showChipHeader ? 8 : 0 }}>
+                                {showChipHeader && (
+                                    <div style={{
+                                        display: 'flex', alignItems: 'center', gap: 5,
+                                        padding: '6px 8px', marginBottom: 2,
+                                        borderBottom: '1px solid rgba(255,255,255,0.04)',
+                                    }}>
+                                        <Cpu size={9} color="rgba(255,255,255,0.2)" />
+                                        <span style={{ fontSize: 8, fontWeight: 900, color: 'rgba(255,255,255,0.2)', textTransform: 'uppercase', letterSpacing: '0.2em' }}>
+                                            {chipName}
+                                        </span>
+                                        <span style={{ fontSize: 8, fontWeight: 900, color: 'rgba(59,130,246,0.4)' }}>
+                                            {items.length}
+                                        </span>
+                                    </div>
+                                )}
+                                {items.map(({ lead, ultimaMsg }) => (
                                     <ConversaCard
                                         key={lead.id}
                                         lead={lead}
@@ -347,39 +469,9 @@ export default function ConversaList({ onSelect, activeId, socket }) {
                                         onClick={() => onSelect?.(lead)}
                                     />
                                 ))}
-                            </Section>
-                        )}
-
-                        {/* Seção: IA Ativa */}
-                        {iaAtiva.length > 0 && (
-                            <Section label="IA Ativa" color="#10B981" count={iaAtiva.length}>
-                                {iaAtiva.map(({ lead, ultimaMsg }) => (
-                                    <ConversaCard
-                                        key={lead.id}
-                                        lead={lead}
-                                        ultimaMsg={ultimaMsg}
-                                        isActive={lead.id === activeId}
-                                        onClick={() => onSelect?.(lead)}
-                                    />
-                                ))}
-                            </Section>
-                        )}
-
-                        {/* Seção: Pausadas */}
-                        {pausadas.length > 0 && (
-                            <Section label="Pausadas" color="#F43F5E" count={pausadas.length}>
-                                {pausadas.map(({ lead, ultimaMsg }) => (
-                                    <ConversaCard
-                                        key={lead.id}
-                                        lead={lead}
-                                        ultimaMsg={ultimaMsg}
-                                        isActive={lead.id === activeId}
-                                        onClick={() => onSelect?.(lead)}
-                                    />
-                                ))}
-                            </Section>
-                        )}
-                    </>
+                            </div>
+                        )
+                    })
                 )}
             </div>
 

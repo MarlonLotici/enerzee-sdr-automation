@@ -43,14 +43,7 @@ const autenticarMiddleware = async (req, res, next) => {
 };
 app.use(express.static(path.join(__dirname, 'frontend', 'dist')));
 
-app.post('/webhook/calendly', (req, res) => {
-    const payload = req.body?.payload || {};
-    const name = payload?.invitee?.name || req.body?.name || '';
-    const email = payload?.invitee?.email || req.body?.email || '';
-    const phone = req.body?.phone || '';
-    io.emit('lead_prebooked', { name, email, phone });
-    res.json({ ok: true });
-});
+
 
 let shouldStop = false;
 
@@ -208,6 +201,8 @@ io.on('connection', (socket) => {
 
                             // 🔔 O GRITO NO CORREDOR: Avisa o SDR que tem lead novo no banco!
                             sdrEvents.emit('NOVO_LEAD_DISPONIVEL', chipSorteado.id);
+
+                            
                         }
                     }
                 }
@@ -249,7 +244,7 @@ server.listen(PORT, () => {
 });
 
 // ============================================================================
-// 📅 WEBHOOK CALENDLY — Marca leads que agendaram
+// 📅 WEBHOOK CALENDLY — Marca leads que agendaram e aciona o SDR
 // ============================================================================
 app.post('/webhook/calendly', express.json(), async (req, res) => {
     try {
@@ -275,11 +270,9 @@ app.post('/webhook/calendly', express.json(), async (req, res) => {
         let lead = null;
 
         if (telefoneLimpo.length >= 10) {
-            // Monta variações do JID para buscar no banco
             const variacoes = [
                 `${telefoneLimpo}@s.whatsapp.net`,
                 `55${telefoneLimpo}@s.whatsapp.net`,
-                // Remove o 9 extra do celular brasileiro se tiver 11 dígitos
                 telefoneLimpo.length === 11 
                     ? `55${telefoneLimpo.slice(0,2)}${telefoneLimpo.slice(3)}@s.whatsapp.net`
                     : null
@@ -288,7 +281,8 @@ app.post('/webhook/calendly', express.json(), async (req, res) => {
             for (const jid of variacoes) {
                 const { data } = await supabase
                     .from('leads')
-                    .select('id, name, whatsapp_id')
+                    // 🎯 ADICIONEI instance_id e dono AQUI
+                    .select('id, name, whatsapp_id, instance_id, dono') 
                     .eq('whatsapp_id', jid)
                     .maybeSingle();
                 if (data) { lead = data; break; }
@@ -299,7 +293,8 @@ app.post('/webhook/calendly', express.json(), async (req, res) => {
         if (!lead && emailConvidado) {
             const { data } = await supabase
                 .from('leads')
-                .select('id, name, whatsapp_id')
+                // 🎯 ADICIONEI instance_id e dono AQUI TAMBÉM
+                .select('id, name, whatsapp_id, instance_id, dono')
                 .eq('email', emailConvidado)
                 .maybeSingle();
             if (data) lead = data;
@@ -310,15 +305,23 @@ app.post('/webhook/calendly', express.json(), async (req, res) => {
             return res.status(200).json({ ok: true, encontrado: false });
         }
 
-        // Marca o lead como agendado
+        // Marca o lead como agendado no Kanban (closed)
         await supabase.from('leads').update({
             calendly_booked: true,
             calendly_event_at: dataEvento,
             calendly_event_name: nomeEvento,
-            status: 'booked'
+            status: 'closed' 
         }).eq('id', lead.id);
 
         console.log(`✅ [CALENDLY] Lead ${lead.name} marcado como agendado! Evento: ${nomeEvento} em ${dataEvento}`);
+        
+        // 🔔 ACORDA O MOTOR SDR PARA MANDAR A CONFIRMAÇÃO IMEDIATA NO ZAP!
+        sdrEvents.emit('AGENDAMENTO_CONFIRMADO', { 
+            lead, 
+            dataEvento, 
+            instanceId: lead.instance_id 
+        });
+
         return res.status(200).json({ ok: true, lead: lead.name });
 
     } catch (err) {

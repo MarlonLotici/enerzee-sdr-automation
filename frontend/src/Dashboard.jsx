@@ -21,7 +21,7 @@ const supabase = createClient(
 // PALETA DE CORES
 // ============================================================
 const CORES = {
-    azul:     '#3b82f6',
+    azul:     '#F59E0B',
     verde:    '#10b981',
     amarelo:  '#f59e0b',
     vermelho: '#ef4444',
@@ -294,9 +294,11 @@ export default function Dashboard() {
             {/* === HEADER === */}
             <div className="flex justify-between items-center">
                 <div>
+
                     <h2 className="text-2xl font-black text-white uppercase italic tracking-tighter">
-                        War Room <span className="text-blue-500 neon-text">Analytics</span>
-                    </h2>
+                            Painel <span className="text-amber-500 neon-text">Operacional</span>
+                   </h2>
+
                     {ultimaAtualizacao && (
                         <p className="text-[10px] text-slate-500 font-bold uppercase tracking-widest mt-1">
                             Atualizado às {ultimaAtualizacao.toLocaleTimeString('pt-BR', { hour: '2-digit', minute: '2-digit' })}
@@ -306,61 +308,76 @@ export default function Dashboard() {
                 <button
                     onClick={carregarDados}
                     disabled={carregando}
-                    className="flex items-center gap-2 glass-card px-5 py-2.5 rounded-2xl border border-white/10 text-[11px] font-black text-blue-400 uppercase tracking-widest hover:border-blue-500/40 transition-all disabled:opacity-50"
+                    className="flex items-center gap-2 glass-card px-5 py-2.5 rounded-2xl border border-white/10 text-[11px] font-black text-amber-400 uppercase tracking-widest hover:border-amber-500/40 transition-all disabled:opacity-50"
                 >
                     <RefreshCw className={`h-4 w-4 ${carregando ? 'animate-spin' : ''}`} />
                     Atualizar
                 </button>
             </div>
 
-            {/* === KPIs PRINCIPAIS === */}
-            <div className="grid grid-cols-2 lg:grid-cols-4 gap-4">
-                <KpiCard icon={Zap}         label="Total Disparados"   value={d?.kpis.totalDisparados || 0}                                         color={CORES.azul}     />
-                <KpiCard icon={TrendingUp}  label="Taxa de Resposta"   value={`${d?.kpis.taxaResposta || 0}%`}  sub={`${d?.kpis.leadsQueResponderam} responderam`} color={CORES.verde}    />
-                <KpiCard icon={Calendar}    label="Agendamentos"        value={d?.kpis.agendados || 0}           sub="via Calendly"                   color={CORES.amarelo}  />
-                <KpiCard icon={Clock}       label="Tempo Médio Resposta" value={d?.kpis.tempoMedioResposta ? `${d.kpis.tempoMedioResposta}min` : '--'} sub="do disparo à 1ª resposta" color={CORES.ciano} />
-            </div>
+            {/* === KPIs OPERACIONAIS === */}
+                          <div className="grid grid-cols-2 lg:grid-cols-4 gap-4">
+             <KpiCard icon={Zap}           label="Disparos Hoje"      value={d?.kpis.totalDisparados || 0}     sub="leads contactados"              color={CORES.azul}     />
+             <KpiCard icon={Clock}         label="Tempo Médio Resposta" value={d?.kpis.tempoMedioResposta ? `${d.kpis.tempoMedioResposta}min` : '--'} sub="do disparo à 1ª resposta" color={CORES.ciano} />
+             <KpiCard icon={Flame}         label="Leads Hot"           value={d?.kpis.tempCounts?.hot || 0}     sub="prontos pra fechar"             color={CORES.vermelho} />
+             <KpiCard icon={Bot}           label="Robôs Detectados"    value={d?.kpis.leadsRobo || 0}           sub="silenciados"                    color={CORES.slate}    />
+                          </div>
 
-            {/* === KPIs SECUNDÁRIOS + TEMPERATURA === */}
-            <div className="grid grid-cols-2 lg:grid-cols-4 gap-4">
-                <KpiCard icon={Flame}         label="Leads Hot 🔥"       value={d?.kpis.tempCounts?.hot || 0}      sub="prontos pra fechar"             color={CORES.vermelho} />
-                <KpiCard icon={Target}        label="Leads Warm 🟡"      value={d?.kpis.tempCounts?.warm || 0}     sub="engajaram mas pararam"          color={CORES.amarelo}  />
-                <KpiCard icon={Bot}           label="Robôs Detectados"   value={d?.kpis.leadsRobo || 0}            sub="silenciados automaticamente"    color={CORES.slate}    />
-                <KpiCard icon={PauseCircle}   label="Pausa Manual"       value={d?.kpis.pausadoManual || 0}        sub="sob controle humano"            color={CORES.roxo}     />
-            </div>
+            
 
             {/* === LINHA 1: FUNIL + DISTRIBUIÇÃO === */}
             <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
 
-                {/* FUNIL DE CONVERSÃO */}
-                <div className="lg:col-span-2 glass-panel rounded-3xl p-6 border border-white/5">
-                    <p className="text-[10px] font-black text-blue-400 uppercase tracking-[0.3em] mb-6 flex items-center gap-2">
-                        <BarChart2 className="h-4 w-4" /> Funil de Conversão
-                    </p>
-                    <div className="space-y-3">
-                        {d?.funil.map((etapa, i) => {
-                            const max = d.funil[0]?.valor || 1
-                            const pct = Math.round((etapa.valor / max) * 100)
-                            return (
-                                <div key={i} className="space-y-1.5">
-                                    <div className="flex justify-between items-center">
-                                        <span className="text-[11px] font-black text-slate-400 uppercase tracking-wider">{etapa.nome}</span>
-                                        <div className="flex items-center gap-3">
-                                            <span className="text-[10px] font-black text-slate-500">{pct}%</span>
-                                            <span className="text-sm font-black text-white w-8 text-right">{etapa.valor}</span>
-                                        </div>
-                                    </div>
-                                    <div className="h-2 w-full bg-slate-800/80 rounded-full overflow-hidden">
-                                        <div
-                                            className="h-full rounded-full transition-all duration-1000"
-                                            style={{ width: `${pct}%`, background: etapa.cor, boxShadow: `0 0 10px ${etapa.cor}60` }}
-                                        />
-                                    </div>
-                                </div>
-                            )
-                        })}
+                {/* LEADS QUE PRECISAM DE AÇÃO */}
+<div className="lg:col-span-2 glass-panel rounded-3xl p-6 border border-white/5">
+    <p className="text-[10px] font-black text-amber-400 uppercase tracking-[0.3em] mb-4 flex items-center gap-2">
+        <AlertTriangle className="h-4 w-4" /> Leads que precisam de ação
+    </p>
+    <div className="space-y-2">
+        {[
+            {
+                label: 'Aguardando resposta da IA',
+                desc: 'Lead respondeu mas IA ainda não processou',
+                value: d?.kpis.aguardandoHumano || 0,
+                color: CORES.amarelo,
+            },
+            {
+                label: 'Pausados manualmente',
+                desc: 'Operador pausou — verificar se pode retomar',
+                value: d?.kpis.pausadoManual || 0,
+                color: CORES.roxo,
+            },
+            {
+                label: 'Leads Warm esfriando',
+                desc: 'Engajaram mas pararam — oportunidade de retomada',
+                value: d?.kpis.tempCounts?.warm || 0,
+                color: CORES.amarelo,
+            },
+            {
+                label: 'Leads Dead (sem resposta)',
+                desc: 'Completaram 3 follow-ups sem responder',
+                value: d?.kpis.tempCounts?.dead || 0,
+                color: CORES.slate,
+            },
+        ].filter(item => item.value > 0).map((item, i) => (
+            <div key={i} className="flex items-center justify-between p-3 rounded-xl border border-white/5 bg-white/[0.02]">
+                <div className="flex items-center gap-3">
+                    <div className="h-2 w-2 rounded-full" style={{ background: item.color, boxShadow: `0 0 6px ${item.color}` }} />
+                    <div>
+                        <p className="text-[11px] font-black text-white uppercase tracking-wider">{item.label}</p>
+                        <p className="text-[9px] text-slate-500 font-medium">{item.desc}</p>
                     </div>
                 </div>
+                <span className="text-lg font-black" style={{ color: item.color }}>{item.value}</span>
+            </div>
+        ))}
+        {[d?.kpis.aguardandoHumano, d?.kpis.pausadoManual, d?.kpis.tempCounts?.warm, d?.kpis.tempCounts?.dead].every(v => !v || v === 0) && (
+            <div className="text-center py-8">
+                <p className="text-[10px] text-emerald-400 font-black uppercase tracking-widest">Tudo em dia — nenhuma ação pendente</p>
+            </div>
+        )}
+    </div>
+</div>
 
                 {/* DISTRIBUIÇÃO STATUS */}
                 <div className="glass-panel rounded-3xl p-6 border border-white/5">
@@ -437,11 +454,10 @@ export default function Dashboard() {
                                 key={p}
                                 onClick={() => setPeriodoGrafico(p)}
                                 className={`px-4 py-1.5 rounded-xl text-[10px] font-black uppercase transition-all ${
-                                    periodoGrafico === p
-                                        ? 'bg-blue-600 text-white'
-                                        : 'glass-card text-slate-400 border-white/10 hover:border-blue-500/30'
-                                }`}
-                            >
+                            periodoGrafico === p
+                             ? 'bg-amber-600 text-black'
+                               : 'glass-card text-slate-400 border-white/10 hover:border-amber-500/30'
+                            }`}                            >
                                 {p === '7d' ? '7 dias' : '30 dias'}
                             </button>
                         ))}

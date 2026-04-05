@@ -19,7 +19,7 @@ const supabase = createClient(
 
 // ─── PALETA ───────────────────────────────────────────────────────────────────
 const NEON = {
-    blue:    '#3B82F6',
+    blue:    '#F59E0B',
     cyan:    '#06B6D4',
     emerald: '#10B981',
     amber:   '#F59E0B',
@@ -185,12 +185,48 @@ function computeMetrics(leads, instances) {
             taxa: stats.enviados > 0 ? Math.round(stats.responderam / stats.enviados * 100) : 0,
         }))
         .sort((a, b) => b.taxa - a.taxa)
+    // ── 9. Taxa de resposta por nicho ─────────────────────────────────────
+    const nicheResponse = {}
+    leads.forEach(l => {
+        if (!l.niche) return
+        const n = String(l.niche).trim()
+        if (!nicheResponse[n]) nicheResponse[n] = { total: 0, responderam: 0 }
+        nicheResponse[n].total++
+        if ((l.current_stage || 0) > 0) nicheResponse[n].responderam++
+    })
+    const nicheResponseData = Object.entries(nicheResponse)
+        .filter(([_, v]) => v.total >= 3) // só nichos com amostra mínima
+        .map(([name, stats]) => ({
+            name: name.length > 16 ? name.slice(0, 16) + '…' : name,
+            taxa: Math.round(stats.responderam / stats.total * 100),
+            total: stats.total,
+            responderam: stats.responderam,
+        }))
+        .sort((a, b) => b.taxa - a.taxa)
+        .slice(0, 8)
+
+    // ── 10. Taxa de passagem entre estágios SPIN ──────────────────────────
+    const spinPassagem = []
+    for (let i = 0; i < 5; i++) {
+        const atual = estagioCount[i]
+        const proximo = estagioCount[i + 1]
+        const taxa = atual > 0 ? Math.round(proximo / atual * 100) : 0
+        spinPassagem.push({
+            de: estagioLabels[i],
+            para: estagioLabels[i + 1],
+            taxa,
+            saem: atual - proximo,
+            passam: proximo,
+        })
+    }
+
     return {
         monthly, funnel, nicheData, chipData, dailyCapture,
         totalLeads, totalAbordados, totalAgendados, taxaAbordagem,
         deltaCriados, deltaAbordados,
         statusCounts: sc,
         funnelSpin, temperatureData, abTestData,
+        nicheResponseData, spinPassagem,
     }
 }
 
@@ -317,11 +353,12 @@ export default function VisualAnalytics() {
     }
 
     const {
-        monthly, funnel, nicheData, chipData, dailyCapture,
-        totalLeads, totalAbordados, totalAgendados, taxaAbordagem,
-        deltaCriados, deltaAbordados,
-        funnelSpin, temperatureData, abTestData,
-    } = metrics
+    monthly, funnel, nicheData, chipData, dailyCapture,
+    totalLeads, totalAbordados, totalAgendados, taxaAbordagem,
+    deltaCriados, deltaAbordados,
+    funnelSpin, temperatureData, abTestData,
+    nicheResponseData, spinPassagem,
+} = metrics
 
     return (
         <div style={{ background: '#020617', minHeight: '100vh', padding: '28px 28px 40px', fontFamily: "'DM Sans', system-ui, sans-serif", color: '#fff' }}>
@@ -334,8 +371,8 @@ export default function VisualAnalytics() {
                             <Zap size={18} color={NEON.blue} />
                         </div>
                         <h1 style={{ fontSize: 22, fontWeight: 900, letterSpacing: '-0.03em', lineHeight: 1 }}>
-                            SDR Analytics <span style={{ color: NEON.blue }}>Neural</span>
-                        </h1>
+                            Resultados <span style={{ color: NEON.blue }}>Comerciais</span>
+                      </h1>
                     </div>
                     <p style={{ fontSize: 12, color: 'rgba(255,255,255,0.3)', fontWeight: 700, letterSpacing: '0.05em' }}>
                         {leads.length.toLocaleString('pt-BR')} leads · sync {lastSync ? lastSync.toLocaleTimeString('pt-BR', { hour: '2-digit', minute: '2-digit' }) : '...'}
@@ -378,11 +415,11 @@ export default function VisualAnalytics() {
                     delta={null}           color={NEON.emerald}
                 />
                 <KpiCard
-                    icon={Activity} label="Taxa de Abordagem"
-                    value={taxaAbordagem + '%'}
-                    sub="abordados / capturados"
-                    delta={deltaAbordados - deltaCriados} color={NEON.violet}
-                />
+    icon={Activity} label="Conversão Total"
+    value={(totalLeads > 0 ? Math.round(totalAgendados / totalLeads * 100) : 0) + '%'}
+    sub="agendados / capturados"
+    delta={null} color={NEON.emerald}
+                   />
             </div>
 
             {/* ── ROW 2: Evolução Mensal + Funil ── */}
@@ -562,101 +599,116 @@ export default function VisualAnalytics() {
                     </p>
                 </ChartCard>
             </div>
-                        {/* ── ROW 4: FUNIL SPIN + TEMPERATURA + A/B TESTING ── */}
-            <div style={{ display: 'grid', gridTemplateColumns: '1fr 220px 260px', gap: 16, marginTop: 16 }}>
+                  {/* ── ROW 4: RESPOSTA POR NICHO + PASSAGEM SPIN + A/B TESTING ── */}
+<div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr 260px', gap: 16, marginTop: 16 }}>
 
-                {/* FUNIL SPIN (Estágio 0-5) */}
-                <ChartCard>
-                    <SectionTitle accent={NEON.violet}>Funil SPIN — Por Estágio de Conversa</SectionTitle>
-                    <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
-                        {funnelSpin.map((d, i) => {
-                            const max = Math.max(...funnelSpin.map(x => x.qtd), 1)
-                            const pct = Math.round(d.qtd / max * 100)
-                            return (
-                                <div key={i}>
-                                    <div style={{ display: 'flex', justifyContent: 'space-between', marginBottom: 4 }}>
-                                        <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
-                                            <div style={{ width: 6, height: 6, borderRadius: '50%', background: d.fill, boxShadow: `0 0 6px ${d.fill}` }} />
-                                            <span style={{ fontSize: 11, fontWeight: 700, color: 'rgba(255,255,255,0.45)' }}>{d.etapa}</span>
-                                        </div>
-                                        <span style={{ fontSize: 12, fontWeight: 900, color: '#fff' }}>{d.qtd}</span>
-                                    </div>
-                                    <div style={{ height: 4, background: 'rgba(255,255,255,0.05)', borderRadius: 2, overflow: 'hidden' }}>
-                                        <div style={{ height: '100%', borderRadius: 2, width: `${pct}%`, background: d.fill, boxShadow: `0 0 6px ${d.fill}`, transition: 'width 1s ease' }} />
-                                    </div>
-                                </div>
-                            )
-                        })}
-                    </div>
-                    <p style={{ fontSize: 9, color: 'rgba(255,255,255,0.18)', fontWeight: 700, marginTop: 12, textAlign: 'center', fontStyle: 'italic' }}>
-                        Baseado no campo current_stage do banco
-                    </p>
-                </ChartCard>
-
-                {/* TEMPERATURA DOS LEADS */}
-                <ChartCard>
-                    <SectionTitle accent={NEON.rose}>Temperatura</SectionTitle>
-                    {temperatureData.length > 0 ? (
-                        <>
-                            <ResponsiveContainer width="100%" height={130}>
-                                <PieChart>
-                                    <Pie data={temperatureData} cx="50%" cy="50%" innerRadius={38} outerRadius={58} paddingAngle={4} dataKey="value" stroke="none">
-                                        {temperatureData.map((d, i) => (
-                                            <Cell key={i} fill={d.fill} style={{ filter: `drop-shadow(0 0 5px ${d.fill}70)` }} />
-                                        ))}
-                                    </Pie>
-                                    <Tooltip content={<NeonTooltip />} />
-                                </PieChart>
-                            </ResponsiveContainer>
-                            <div style={{ display: 'flex', flexDirection: 'column', gap: 5, marginTop: 8 }}>
-                                {temperatureData.map(d => (
-                                    <div key={d.name} style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
-                                        <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
-                                            <div style={{ width: 6, height: 6, borderRadius: 2, background: d.fill, boxShadow: `0 0 5px ${d.fill}` }} />
-                                            <span style={{ fontSize: 10, fontWeight: 700, color: 'rgba(255,255,255,0.42)' }}>{d.name}</span>
-                                        </div>
-                                        <span style={{ fontSize: 11, fontWeight: 900, color: '#fff' }}>{d.value}</span>
-                                    </div>
-                                ))}
+    {/* TAXA DE RESPOSTA POR NICHO */}
+    <ChartCard>
+        <SectionTitle accent={NEON.cyan}>Resposta por nicho</SectionTitle>
+        {nicheResponseData && nicheResponseData.length > 0 ? (
+            <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
+                {nicheResponseData.map((d, i) => (
+                    <div key={i}>
+                        <div style={{ display: 'flex', justifyContent: 'space-between', marginBottom: 4 }}>
+                            <span style={{ fontSize: 11, fontWeight: 700, color: 'rgba(255,255,255,0.45)' }}>{d.name}</span>
+                            <div style={{ display: 'flex', alignItems: 'baseline', gap: 4 }}>
+                                <span style={{ fontSize: 12, fontWeight: 900, color: d.taxa >= 30 ? NEON.emerald : d.taxa >= 15 ? NEON.amber : NEON.rose }}>
+                                    {d.taxa}%
+                                </span>
+                                <span style={{ fontSize: 9, color: 'rgba(255,255,255,0.25)', fontWeight: 700 }}>
+                                    {d.responderam}/{d.total}
+                                </span>
                             </div>
-                        </>
-                    ) : (
-                        <div style={{ height: 180, display: 'flex', alignItems: 'center', justifyContent: 'center', color: 'rgba(255,255,255,0.2)', fontSize: 11, fontWeight: 700 }}>
-                            Sem dados ainda
                         </div>
-                    )}
-                </ChartCard>
-
-                {/* A/B TESTING DE ABERTURAS */}
-                <ChartCard>
-                    <SectionTitle accent={NEON.emerald}>A/B Testing — Aberturas</SectionTitle>
-                    {abTestData.length > 0 ? (
-                        <div style={{ display: 'flex', flexDirection: 'column', gap: 10 }}>
-                            {abTestData.map((d, i) => (
-                                <div key={i} style={{ background: 'rgba(255,255,255,0.03)', borderRadius: '0.75rem', padding: '10px 12px', border: '1px solid rgba(255,255,255,0.06)' }}>
-                                    <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 6 }}>
-                                        <span style={{ fontSize: 11, fontWeight: 900, color: '#fff' }}>{d.template}</span>
-                                        <span style={{ fontSize: 14, fontWeight: 900, color: i === 0 ? NEON.emerald : NEON.muted }}>
-                                            {d.taxa}%
-                                        </span>
-                                    </div>
-                                    <div style={{ height: 4, background: 'rgba(255,255,255,0.05)', borderRadius: 2, overflow: 'hidden', marginBottom: 4 }}>
-                                        <div style={{ height: '100%', borderRadius: 2, width: `${d.taxa}%`, background: i === 0 ? NEON.emerald : NEON.blue, transition: 'width 1s ease' }} />
-                                    </div>
-                                    <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: 9, color: 'rgba(255,255,255,0.3)', fontWeight: 700 }}>
-                                        <span>{d.enviados} enviados</span>
-                                        <span>{d.responderam} responderam</span>
-                                    </div>
-                                </div>
-                            ))}
+                        <div style={{ height: 4, background: 'rgba(255,255,255,0.05)', borderRadius: 2, overflow: 'hidden' }}>
+                            <div style={{
+                                height: '100%', borderRadius: 2, width: `${d.taxa}%`,
+                                background: d.taxa >= 30 ? NEON.emerald : d.taxa >= 15 ? NEON.amber : NEON.rose,
+                                transition: 'width 1s ease',
+                            }} />
                         </div>
-                    ) : (
-                        <div style={{ height: 180, display: 'flex', alignItems: 'center', justifyContent: 'center', color: 'rgba(255,255,255,0.2)', fontSize: 11, fontWeight: 700, textAlign: 'center' }}>
-                            Dados de A/B aparecerão<br/>após os primeiros disparos V13
-                        </div>
-                    )}
-                </ChartCard>
+                    </div>
+                ))}
             </div>
+        ) : (
+            <div style={{ height: 180, display: 'flex', alignItems: 'center', justifyContent: 'center', color: 'rgba(255,255,255,0.2)', fontSize: 11, fontWeight: 700 }}>
+                Dados insuficientes (mín. 3 leads/nicho)
+            </div>
+        )}
+        <p style={{ fontSize: 9, color: 'rgba(255,255,255,0.18)', fontWeight: 700, marginTop: 12, textAlign: 'center', fontStyle: 'italic' }}>
+            % de leads que responderam por nicho · mín. 3 leads
+        </p>
+    </ChartCard>
+
+    {/* TAXA DE PASSAGEM ENTRE ESTÁGIOS */}
+    <ChartCard>
+        <SectionTitle accent={NEON.violet}>Passagem entre estágios</SectionTitle>
+        {spinPassagem && spinPassagem.length > 0 ? (
+            <div style={{ display: 'flex', flexDirection: 'column', gap: 10 }}>
+                {spinPassagem.map((d, i) => (
+                    <div key={i} style={{ background: 'rgba(255,255,255,0.03)', borderRadius: '0.75rem', padding: '10px 12px', border: '1px solid rgba(255,255,255,0.06)' }}>
+                        <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 4 }}>
+                            <span style={{ fontSize: 10, fontWeight: 700, color: 'rgba(255,255,255,0.4)' }}>
+                                {d.de} → {d.para}
+                            </span>
+                            <span style={{
+                                fontSize: 14, fontWeight: 900,
+                                color: d.taxa >= 50 ? NEON.emerald : d.taxa >= 25 ? NEON.amber : NEON.rose,
+                            }}>
+                                {d.taxa}%
+                            </span>
+                        </div>
+                        <div style={{ height: 3, background: 'rgba(255,255,255,0.05)', borderRadius: 2, overflow: 'hidden' }}>
+                            <div style={{
+                                height: '100%', borderRadius: 2, width: `${d.taxa}%`,
+                                background: d.taxa >= 50 ? NEON.emerald : d.taxa >= 25 ? NEON.amber : NEON.rose,
+                                transition: 'width 1s ease',
+                            }} />
+                        </div>
+                        <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: 9, color: 'rgba(255,255,255,0.25)', fontWeight: 700, marginTop: 4 }}>
+                            <span>{d.passam} passaram</span>
+                            <span>{d.saem} perdidos</span>
+                        </div>
+                    </div>
+                ))}
+            </div>
+        ) : (
+            <div style={{ height: 180, display: 'flex', alignItems: 'center', justifyContent: 'center', color: 'rgba(255,255,255,0.2)', fontSize: 11, fontWeight: 700 }}>
+                Sem dados de estágio ainda
+            </div>
+        )}
+    </ChartCard>
+
+    {/* A/B TESTING DE ABERTURAS (mantém igual) */}
+    <ChartCard>
+        <SectionTitle accent={NEON.emerald}>A/B Testing — Aberturas</SectionTitle>
+        {abTestData.length > 0 ? (
+            <div style={{ display: 'flex', flexDirection: 'column', gap: 10 }}>
+                {abTestData.map((d, i) => (
+                    <div key={i} style={{ background: 'rgba(255,255,255,0.03)', borderRadius: '0.75rem', padding: '10px 12px', border: '1px solid rgba(255,255,255,0.06)' }}>
+                        <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 6 }}>
+                            <span style={{ fontSize: 11, fontWeight: 900, color: '#fff' }}>{d.template}</span>
+                            <span style={{ fontSize: 14, fontWeight: 900, color: i === 0 ? NEON.emerald : NEON.muted }}>
+                                {d.taxa}%
+                            </span>
+                        </div>
+                        <div style={{ height: 4, background: 'rgba(255,255,255,0.05)', borderRadius: 2, overflow: 'hidden', marginBottom: 4 }}>
+                            <div style={{ height: '100%', borderRadius: 2, width: `${d.taxa}%`, background: i === 0 ? NEON.emerald : NEON.blue, transition: 'width 1s ease' }} />
+                        </div>
+                        <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: 9, color: 'rgba(255,255,255,0.3)', fontWeight: 700 }}>
+                            <span>{d.enviados} enviados</span>
+                            <span>{d.responderam} responderam</span>
+                        </div>
+                    </div>
+                ))}
+            </div>
+        ) : (
+            <div style={{ height: 180, display: 'flex', alignItems: 'center', justifyContent: 'center', color: 'rgba(255,255,255,0.2)', fontSize: 11, fontWeight: 700, textAlign: 'center' }}>
+                Dados de A/B aparecerão<br/>após os primeiros disparos
+            </div>
+        )}
+    </ChartCard>
+</div>
             <style>{`
                 @keyframes pulse   { 0%,100%{opacity:1}  50%{opacity:.4} }
                 @keyframes spin    { from{transform:rotate(0deg)} to{transform:rotate(360deg)} }
