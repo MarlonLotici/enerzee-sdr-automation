@@ -186,7 +186,7 @@ async function enriquecerLeadIndividual(lead) {
     }
 
     const finalScore = Math.min(Math.max((lead.quality_score || 50) + (enrichment.enriched ? 40 : 0), 0), 100);
-    return { ...lead, ...enrichment, quality_score: finalScore };
+    return { ...lead, ...enrichment, quality_score: finalScore, quality_score_int4: finalScore };
 }
 
 module.exports = { enriquecerLeadIndividual };

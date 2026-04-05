@@ -127,8 +127,11 @@ function processarLimpeza(leadsBrutos) {
             link_maps: raw.link || raw.link_maps,
             
             // Metadados
-            rating: raw.rating || "N/A",
-            reviews: raw.reviews || 0,
+                    rating: raw.rating || "N/A",
+                    reviews: raw.reviews || 0,
+                    horario: raw.horario || null,
+                    categoria: raw.categoria || null,
+                    website: raw.website || null,
             
             // --- CAMPOS DE PROTEÇÃO (Evitam Crash no Banco) ---
             // Se o enriquecimento falhar, esses valores padrão salvam o insert
@@ -162,12 +165,16 @@ function calcularScoreInicial(raw, foneInfo) {
     
     const reviews = parseInt(raw.reviews) || 0;
     if (reviews > 50) score += 10;
+    if (reviews > 200) score += 5;
     
-    // Tratamento seguro para rating que pode vir como string "4,5"
     const rating = parseFloat(String(raw.rating).replace(',', '.')) || 0;
     if (rating > 4.0) score += 5;
+    if (rating > 4.5) score += 5;
     
     if (raw.address && raw.address.length > 15) score += 10;
+    
+    // Bônus: tem website = empresa mais estruturada
+    if (raw.website) score += 5;
     
     return Math.min(score, 100);
 }
