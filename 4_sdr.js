@@ -141,25 +141,42 @@ const sessions = new Map();
 const instanciasLigando = new Set();
 let ioSocket = null;
 function getHoraBrasil() {
-    // Cria novo Date subtraindo 3h em milissegundos (BRT = UTC-3)
-    // Evita o bug do setHours() que corrompe a data quando UTC < 03:00
-    return new Date(Date.now() - 3 * 60 * 60 * 1000);
+    // Força o objeto Date a refletir o fuso de Brasília independente do servidor
+    const stringData = new Date().toLocaleString("en-US", { timeZone: "America/Sao_Paulo" });
+    return new Date(stringData);
 }
 
 function dentroDoExpediente() {
     const agora = getHoraBrasil();
     const t = agora.getHours() * 60 + agora.getMinutes();
+    // 330 = 05:30 AM | 1365 = 22:45 PM
     return t >= 330 && t <= 1365;
 }
 
 function dentroDaJanelaDeDisparo() {
     const agora = getHoraBrasil();
     const diaSemana = agora.getDay(); 
+    
+    // 0 = Domingo. Não disparar no domingo.
     if (diaSemana === 0) return false; 
-    const t = agora.getHours() * 60 + agora.getMinutes();
-    return t >= 480 && t <= 1080; 
-}
 
+    const horas = agora.getHours();
+    const minutos = agora.getMinutes();
+    const t = horas * 60 + minutos;
+
+    // 480 = 08:00 AM | 1080 = 18:00 PM
+    const inicio = 480; 
+    const fim = 1080;
+
+    const estaNaJanela = t >= inicio && t <= fim;
+    
+    if (!estaNaJanela) {
+        // Log estratégico para você monitorar o que a IA está "sentindo"
+        console.log(`💤 [HORÁRIO] Agora são ${horas}:${minutos < 10 ? '0'+minutos : minutos}. Janela: 08:00 às 18:00.`);
+    }
+
+    return estaNaJanela;
+}
 // ============================================================================
 // 🧠 NÚCLEO IA: INTENÇÃO E RESPOSTA (SEU "CLOSER V11" INTEGRAL)
 // ============================================================================
