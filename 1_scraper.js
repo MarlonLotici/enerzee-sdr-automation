@@ -269,15 +269,15 @@ async function iniciarVarredura(params, onProgress, shouldStop = () => false) {
     console.log(`🎯 [TERMOS] ${termos.length} termos: ${termos.join(', ')}`);
 
     // ── 2. Determinar área de busca ──
-    let centerLat, centerLng, radiusKm;
+let centerLat, centerLng, radiusKm;
 
-    if (lat && lng && radius) {
-        // Modo mapa: usa coordenadas e raio do frontend
-        centerLat = lat;
-        centerLng = lng;
-        radiusKm = parseFloat(radius);
-        console.log(`📍 [MODO MAPA] Centro: (${centerLat}, ${centerLng}), Raio: ${radiusKm}km`);
-    } else if (city) {
+if (mode === 'map' && lat && lng) {
+    // Modo mapa: usa coordenadas e raio do frontend
+    centerLat = lat;
+    centerLng = lng;
+    radiusKm = parseFloat(radius) || 5;
+    console.log(`📍 [MODO MAPA] Centro: (${centerLat}, ${centerLng}), Raio: ${radiusKm}km`);
+} else if (city) {
         // Modo cidade: busca bounding box automaticamente
         const bounds = await getCityBounds(city);
         if (bounds) {
