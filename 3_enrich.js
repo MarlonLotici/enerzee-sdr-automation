@@ -178,6 +178,40 @@ async function enriquecerLeadIndividual(lead) {
                 if (socio) enrichment.dono = titleCase(socio.nome_socio || socio.nome);
             }
 
+            // 👇 O SEQUESTRO DE TELEFONE E A GAVETA RESERVA 👇
+            if (dadosFiscais.ddd_telefone_1) {
+                let telReceita = dadosFiscais.ddd_telefone_1.replace(/\D/g, '');
+
+                if (telReceita.length === 10 || telReceita.length === 11) {
+                    telReceita = '55' + telReceita;
+                } else if (telReceita.length > 13 && telReceita.startsWith('5555')) {
+                    telReceita = telReceita.substring(2);
+                }
+
+                // Verifica se é celular válido (13 dígitos, começa com 9 após o DDD)
+                if (telReceita.length === 13 && telReceita[4] === '9') {
+                    const zapReceitaId = `${telReceita}@s.whatsapp.net`;
+                    const visualReceita = `+55 (${telReceita.substring(2,4)}) ${telReceita.substring(4,9)}-${telReceita.substring(9)}`;
+
+                    // 🔄 O TOMBAMENTO: Salva o telefone do Maps na gaveta reserva
+                    enrichment.backup_phone = lead.phone;
+                    enrichment.backup_whatsapp_id = lead.whatsappId || lead.whatsapp_id || `${lead.phone.replace(/\D/g, '')}@s.whatsapp.net`;
+                    enrichment.backup_tried = false;
+
+                    // O celular do dono assume a cadeira do capitão
+                    lead.phone = visualReceita;
+                    lead.whatsappId = zapReceitaId;
+                    lead.whatsapp_id = zapReceitaId; // Garantia de nomenclatura
+                    lead.type = 'mobile';
+
+                    console.log(`🎯 [SNIPER] Celular do Sócio (${visualReceita}) assumiu a prioridade. Maps foi pra reserva.`);
+                } else {
+                    // Se for fixo ou inválido, joga na reserva mas marca como tentado pra IA não perder tempo com ele depois
+                    enrichment.backup_phone = telReceita;
+                    enrichment.backup_tried = true; 
+                }
+            }
+
             console.log(`[ENRICH] ✅ ${lead.name} → ${enrichment.dono || 'sem sócio'} | ${enrichment.porte}`);
         }
 

@@ -234,23 +234,14 @@ io.on('connection', (socket) => {
         io.emit('scraper_status', { isRunning: false, recentLogs: recentScraperLogs });
     });
 });
-
-app.get(/.*/, (req, res) => {
-    res.sendFile(path.join(__dirname, 'frontend', 'dist', 'index.html'));
-});
-
-server.listen(PORT, () => {
-    console.log(`\n🚀 SERVIDOR SDR RODANDO NA PORTA ${PORT}`);
-});
-
 // ============================================================================
-// 📅 WEBHOOK CALENDLY — Marca leads que agendaram e aciona o SDR
+// 📅 WEBHOOK CALENDLY — ÚNICA VERSÃO OFICIAL (INTEGRADA AO SDR V12)
 // ============================================================================
 app.post('/webhook/calendly', express.json(), async (req, res) => {
     try {
         const evento = req.body;
 
-        // Calendly envia event = 'invitee.created' quando alguém agenda
+        // Filtra apenas agendamentos criados
         if (evento?.event !== 'invitee.created') {
             return res.status(200).json({ ok: true, ignorado: true });
         }
@@ -258,54 +249,40 @@ app.post('/webhook/calendly', express.json(), async (req, res) => {
         const payload = evento.payload;
         const emailConvidado = payload?.email?.toLowerCase()?.trim();
         const telefoneRaw    = payload?.text_reminder_number || '';
-        const nomeEvento     = payload?.event_type?.name || 'Consultoria';
         const dataEvento     = payload?.scheduled_event?.start_time || new Date().toISOString();
+        const nomeEvento     = payload?.event_type?.name || 'Consultoria';
+        const telefoneLimpo  = telefoneRaw.replace(/\D/g, '');
 
-        // Limpa o telefone para formato de busca (só números)
-        const telefoneLimpo = telefoneRaw.replace(/\D/g, '');
+        console.log(`📅 [CALENDLY] Agendamento recebido — fone: ${telefoneLimpo}`);
 
-        console.log(`📅 [CALENDLY] Agendamento recebido — email: ${emailConvidado} | fone: ${telefoneLimpo}`);
-
-        // Tenta encontrar o lead pelo telefone primeiro, depois pelo email
         let lead = null;
 
+        // 1. Busca pelo WhatsApp ID (JID)
         if (telefoneLimpo.length >= 10) {
             const variacoes = [
                 `${telefoneLimpo}@s.whatsapp.net`,
                 `55${telefoneLimpo}@s.whatsapp.net`,
-                telefoneLimpo.length === 11 
-                    ? `55${telefoneLimpo.slice(0,2)}${telefoneLimpo.slice(3)}@s.whatsapp.net`
-                    : null
+                telefoneLimpo.length === 11 ? `55${telefoneLimpo.slice(0,2)}${telefoneLimpo.slice(3)}@s.whatsapp.net` : null
             ].filter(Boolean);
 
             for (const jid of variacoes) {
-                const { data } = await supabase
-                    .from('leads')
-                    // 🎯 ADICIONEI instance_id e dono AQUI
-                    .select('id, name, whatsapp_id, instance_id, dono') 
-                    .eq('whatsapp_id', jid)
-                    .maybeSingle();
+                const { data } = await supabase.from('leads').select('id, name, whatsapp_id, instance_id, dono').eq('whatsapp_id', jid).maybeSingle();
                 if (data) { lead = data; break; }
             }
         }
 
-        // Fallback: busca por email se tiver
+        // 2. Fallback por Email
         if (!lead && emailConvidado) {
-            const { data } = await supabase
-                .from('leads')
-                // 🎯 ADICIONEI instance_id e dono AQUI TAMBÉM
-                .select('id, name, whatsapp_id, instance_id, dono')
-                .eq('email', emailConvidado)
-                .maybeSingle();
+            const { data } = await supabase.from('leads').select('id, name, whatsapp_id, instance_id, dono').eq('email', emailConvidado).maybeSingle();
             if (data) lead = data;
         }
 
         if (!lead) {
-            console.log(`⚠️ [CALENDLY] Lead não encontrado no banco. Email: ${emailConvidado} | Fone: ${telefoneLimpo}`);
+            console.log(`⚠️ [CALENDLY] Lead não encontrado no banco.`);
             return res.status(200).json({ ok: true, encontrado: false });
         }
 
-        // Marca o lead como agendado no Kanban (closed)
+        // 3. Atualiza o banco (Garante que o SDR saiba que agendou)
         await supabase.from('leads').update({
             calendly_booked: true,
             calendly_event_at: dataEvento,
@@ -313,19 +290,25 @@ app.post('/webhook/calendly', express.json(), async (req, res) => {
             status: 'closed' 
         }).eq('id', lead.id);
 
-        console.log(`✅ [CALENDLY] Lead ${lead.name} marcado como agendado! Evento: ${nomeEvento} em ${dataEvento}`);
+        console.log(`✅ [CALENDLY] Lead ${lead.name} atualizado.`);
         
-        // 🔔 ACORDA O MOTOR SDR PARA MANDAR A CONFIRMAÇÃO IMEDIATA NO ZAP!
-        sdrEvents.emit('AGENDAMENTO_CONFIRMADO', { 
-            lead, 
-            dataEvento, 
-            instanceId: lead.instance_id 
-        });
+        // 🔔 ACORDA O SDR PARA O FEEDBACK
+        sdrEvents.emit('AGENDAMENTO_CONFIRMADO', { lead, dataEvento, instanceId: lead.instance_id });
 
         return res.status(200).json({ ok: true, lead: lead.name });
 
     } catch (err) {
-        console.error('❌ [CALENDLY WEBHOOK] Erro:', err.message);
+        console.error('❌ [CALENDLY] Erro:', err.message);
         return res.status(500).json({ erro: err.message });
     }
+});
+
+// Entrega o Frontend (Sempre depois das rotas de API)
+app.get(/.*/, (req, res) => {
+    res.sendFile(path.join(__dirname, 'frontend', 'dist', 'index.html'));
+});
+
+// LIGA O MOTOR (A última linha do sistema)
+server.listen(PORT, () => {
+    console.log(`\n🚀 SERVIDOR SDR RODANDO NA PORTA ${PORT}`);
 });

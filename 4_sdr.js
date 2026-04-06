@@ -342,6 +342,10 @@ Se o interlocutor fornecer um número de telefone ou dizer "chama no 9...", voc�
 7. "QUEM TE DEU MEU NÚMERO?" / "COMO CONSEGUIU MEU CONTATO?":
 Responda: "O cadastro da ${nomeEmpresa} apareceu num mapeamento que a gente fez de empresas da região que podem estar pagando tarifa cheia na ${concessionariaLocal}. Não é telemarketing — é mais um alerta sobre uma cobrança que pode estar sendo evitada."
 Depois com [QUEBRA]: "Vc que cuida dessa parte de contas fixas aí?"
+
+8. CAIU NA CONTABILIDADE: Se a pessoa responder que é do escritório de contabilidade ou contador da empresa, responda APENAS: "Opa, perdão! Achei que fosse o celular direto da loja. Vou tentar no telefone deles. Obrigado!" e retorne ESTRITAMENTE a tag [CONTADOR].
+
+9. NÚMERO ERRADO / EX-SÓCIO: Se a pessoa disser que não conhece a empresa, que vendeu o negócio, ou que não é a pessoa que você procura, responda APENAS: "Puxa, peço desculpas pelo incômodo! O cadastro devia estar desatualizado. Um abraço e boa semana!" e retorne ESTRITAMENTE a tag [ENGANO].
 ---
 
 ### 4. A LINHA DO TEMPO DA VENDA (SPIN SELLING)
@@ -362,12 +366,12 @@ CENÁRIO B — É gatekeeper ("não sou eu", "aqui é a recepção", "não é co
 
 NUNCA inicie o ESTÁGIO 1 sem o interlocutor confirmado.
 
-[ESTÁGIO 1 — SITUAÇÃO]
+[ESTÁGIO 1 — MICRO-RAPPORT E A DOR]
 Gatilho: Decisor confirmado e respondeu qualquer coisa ("pago cheio", "como assim?", "não sei").
-Ação: Revele que a concessionária lucra no silêncio. Pergunte o valor da conta.
-Balão 1: "Pois é, a ${concessionariaLocal} não avisa porque pra eles é melhor vc continuar pagando a tarifa cheia. A gente identificou isso no cadastro de vcs."
+Ação: Valide o tempo dele no Balão 1. No Balão 2, gere o FOMO (medo de ficar pra trás) revelando que a concessionária lucra no silêncio, e faça a pergunta de qualificação.
+Balão 1: "Show. Sei que a rotina aí na ${nomeEmpresa} deve ser corrida, então vou direto ao ponto pra não tomar seu tempo."
 [QUEBRA]
-Balão 2: "Só pra confirmar se têm o perfil certo — a conta de luz aí costuma passar de ${ancoraConta}?"
+Balão 2: "A ${concessionariaLocal} não avisa porque pra eles é melhor que empresas como a de vcs continuem pagando a tarifa cheia sem saber. Só pra confirmar se vcs têm o perfil pra isenção, a conta aí costuma passar de ${ancoraConta}?"
 
 [ESTÁGIO 2 — IMPLICAÇÃO / A DOR]
 Gatilho: Lead informou o valor aproximado da conta.
@@ -386,13 +390,14 @@ Ação: Apresente o remédio via áudio. Sempre envie texto junto com a tag.
 [ESTÁGIO 4 — AGENDAMENTO]
 Gatilho: Lead concordou em ver a simulação ou pediu próximo passo.
 Ação: Venda os 30 minutos de consultoria. Crie escassez leve.
-Exemplo: "Pra não ficar no achismo, a gente abre o simulador oficial junto e vê o número exato da ${nomeEmpresa} em 30 minutos. [QUEBRA] Fica melhor amanhã de manhã ou à tarde?"
+Exemplo: "Pra não ficar no achismo, a gente abre o simulador oficial junto e vê o número exato da ${nomeEmpresa} em 30 minutos. [QUEBRA] Fica melhor amanhã de manhã ou em outro dia?"
 
-[ESTÁGIO 5 — FECHAMENTO]
-Gatilho: Lead definiu período ("pode ser de manhã", "amanhã", "semana que vem").
-Ação: Envie o link limpo no Balão 1. Instrução da fatura no Balão 2. Sem mais pitch.
+[ESTÁGIO 5 — FECHAMENTO OFICIAL]
+Gatilho: Lead definiu período ("pode ser de manhã", "amanhã", "semana que vem", "outro dia").
+Ação: Assuma o papel de Concierge. Avise que "pré-anotou" o turno escolhido e mande o link para formalizar. Sem mais pitch de vendas.
 Resposta EXATA:
-"Perfeito! Escolhe o horário que funcionar melhor aqui: https://calendly.com/marlonlotici6/30min [QUEBRA] Depois de agendar me manda uma foto da fatura de energia — já deixo a simulação da ${nomeEmpresa} pronta pra nossa conversa."
+"Perfeito! Já deixei pré-anotado aqui pra nossa conversa. Pra garantir o horário na minha agenda e não perdermos o espaço, só escolhe a hora exata aqui: https://calendly.com/marlonlotici6/30min [QUEBRA] Depois de reservar, me manda uma foto da fatura de energia — já deixo a simulação da ${nomeEmpresa} pronta pra gente."
+
 ---
 
 ### 5. ANTI-REPETIÇÃO DE ÁUDIO
@@ -719,6 +724,12 @@ async function filtrarEEnviarResposta(sock, remoteJid, resposta, historico, lead
     // Detecta o sinal mas NÃO silencia imediatamente — primeiro verifica se há despedida a enviar
     const sinalizouEncerramento = /\[?\s?ROB[OÔô]\s?\]?/i.test(resposta);
 
+    const sinalizouContador = /\[?\s?CONTADOR\s?\]?/i.test(resposta);
+    if (sinalizouContador) resposta = resposta.replace(/\[?\s?CONTADOR\s?\]?/gi, '').trim();
+
+    const sinalizouEngano = /\[?\s?ENGANO\s?\]?/i.test(resposta);
+    if (sinalizouEngano) resposta = resposta.replace(/\[?\s?ENGANO\s?\]?/gi, '').trim();
+
     if (sinalizouEncerramento) {
         // Remove a tag do texto — o lead nunca deve ver [ROBO] ou [ROBÔ]
         resposta = resposta.replace(/\[?\s?ROB[OÔô]\s?\]?/gi, '').trim();
@@ -926,7 +937,27 @@ async function filtrarEEnviarResposta(sock, remoteJid, resposta, historico, lead
             }
         }
     }
-
+            // ── 9. EJEÇÃO E TOMBAMENTO (CONTADOR OU ENGANO) ──────────────────────────
+    if (sinalizouContador || sinalizouEngano) {
+        const motivo = sinalizouContador ? "contador" : "ex-sócio/engano";
+        console.log(`🔄 [TOMBAMENTO] Lead ${lead.name} caiu no ${motivo}. Invertendo gavetas...`);
+        
+        if (!lead.backup_tried && lead.backup_whatsapp_id) {
+            // Inverte o número pro Maps e devolve pra fila como 'new'
+            await supabase.from('leads').update({
+                whatsapp_id: lead.backup_whatsapp_id,
+                phone: lead.backup_phone,
+                backup_tried: true,
+                status: 'new', 
+                is_paused: false // Garante que a IA não fique travada no novo número
+            }).eq('id', lead.id);
+            console.log(`✅ [TOMBAMENTO] Concluído! Lead voltará para a fila no número do Maps.`);
+        } else {
+            // Se já tentou o backup ou não tem, o lead morre de vez.
+            await supabase.from('leads').update({ status: 'invalid' }).eq('id', lead.id);
+            console.log(`💀 [DESCARTE] Sem número reserva para ${lead.name}.`);
+        }
+    }
 }
 
 
@@ -1333,11 +1364,33 @@ async function processarFilaDeAtaque(instanceId) {
                 const hist = await db.getHistory(lead.whatsapp_id, instanceId);
                 const [result] = await instancia.sock.onWhatsApp(lead.whatsapp_id);
                 
-                if (!result?.exists || (hist && hist.length > 0)) {
-                    console.log(`⏩ [PULO RÁPIDO] Lead ${lead.name} inválido ou já contactado. Ignorando.`);
-                    await supabase.from('leads').update({ status: hist?.length > 0 ? 'contact' : 'invalid' }).eq('id', lead.id);
+                // 1. O número não tem WhatsApp?
+                if (!result?.exists) {
+                    if (!lead.backup_tried && lead.backup_whatsapp_id) {
+                        console.log(`🔄 [FALLBACK] CNPJ sem WhatsApp! Tombando ${lead.name} para o número reserva do Maps...`);
+                        await supabase.from('leads').update({
+                            whatsapp_id: lead.backup_whatsapp_id,
+                            phone: lead.backup_phone,
+                            backup_tried: true,
+                            status: 'new' // Devolve pro início da fila
+                        }).eq('id', lead.id);
+                        leadsEmProcessamento.delete(lead.id);
+                        continue; // Pula pro próximo lead e deixa esse ser repescado na próxima rodada
+                    } else {
+                        console.log(`💀 [DESCARTE] Lead ${lead.name} inválido e sem reserva. Descartando.`);
+                        await supabase.from('leads').update({ status: 'invalid' }).eq('id', lead.id);
+                        leadsEmProcessamento.delete(lead.id);
+                        await delay(2000);
+                        continue;
+                    }
+                }
+
+                // 2. O número já foi contatado antes?
+                if (hist && hist.length > 0) {
+                    console.log(`⏩ [PULO RÁPIDO] Lead ${lead.name} já tem histórico. Retornando ao status contact.`);
+                    await supabase.from('leads').update({ status: 'contact' }).eq('id', lead.id);
                     leadsEmProcessamento.delete(lead.id);
-                    await delay(2000); 
+                    await delay(2000);
                     continue;
                 }
 
@@ -1503,90 +1556,71 @@ async function loopRecuperacaoConversas() {
         }
 
         // ====================================================================
-        // 🚀 2. FOLLOW-UP INTELIGENTE D1/D3/D7 (FIX #5)
+        // 🚀 2. FOLLOW-UP ÚNICO (D1) + TOMBAMENTO POR SILÊNCIO
         // ====================================================================
         const agora = Date.now();
         const UM_DIA = 24 * 60 * 60 * 1000;
 
-        // Busca leads que foram contatados mas nunca responderam
+        // Puxa leads que receberam 0 ou 1 follow-up
         const { data: leadsFollowUp } = await supabase
             .from('leads')
-            .select('id, name, whatsapp_id, instance_id, dono, followup_count, last_contact_at, niche')
+            .select('id, name, whatsapp_id, instance_id, dono, followup_count, last_contact_at, backup_phone, backup_whatsapp_id, backup_tried')
             .eq('status', 'contact')
             .eq('calendly_booked', false)
-            .lt('followup_count', 3) // Máximo 3 follow-ups
+            .lt('followup_count', 2) 
             .order('last_contact_at', { ascending: true })
             .limit(15);
 
         if (leadsFollowUp) {
             for (const lf of leadsFollowUp) {
                 try {
-                    // Verifica se o lead já respondeu alguma vez
-                    const { data: temResposta } = await supabase
-                        .from('messages')
-                        .select('id')
-                        .eq('whatsapp_id', lf.whatsapp_id)
-                        .eq('role', 'user')
-                        .limit(1);
+                    // Verifica se já respondeu
+                    const { data: temResposta } = await supabase.from('messages').select('id').eq('whatsapp_id', lf.whatsapp_id).eq('role', 'user').limit(1);
+                    if (temResposta && temResposta.length > 0) continue; 
 
-                    // Só faz follow-up se NUNCA respondeu
-                    if (temResposta && temResposta.length > 0) continue;
-
-                    const lastContact = new Date(lf.last_contact_at).getTime();
-                    const diasPassados = (agora - lastContact) / UM_DIA;
-                    const followupAtual = lf.followup_count || 0;
-
-                    // Cadência: D1 (24h), D3 (72h), D7 (168h)
-                    let deveEnviar = false;
-                    if (followupAtual === 0 && diasPassados >= 1) deveEnviar = true;
-                    if (followupAtual === 1 && diasPassados >= 3) deveEnviar = true;
-                    if (followupAtual === 2 && diasPassados >= 7) deveEnviar = true;
-
-                    if (!deveEnviar) continue;
+                    const diasPassados = (agora - new Date(lf.last_contact_at).getTime()) / UM_DIA;
+                    if (diasPassados < 1) continue; // Só age depois de 24h do último contato
 
                     const instancia = sessions.get(lf.instance_id);
                     if (!instancia || !instancia.ready) continue;
 
-                    let primeiroNome = lf.dono && lf.dono.trim().length > 2 
-                        ? lf.dono.trim().split(' ')[0] : 'Opa';
-                    primeiroNome = primeiroNome.charAt(0).toUpperCase() + primeiroNome.slice(1);
+                    const followupAtual = lf.followup_count || 0;
 
-                    const nomeEmpresa = (lf.name || 'empresa')
-                        .replace(/\s(LTDA|ME|EIRELI|S\.A|LIMITED)\b/gi, '').trim();
+                    if (followupAtual === 0) {
+                        // 🟢 HORA DE MANDAR O FOLLOW-UP D1
+                        let primeiroNome = lf.dono && lf.dono.trim().length > 2 ? lf.dono.trim().split(' ')[0] : 'Opa';
+                        primeiroNome = primeiroNome.charAt(0).toUpperCase() + primeiroNome.slice(1);
+                        const nomeEmpresa = (lf.name || 'empresa').replace(/\s(LTDA|ME|EIRELI|S\.A|LIMITED)\b/gi, '').trim();
 
-                    // Mensagens curtas e diferentes para cada dia
-                    const mensagensFollowUp = [
-                        // D1: Curiosidade + urgência leve
-                        `${primeiroNome}, conseguiu ver a mensagem? Como a gente tem poucas vagas pra região, queria confirmar se faz sentido pra ${nomeEmpresa} antes de liberar pro próximo.`,
-                        // D3: Prova social
-                        `${primeiroNome}, só passando pra dizer que essa semana mais 2 empresas aí da região aderiram ao desconto. Se quiser que eu veja se a ${nomeEmpresa} tem perfil, me avisa!`,
-                        // D7: Última tentativa + encerramento
-                        `${primeiroNome}, como não tive retorno, vou fechar seu cadastro aqui. Se no futuro quiser reduzir a conta de luz sem obra e sem custo, é só me chamar. Bons negócios!`
-                    ];
+                        const msgFollowUp = `${primeiroNome}, conseguiu dar uma olhada na mensagem acima? Como a gente tem poucas vagas com isenção pra região, queria confirmar se faz sentido pra ${nomeEmpresa} antes de liberar o espaço.`;
 
-                    const msgFollowUp = mensagensFollowUp[followupAtual];
+                        console.log(`🔔 [FOLLOW-UP D1] Disparando para ${lf.name}`);
+                        await instancia.sock.sendPresenceUpdate('composing', lf.whatsapp_id);
+                        await delay(5000);
+                        await enviarMensagemIA(instancia.sock, lf.whatsapp_id, { text: msgFollowUp });
+                        await db.saveMessage(lf.whatsapp_id, 'assistant', msgFollowUp, lf.instance_id);
 
-                    console.log(`🔔 [FOLLOW-UP D${followupAtual === 0 ? '1' : followupAtual === 1 ? '3' : '7'}] ${lf.name}`);
-                    
-                    await instancia.sock.sendPresenceUpdate('composing', lf.whatsapp_id);
-                    await delay(6000);
-                    await enviarMensagemIA(instancia.sock, lf.whatsapp_id, { text: msgFollowUp });
-                    await db.saveMessage(lf.whatsapp_id, 'assistant', msgFollowUp, lf.instance_id);
-
-                    // Atualiza contadores
-                    const novoStatus = followupAtual === 2 ? 'dead' : 'contact';
-                    const novaTemp = followupAtual === 2 ? 'dead' : 'cold';
-                    await supabase.from('leads').update({ 
-                        followup_count: followupAtual + 1,
-                        last_contact_at: new Date().toISOString(),
-                        status: novoStatus,
-                        lead_temperature: novaTemp
-                    }).eq('id', lf.id);
-
-                    await delay(12000);
-                } catch (errFollow) {
-                    console.error(`❌ Erro no Follow-up de ${lf.name}:`, errFollow.message);
-                }
+                        // Atualiza informando que já mandou 1 follow-up
+                        await supabase.from('leads').update({ followup_count: 1, last_contact_at: new Date().toISOString() }).eq('id', lf.id);
+                        await delay(8000);
+                    } 
+                    else if (followupAtual === 1) {
+                        // 🔴 PASSARAM-SE 24H DESDE O FOLLOW-UP E ELE IGNOROU TUDO.
+                        if (!lf.backup_tried && lf.backup_whatsapp_id) {
+                            console.log(`🔄 [SILÊNCIO TOTAL] Lead ${lf.name} ignorou o D1 no CNPJ. Tombando para o Maps...`);
+                            await supabase.from('leads').update({
+                                whatsapp_id: lf.backup_whatsapp_id, 
+                                phone: lf.backup_phone, 
+                                backup_tried: true, 
+                                status: 'new', // Volta pro início do funil!
+                                followup_count: 0 // Zera o contador para o novo número
+                            }).eq('id', lf.id);
+                        } else {
+                            console.log(`💀 [DESCARTE] Lead ${lf.name} ignorou o D1 e não tem reserva. Descartando.`);
+                            await supabase.from('leads').update({ status: 'dead', lead_temperature: 'dead' }).eq('id', lf.id);
+                        }
+                    }
+                } catch (errFollow) { console.error(`❌ Erro Follow-up ${lf.name}:`, errFollow.message); }
             }
         }
         // ====================================================================
@@ -1715,6 +1749,30 @@ module.exports = {
                 sdrEvents.on('NOVO_LEAD_DISPONIVEL', (chipIdDestino) => {
                     console.log(`🔔 [ALARME RAM] Novo lead recebido! Acordando o chip ${chipIdDestino}...`);
                     processarFilaDeAtaque(chipIdDestino);
+                });
+
+                sdrEvents.on('AGENDAMENTO_CONFIRMADO', async ({ lead, dataEvento, instanceId }) => {
+                    console.log(`🎊 [WEBHOOK] Agendamento confirmado para ${lead.name}. Preparando feedback...`);
+                    
+                    const instancia = sessions.get(instanceId);
+                    if (instancia && instancia.ready) {
+                        const dataObjeto = new Date(dataEvento);
+                        const dataFormatada = dataObjeto.toLocaleDateString('pt-BR', { day: '2-digit', month: '2-digit' });
+                        const horaFormatada = dataObjeto.toLocaleTimeString('pt-BR', { hour: '2-digit', minute: '2-digit' });
+
+                        const feedbackPrompt = `O lead ${lead.name} acabou de agendar a reunião para o dia ${dataFormatada} às ${horaFormatada}. Confirme que recebeu o agendamento com sucesso, demonstre empolgação e reforce o pedido da foto da fatura de energia caso ele ainda não tenha mandado (isso é fundamental para a reunião). Seja muito curto e direto.`;
+
+                        const historico = [{ role: 'system', content: feedbackPrompt }];
+                        const instanceData = await getRegrasEmCache(instanceId);
+                        const resposta = await gerarRespostaIA(historico, lead, instanceData);
+
+                        if (resposta) {
+                            console.log(`🤖 [FEEDBACK] IA gerou confirmação para ${lead.name}. Enviando...`);
+                            await filtrarEEnviarResposta(instancia.sock, lead.whatsapp_id, resposta, historico, lead, instanceId);
+                        }
+                    } else {
+                        console.log(`⚠️ [WEBHOOK] Chip ${instanceId} não está pronto para enviar feedback.`);
+                    }
                 });
             }
         }
