@@ -60,6 +60,11 @@ function identificarArtigo(nome) {
     const ehFeminino = nomeLimpo.endsWith('a') || nomeLimpo.endsWith('as');
     return ehFeminino ? `da ${nome}` : `do ${nome}`;
 }
+// 🕒 CONFIGURAÇÃO DE CICLO DE TRABALHO (Fadiga)
+const HORAS_DE_TRABALHO = 2; // X horas disparando
+const MINUTOS_DE_DESCANSO = 40; // X minutos parado em repouso
+const controleFadiga = new Map(); // Armazena o início do turno de cada chip
+
 // --- CONFIGURAÇÃO E SEGURANÇA ---
 const supabase = createClient(process.env.SUPABASE_URL, process.env.SUPABASE_KEY);
 const { OpenAI } = require('openai');
@@ -1303,6 +1308,25 @@ async function processarFilaDeAtaque(instanceId) {
     try {
         while (true) {
             let currentLeadId = null; 
+            // --- 🛡️ TRAVA DE FADIGA (TURNO DE TRABALHO) ---
+            const agoraFadiga = Date.now();
+            if (!controleFadiga.has(instanceId)) {
+                controleFadiga.set(instanceId, agoraFadiga); // Inicia o cronômetro do turno
+            }
+
+            const inicioTurno = controleFadiga.get(instanceId);
+            const tempoPassadoMs = agoraFadiga - inicioTurno;
+            const limiteTrabalhoMs = HORAS_DE_TRABALHO * 60 * 60 * 1000;
+
+            if (tempoPassadoMs > limiteTrabalhoMs) {
+                const tempoDescansoMs = MINUTOS_DE_DESCANSO * 60 * 1000;
+                console.log(`☕ [FADIGA] Chip ${instanceId} completou o turno de ${HORAS_DE_TRABALHO}h. Entrando em repouso por ${MINUTOS_DE_DESCANSO}min...`);
+                
+                await delay(tempoDescansoMs); // Pausa o motor pelo tempo X
+                
+                controleFadiga.set(instanceId, Date.now()); // Reseta o cronômetro e volta a trabalhar
+                console.log(`🔋 [FADIGA] Repouso concluído. Chip ${instanceId} iniciando novo turno.`);
+            }
 
             try {
                 if (!dentroDaJanelaDeDisparo()) {
