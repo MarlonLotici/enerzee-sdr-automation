@@ -1567,10 +1567,20 @@ const mensagensSplit = [balaoUnico]; // ← BALÃO ÚNICO (era [balao1, balao2])
 // ============================================================================
 // 🔄 LOOP TRIPLO DE RECUPERAÇÃO E FOLLOW-UP (OTIMIZADO)
 // ============================================================================
+// 🔒 TRAVA DE SEGURANÇA GLOBAL: Coloque esta linha fora da função, no topo do arquivo
+let vigiaEmExecucao = false; 
+
 async function loopRecuperacaoConversas() {
+    // 🛡️ 1. BLOQUEIO DE CLONES: Se o vigia anterior ainda estiver rodando, o novo nem entra.
+    if (vigiaEmExecucao) return; 
+    vigiaEmExecucao = true; 
+
     try {
-        // 🛑 TRAVA DO EXPEDIENTE: Não manda follow-up de madrugada
-        if (!dentroDoExpediente()) return setTimeout(loopRecuperacaoConversas, 60000 * 5);
+        // 🛑 TRAVA DO EXPEDIENTE: Apenas sai. O 'finally' agenda a próxima tentativa.
+        if (!dentroDoExpediente()) {
+            console.log("💤 [VIGIA] Fora do expediente. Pausando monitoramento.");
+            return; 
+        }
 
         console.log("🕵️ [VIGIA DE CONVERSAS] Escaneando conversas perdidas e follow-ups...");
 
@@ -1588,7 +1598,6 @@ async function loopRecuperacaoConversas() {
         if (leadsAtivos) {
             for (const l of leadsAtivos) {
                 try {
-                    // Traz APENAS a última mensagem (payload minúsculo de poucos bytes)
                     const { data: mensagens } = await supabase
                         .from('messages')
                         .select('role, content')
@@ -1598,8 +1607,6 @@ async function loopRecuperacaoConversas() {
 
                     if (mensagens && mensagens.length > 0) {
                         const ultimaMsg = mensagens[0];
-                        
-                        // O banco trouxe a mensagem, agora o Node faz a filtragem leve
                         if (ultimaMsg.role === 'user' && !ultimaMsg.content?.startsWith('[AUTORESPOSTA]')) {
                             if (iaRespondendo.has(l.whatsapp_id)) continue; 
                             
@@ -1622,7 +1629,6 @@ async function loopRecuperacaoConversas() {
         const agora = Date.now();
         const UM_DIA = 24 * 60 * 60 * 1000;
 
-        // Puxa leads que receberam 0 ou 1 follow-up
         const { data: leadsFollowUp } = await supabase
             .from('leads')
             .select('id, name, whatsapp_id, instance_id, dono, followup_count, last_contact_at, backup_phone, backup_whatsapp_id, backup_tried')
@@ -1635,12 +1641,11 @@ async function loopRecuperacaoConversas() {
         if (leadsFollowUp) {
             for (const lf of leadsFollowUp) {
                 try {
-                    // Verifica se já respondeu
                     const { data: temResposta } = await supabase.from('messages').select('id').eq('whatsapp_id', lf.whatsapp_id).eq('role', 'user').limit(1);
                     if (temResposta && temResposta.length > 0) continue; 
 
                     const diasPassados = (agora - new Date(lf.last_contact_at).getTime()) / UM_DIA;
-                    if (diasPassados < 1) continue; // Só age depois de 24h do último contato
+                    if (diasPassados < 1) continue; 
 
                     const instancia = sessions.get(lf.instance_id);
                     if (!instancia || !instancia.ready) continue;
@@ -1648,7 +1653,6 @@ async function loopRecuperacaoConversas() {
                     const followupAtual = lf.followup_count || 0;
 
                     if (followupAtual === 0) {
-                        // 🟢 HORA DE MANDAR O FOLLOW-UP D1
                         let primeiroNome = lf.dono && lf.dono.trim().length > 2 ? lf.dono.trim().split(' ')[0] : 'Opa';
                         primeiroNome = primeiroNome.charAt(0).toUpperCase() + primeiroNome.slice(1);
                         const nomeEmpresa = (lf.name || 'empresa').replace(/\s(LTDA|ME|EIRELI|S\.A|LIMITED)\b/gi, '').trim();
@@ -1661,29 +1665,28 @@ async function loopRecuperacaoConversas() {
                         await enviarMensagemIA(instancia.sock, lf.whatsapp_id, { text: msgFollowUp });
                         await db.saveMessage(lf.whatsapp_id, 'assistant', msgFollowUp, lf.instance_id);
 
-                        // Atualiza informando que já mandou 1 follow-up
                         await supabase.from('leads').update({ followup_count: 1, last_contact_at: new Date().toISOString() }).eq('id', lf.id);
                         await delay(8000);
                     } 
                     else if (followupAtual === 1) {
-                        // 🔴 PASSARAM-SE 24H DESDE O FOLLOW-UP E ELE IGNOROU TUDO.
                         if (!lf.backup_tried && lf.backup_whatsapp_id) {
-                            console.log(`🔄 [SILÊNCIO TOTAL] Lead ${lf.name} ignorou o D1 no CNPJ. Tombando para o Maps...`);
+                            console.log(`🔄 [SILÊNCIO TOTAL] Lead ${lf.name} ignorou o D1. Tombando para backup...`);
                             await supabase.from('leads').update({
                                 whatsapp_id: lf.backup_whatsapp_id, 
                                 phone: lf.backup_phone, 
                                 backup_tried: true, 
-                                status: 'new', // Volta pro início do funil!
-                                followup_count: 0 // Zera o contador para o novo número
+                                status: 'new',
+                                followup_count: 0 
                             }).eq('id', lf.id);
                         } else {
-                            console.log(`💀 [DESCARTE] Lead ${lf.name} ignorou o D1 e não tem reserva. Descartando.`);
+                            console.log(`💀 [DESCARTE] Lead ${lf.name} sem resposta e sem reserva. Movendo para DEAD.`);
                             await supabase.from('leads').update({ status: 'dead', lead_temperature: 'dead' }).eq('id', lf.id);
                         }
                     }
                 } catch (errFollow) { console.error(`❌ Erro Follow-up ${lf.name}:`, errFollow.message); }
             }
         }
+
         // ====================================================================
         // 👤 3. RETOMADA APÓS INTERVENÇÃO HUMANA (10 MINUTOS)
         // ====================================================================
@@ -1694,17 +1697,16 @@ async function loopRecuperacaoConversas() {
 
         if (leadsPausados) {
             for (const lp of leadsPausados) {
-                // Trava absoluta do sócio comercial: Se ele deu /pausar, a IA NUNCA retoma sozinha.
                 if (!lp.last_human_interaction || lp.manual_pause) continue; 
 
                 const dezMinutosEmMs = 10 * 60 * 1000; 
                 const ultimaInteracao = new Date(lp.last_human_interaction).getTime();
-                const agora = new Date().getTime();
+                const diff = Date.now() - ultimaInteracao;
 
-                if (agora - ultimaInteracao > dezMinutosEmMs) {
+                if (diff > dezMinutosEmMs) {
                     if (iaRespondendo.has(lp.whatsapp_id)) continue;
                     
-                    console.log(`🔄 [RETOMADA] Tempo de humano esgotado para ${lp.name}. Devolvendo para IA...`);
+                    console.log(`🔄 [RETOMADA] Tempo de humano esgotado para ${lp.name}. Voltando para IA.`);
                     await supabase.from('leads').update({ is_paused: false }).eq('id', lp.id);
 
                     const instancia = sessions.get(lp.instance_id);
@@ -1716,9 +1718,10 @@ async function loopRecuperacaoConversas() {
         }
 
     } catch (errGeral) {
-        console.error("❌ [ERRO CRÍTICO] Loop de recuperação falhou:", errGeral.message);
+        console.error("❌ [ERRO CRÍTICO] Falha no motor de recuperação:", errGeral.message);
     } finally {
-        // Blinda a máquina: o setTimeout aqui garante que o ciclo nunca vai quebrar ou encavalar
+        // 🔓 LIBERA O BLOQUEIO E AGENDA O PRÓXIMO CICLO
+        vigiaEmExecucao = false; 
         setTimeout(loopRecuperacaoConversas, 1000 * 60 * 5); 
     }
 }
