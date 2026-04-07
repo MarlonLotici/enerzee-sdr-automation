@@ -145,29 +145,38 @@ setInterval(() => {
 const sessions = new Map(); 
 const instanciasLigando = new Set();
 let ioSocket = null;
+
 function getHoraBrasil() {
-    // Força o objeto Date a refletir o fuso de Brasília independente do servidor
-    const stringData = new Date().toLocaleString("en-US", { timeZone: "America/Sao_Paulo" });
-    return new Date(stringData);
+    // Extrai os números reais de SP sem risco de dupla conversão do servidor
+    const opcoes = { timeZone: "America/Sao_Paulo", hour: 'numeric', minute: 'numeric', hour12: false };
+    const formatador = new Intl.DateTimeFormat('en-US', opcoes);
+    const partes = formatador.formatToParts(new Date());
+    
+    const horas = parseInt(partes.find(p => p.type === 'hour').value);
+    const minutos = parseInt(partes.find(p => p.type === 'minute').value);
+    
+    // Pega o dia da semana convertendo a data para a string de SP primeiro
+    const diaSemana = new Date(new Date().toLocaleString("en-US", {timeZone: "America/Sao_Paulo"})).getDay();
+
+    return { horas, minutos, diaSemana };
 }
 
 function dentroDoExpediente() {
     const agora = getHoraBrasil();
-    const t = agora.getHours() * 60 + agora.getMinutes();
+    // Cálculo matemático direto sobre os números recebidos
+    const t = agora.horas * 60 + agora.minutos;
+    
     // 330 = 05:30 AM | 1365 = 22:45 PM
     return t >= 330 && t <= 1365;
 }
 
 function dentroDaJanelaDeDisparo() {
     const agora = getHoraBrasil();
-    const diaSemana = agora.getDay(); 
     
     // 0 = Domingo. Não disparar no domingo.
-    if (diaSemana === 0) return false; 
+    if (agora.diaSemana === 0) return false; 
 
-    const horas = agora.getHours();
-    const minutos = agora.getMinutes();
-    const t = horas * 60 + minutos;
+    const t = agora.horas * 60 + agora.minutos;
 
     // 480 = 08:00 AM | 1080 = 18:00 PM
     const inicio = 480; 
@@ -176,12 +185,13 @@ function dentroDaJanelaDeDisparo() {
     const estaNaJanela = t >= inicio && t <= fim;
     
     if (!estaNaJanela) {
-        // Log estratégico para você monitorar o que a IA está "sentindo"
-        console.log(`💤 [HORÁRIO] Agora são ${horas}:${minutos < 10 ? '0'+minutos : minutos}. Janela: 08:00 às 18:00.`);
+        console.log(`💤 [HORÁRIO] Agora são ${agora.horas}:${agora.minutos < 10 ? '0'+agora.minutos : agora.minutos}. Janela: 08:00 às 18:00.`);
     }
 
     return estaNaJanela;
 }
+
+
 // ============================================================================
 // 🧠 NÚCLEO IA: INTENÇÃO E RESPOSTA (SEU "CLOSER V11" INTEGRAL)
 // ============================================================================
@@ -341,7 +351,7 @@ Avance APENAS UM estágio por vez. Ao final da resposta, retorne a tag [ESTAGIO:
 4. UMA PERGUNTA: Nunca duas perguntas no mesmo envio.
 5. NÃO REPITA: Nunca repita argumento ou áudio já usado no histórico.
 6. VARIAÇÃO: Frases de tamanhos diferentes — humanos não falam em blocos uniformes.
-
+7. SIGILO TOTAL: É estritamente proibido escrever as palavras 'estágio', 'funil' ou 'tag' para o lead. Use a tag [ESTAGIO:N] apenas como um marcador técnico invisível ao final da resposta.
 ---
 
 ### 3. REGRAS DE OURO (PRIORIDADE MÁXIMA)
@@ -837,21 +847,31 @@ async function filtrarEEnviarResposta(sock, remoteJid, resposta, historico, lead
     // ── 4. SE A IA GEROU APENAS TAG (texto ficou vazio após remoção) ─────────
     if (resposta.trim().length === 0) return;
 
-    // ── 4.5. PARSER DE ESTÁGIO DO FUNIL (FIX #4) ─────────────────────────────
-    const matchEstagio = resposta.match(/\[ESTAGIO:(\d)\]/i);
+         // ── 4.5. PARSER DE ESTÁGIO E LIMPEZA TOTAL (PROTEÇÃO V13) ─────────────────
+    // Captura variações: [ESTAGIO:0], [Estágio: 0], estágio 0, Estagio:0
+    const regexEstagioGlobal = /\[?EST[AÁ]GIO:?\s?(\d)\]?/gi;
+    
+    // Executa o match para pegar o número antes de limpar o texto
+    const matchEstagio = regexEstagioGlobal.exec(resposta);
+
     if (matchEstagio) {
         const novoEstagio = parseInt(matchEstagio[1]);
-        resposta = resposta.replace(/\[ESTAGIO:\d\]/gi, '').trim(); // Remove a tag — lead não vê
-        
-        // Atualiza estágio no banco + temperatura
         const tempUpdate = novoEstagio >= 3 ? 'hot' : novoEstagio >= 1 ? 'warm' : 'cold';
+        
+        // Atualiza o Supabase
         await supabase.from('leads').update({ 
             current_stage: novoEstagio,
             lead_temperature: tempUpdate
         }).eq('id', lead.id);
         
-        console.log(`📊 [FUNIL] ${lead.name} avançou para estágio ${novoEstagio} (${tempUpdate})`);
+        console.log(`📊 [FUNIL] ${lead.name} sincronizado para estágio ${novoEstagio}`);
     }
+
+    // A MÁGICA: Remove TODA e QUALQUER menção a estágio do texto antes do envio
+    resposta = resposta.replace(regexEstagioGlobal, '').trim();
+    // Proteção extra contra IA "conversadeira" que escreve fora dos padrões
+    resposta = resposta.replace(/est[aá]gio\s?\d/gi, '').trim();
+    resposta = resposta.replace(/tag\s?[:]\s?\d/gi, '').trim();
 
  // ── 5. FATIADOR E SIMULADOR HUMANO DE DIGITAÇÃO ──────────────────────────
     const mensagensSplit = resposta
