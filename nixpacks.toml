@@ -9,3 +9,9 @@ cmds = ["npm run build"]
 
 [start]
 cmd = "npm start"
+
+[phases.setup]
+nixPkgs = ["...", "python311", "python311Packages.pip"]
+
+[phases.build]
+cmds = ["...", "pip install edge-tts", "npm install"]
