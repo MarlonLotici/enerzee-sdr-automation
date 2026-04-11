@@ -1,20 +1,14 @@
 [phases.setup]
-nixPkgs = ["google-chrome-stable", "python3", "python3Packages.pip", "ffmpeg"]
+nixPkgs = ["google-chrome-stable", "python311", "python311Packages.pip", "nodejs_22", "ffmpeg"]
 
 [phases.install]
-cmds = ["npm install", "pip install edge-tts"]
+cmds = [
+    "npm install",
+    "pip install --user edge-tts"
+]
 
 [phases.build]
 cmds = ["npm run build"]
 
 [start]
-cmd = "npm start"
-
-[phases.setup]
-nixPkgs = ["python311", "python311Packages.pip", "nodejs_22"]
-
-[phases.build]
-cmds = [
-    "npm install",
-    "pip install edge-tts"
-]
+cmd = "PATH=$PATH:/root/.local/bin npm start"
