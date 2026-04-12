@@ -4,11 +4,11 @@ nixPkgs = ["google-chrome-stable", "python311", "python311Packages.pip", "nodejs
 [phases.install]
 cmds = [
     "npm install",
-    "pip install --user edge-tts"
+    "python311 -m pip install edge-tts"
 ]
 
 [phases.build]
 cmds = ["npm run build"]
 
 [start]
-cmd = "PATH=$PATH:/root/.local/bin npm start"
+cmd = "npm start"
