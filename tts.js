@@ -8,11 +8,7 @@ const VOZ_PADRAO = 'pt-BR-AntonioNeural';
 async function gerarAudioTTS(texto, voz = VOZ_PADRAO) {
     const tempFile = path.join(os.tmpdir(), `tts_${Date.now()}_${Math.random().toString(36).slice(2)}.mp3`);
 
-    // 🔥 FIX RAILWAY: No nixpacks, python3 pode estar como 'python' ou em caminho específico
-    // Tenta múltiplas variações
-    const pythonCmd = process.env.PYTHON_BIN || 'python311';
-    
-    const comando = `${pythonCmd} -m edge_tts --voice "${voz}" --text "${texto.replace(/"/g, '\\"')}" --write-media "${tempFile}" --rate "+5%" --volume "+0%"`;
+    const comando = `python3 -m edge_tts --voice "${voz}" --text "${texto.replace(/"/g, '\\"')}" --write-media "${tempFile}" --rate "+5%" --volume "+0%"`;
 
     return new Promise((resolve, reject) => {
         exec(comando, { timeout: 15000 }, async (error, stdout, stderr) => {
