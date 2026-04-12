@@ -3,16 +3,9 @@
  * 4_sdr.js - MÓDULO DE VENDAS NEURAL V12 (BAILEYS MULTI-TENANCY)
  * INTEGRAL: Vision, PDF, Regras Regionais Enerzee, Anti-Ban e Horários.
  */
-const { 
-    makeWASocket, 
-    useMultiFileAuthState, 
-    DisconnectReason, 
-    delay, 
-    fetchLatestBaileysVersion, 
-    makeCacheableSignalKeyStore,
-    downloadMediaMessage, 
-    generateMessageID 
-} = require('@whiskeysockets/baileys');
+// 🚀 FIX V13: Declaração global para injeção dinâmica (Bypass do erro ESM)
+let makeWASocket, useMultiFileAuthState, DisconnectReason, delay, fetchLatestBaileysVersion, makeCacheableSignalKeyStore, downloadMediaMessage, generateMessageID;
+
 const pino = require('pino');
 const fs = require('fs');
 const Groq = require('groq-sdk');
@@ -1851,8 +1844,20 @@ let loopIniciado = false;
 module.exports = {
     // 👇 Recebe a porta de comunicação (io) e o Alarme (sdrEvents)
     initMultiTenancy: async (io, sdrEvents) => {
+        
+        // 🚀 INJEÇÃO DINÂMICA DO BAILEYS (Resolve o Crash ESM)
+        const baileys = await import('@whiskeysockets/baileys');
+        makeWASocket = baileys.makeWASocket;
+        useMultiFileAuthState = baileys.useMultiFileAuthState;
+        DisconnectReason = baileys.DisconnectReason;
+        delay = baileys.delay;
+        fetchLatestBaileysVersion = baileys.fetchLatestBaileysVersion;
+        makeCacheableSignalKeyStore = baileys.makeCacheableSignalKeyStore;
+        downloadMediaMessage = baileys.downloadMediaMessage;
+        generateMessageID = baileys.generateMessageID;
+
         ioSocket = io;
-         sdrEventsGlobal = sdrEvents;
+        sdrEventsGlobal = sdrEvents;
         
          // 🎯 BUG #2 FIX: Destravar leads que ficaram presos como "reservado" após crash/restart
         const { data: travados } = await supabase.from('leads').select('id').eq('status', 'reservado');
