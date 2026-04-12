@@ -3,12 +3,11 @@ nixPkgs = ["chromium", "python311", "python311Packages.pip", "nodejs_23", "ffmpe
 
 [phases.install]
 cmds = [
-    "npm install",
-    "chmod +x start.sh"
+    "npm install"
 ]
 
 [phases.build]
 cmds = ["npm run build"]
 
 [start]
-cmd = "./start.sh"
+cmd = "bash start.sh"
