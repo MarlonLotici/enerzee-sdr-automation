@@ -8,13 +8,17 @@ const VOZ_PADRAO = 'pt-BR-AntonioNeural';
 async function gerarAudioTTS(texto, voz = VOZ_PADRAO) {
     const tempFile = path.join(os.tmpdir(), `tts_${Date.now()}_${Math.random().toString(36).slice(2)}.mp3`);
 
-    const comando = `python3 -m edge_tts --voice "${voz}" --text "${texto.replace(/"/g, '\\"')}" --write-media "${tempFile}" --rate "+5%" --volume "+0%"`;
+    // Usa a variável de ambiente definida no start.sh
+    const pythonBin = process.env.PYTHON_BIN || 'python3';
+    
+    const comando = `${pythonBin} -m edge_tts --voice "${voz}" --text "${texto.replace(/"/g, '\\"')}" --write-media "${tempFile}" --rate "+5%" --volume "+0%"`;
 
     return new Promise((resolve, reject) => {
         exec(comando, { timeout: 15000 }, async (error, stdout, stderr) => {
             if (error) {
                 console.error('❌ [TTS] Falha no edge-tts:', error.message);
                 console.error('❌ [TTS] stderr:', stderr);
+                console.error('❌ [TTS] PYTHON_BIN:', pythonBin);
                 return reject(error);
             }
 
