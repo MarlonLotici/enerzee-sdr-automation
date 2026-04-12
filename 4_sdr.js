@@ -858,26 +858,27 @@ async function enviarMensagemIA(sock, jid, content) {
 
 async function enviarAudioTTS(sock, remoteJid, texto, lead, instanceId) {
     try {
-        console.log(`🎙️ [TTS] Gerando áudio para ${lead.name}: "${texto.substring(0, 50)}..."`);
+        console.log(`🎙️ [TTS] Gerando áudio Opus para ${lead.name}...`);
         
         await sock.sendPresenceUpdate('recording', remoteJid);
         
         const buffer = await gerarAudioTTS(texto);
         
+        // O mimetype correto e o formato Opus impedem o Erro 400 da Meta
         await sock.sendMessage(remoteJid, {
             audio: buffer,
-            mimetype: 'audio/mpeg',
-            ptt: true  // aparece como mensagem de voz, não arquivo
+            mimetype: 'audio/ogg; codecs=opus',
+            ptt: true  // Faz aparecer o microfone azul de "gravado na hora"
         });
 
-        // Salva no histórico marcado como áudio TTS para a IA não repetir
+        // Salva no histórico para a IA saber que já usou áudio
         await db.saveMessage(lead.whatsapp_id, 'assistant', `[AUDIO_TTS] ${texto}`, instanceId);
-        console.log(`✅ [TTS] Áudio enviado para ${lead.name}`);
+        console.log(`✅ [TTS] Áudio enviado com sucesso para ${lead.name}`);
         
         return true;
     } catch (err) {
-        console.error(`❌ [TTS] Falha ao gerar/enviar áudio:`, err.message);
-        return false;
+        console.error(`❌ [TTS] Falha crítica no áudio:`, err.message);
+        return false; // Retornar false aqui joga a execução de volta para o envio de texto
     }
 }
 // ============================================================================
