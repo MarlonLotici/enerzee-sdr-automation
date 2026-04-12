@@ -916,70 +916,7 @@ async function filtrarEEnviarResposta(sock, remoteJid, resposta, historico, lead
     }
     const memoriaHistorico = JSON.stringify(historico);
 
-    // ── 2. ANTI-REPETIÇÃO DE ÁUDIO ───────────────────────────────────────────
-    if (memoriaHistorico.includes('<<Áudio Como Funciona Enviado>>') && 
-        /\[AUDIO[_\w]*?(FUNCIONA|COMO)[_\w]*?\]/i.test(resposta)) {
-        console.log("🛡️ [SDR] Bloqueando repetição do áudio 1...");
-        resposta = 'Como te expliquei no áudio ali em cima, a gente usa a energia das nossas usinas WEG pra injetar na sua rede e te dar o desconto direto. [QUEBRA] Ficou alguma dúvida sobre essa parte?';
-    }
-    if (memoriaHistorico.includes('<<Áudio Segurança Enviado>>') && 
-        /\[AUDIO[_\w]*?SEGURA[NÇC]A[_\w]*?\]/i.test(resposta)) {
-        console.log("🛡️ [SDR] Bloqueando repetição do áudio 2...");
-        resposta = 'Conforme te falei no áudio agora há pouco, é super seguro e não tem fidelidade. [QUEBRA] Vc tem a conta fácil aí pra gente ver se a empresa aprova?';
-    }
-    if (memoriaHistorico.includes('<<Áudio Obras/Placas Enviado>>') && 
-        /\[AUDIO[_\w]*?(PLACA|OBRA)[_\w]*?\]/i.test(resposta)) {
-        console.log("🛡️ [SDR] Bloqueando repetição do áudio 3...");
-        resposta = 'Como comentei no áudio anterior, é zero obras. Não precisa de placa no telhado. [QUEBRA] Consegue me mandar a foto da fatura pra gente simular?';
-    }
-
-    // ── 3. MOTOR DE ÁUDIO (CATCH-ALL BLINDADO) ───────────────────────────────
-    const todasAsTagsAudio = resposta.match(/\[AUDIO.*?\]/gi);
-
-    if (todasAsTagsAudio) {
-        for (const tag of todasAsTagsAudio) {
-            console.log(`🎤 [SDR] Tag de áudio detectada: ${tag}`);
-
-            const tagStr = tag.toUpperCase();
-            let audioFile = '';
-            let memoriaTag = '';
-
-            if (tagStr.includes('FUNCIONA') || tagStr.includes('COMO')) {
-                audioFile = './assets/audio_como_funciona.ogg';
-                memoriaTag = '<<Áudio Como Funciona Enviado>>';
-            } else if (tagStr.includes('SEGUR')) {
-                audioFile = './assets/audio_seguranca.ogg';
-                memoriaTag = '<<Áudio Segurança Enviado>>';
-            } else if (tagStr.includes('PLACA') || tagStr.includes('OBRA')) {
-                audioFile = './assets/audio_obras_placas.ogg';
-                memoriaTag = '<<Áudio Obras/Placas Enviado>>';
-            }
-
-            // Remove a tag do texto — lead nunca vê colchetes
-            resposta = resposta.replace(tag, '').trim();
-
-            if (audioFile && fs.existsSync(audioFile)) {
-                await sock.sendPresenceUpdate('recording', remoteJid);
-                await delay(6000);
-                try {
-                    const audioBuffer = fs.readFileSync(audioFile);
-                    await sock.sendMessage(remoteJid, {
-                        audio: audioBuffer,
-                        mimetype: 'audio/ogg; codecs=opus',
-                        ptt: true
-                    });
-                    console.log(`✅ [SDR] Áudio enviado: ${memoriaTag}`);
-                    await db.saveMessage(lead.whatsapp_id, 'assistant', memoriaTag, instanceId);
-                    await delay(2000);
-                } catch (erroAudio) {
-                    console.error("❌ [ERRO ÁUDIO]:", erroAudio.message);
-                }
-            } else {
-                console.log(`⚠️ [BLINDAGEM] Tag inválida ou arquivo inexistente: ${tag}. Ignorado.`);
-            }
-        }
-    }
-
+   
     // ── 4. SE A IA GEROU APENAS TAG (texto ficou vazio após remoção) ─────────
     if (resposta.trim().length === 0) return;
 
