@@ -304,37 +304,69 @@ app.post('/webhook/calendly', express.json(), async (req, res) => {
 });
 
 // ============================================================================
-// 🧪 ENDPOINT DE TESTE TTS (DESENVOLVIMENTO)
+// 🔬 DIAGNÓSTICO COMPLETO DO AMBIENTE
 // ============================================================================
-app.get('/test-tts', async (req, res) => {
-    try {
-        console.log('🧪 [TEST] Iniciando teste de TTS...');
-        
-        const { gerarAudioTTS } = require('./tts');
-        
-        const textoTeste = req.query.texto || 'Olá! Este é um teste do sistema de áudio TTS da Enerzee. Se você está ouvindo isso, o edge-tts está funcionando perfeitamente no Railway.';
-        
-        console.log('🎙️ [TEST] Gerando áudio...');
-        const buffer = await gerarAudioTTS(textoTeste);
-        
-        console.log(`✅ [TEST] Áudio gerado com sucesso! Tamanho: ${buffer.length} bytes`);
-        
-        res.set({
-            'Content-Type': 'audio/mpeg',
-            'Content-Length': buffer.length,
-            'Content-Disposition': 'inline; filename="teste-tts.mp3"'
-        });
-        
-        res.send(buffer);
-        
-    } catch (error) {
-        console.error('❌ [TEST] Falha no teste de TTS:', error.message);
-        res.status(500).json({ 
-            erro: error.message,
-            stack: error.stack,
-            solucao: 'Verifique se edge-tts está no PATH: /root/.local/bin/edge-tts'
-        });
+app.get('/diagnose', async (req, res) => {
+    const { exec } = require('child_process');
+    const util = require('util');
+    const execPromise = util.promisify(exec);
+    
+    const diagnostico = {
+        ambiente: process.env.NODE_ENV || 'development',
+        node_version: process.version,
+        platform: process.platform,
+        arch: process.arch,
+        cwd: process.cwd(),
+        env_vars: {},
+        comandos: {}
+    };
+
+    // Captura variáveis de ambiente relevantes
+    Object.keys(process.env).forEach(key => {
+        if (key.includes('PYTHON') || key.includes('PATH') || key.includes('NIX')) {
+            diagnostico.env_vars[key] = process.env[key];
+        }
+    });
+
+    // Testa comandos
+    const comandosParaTestar = [
+        'which python',
+        'which python3',
+        'which python3.11',
+        'python --version',
+        'python3 --version',
+        'python3.11 --version',
+        'pip --version',
+        'pip3 --version',
+        'python3 -m pip --version',
+        'python3.11 -m pip --version',
+        'ls -la /nix/store/ | grep python | head -20',
+        'find /nix/store -name "python*" -type f 2>/dev/null | head -10',
+        'python3 -m pip show edge-tts',
+        'python3.11 -m pip show edge-tts',
+        'echo $PATH',
+        'ls -la ~/.local/bin 2>/dev/null || echo "Diretório não existe"'
+    ];
+
+    for (const cmd of comandosParaTestar) {
+        try {
+            const { stdout, stderr } = await execPromise(cmd, { timeout: 5000 });
+            diagnostico.comandos[cmd] = {
+                sucesso: true,
+                stdout: stdout.trim(),
+                stderr: stderr.trim()
+            };
+        } catch (error) {
+            diagnostico.comandos[cmd] = {
+                sucesso: false,
+                erro: error.message,
+                stdout: error.stdout?.trim() || '',
+                stderr: error.stderr?.trim() || ''
+            };
+        }
     }
+
+    res.json(diagnostico);
 });
 
 // Entrega o Frontend (Sempre depois das rotas de API)
