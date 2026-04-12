@@ -303,6 +303,40 @@ app.post('/webhook/calendly', express.json(), async (req, res) => {
     }
 });
 
+// ============================================================================
+// 🧪 ENDPOINT DE TESTE TTS (DESENVOLVIMENTO)
+// ============================================================================
+app.get('/test-tts', async (req, res) => {
+    try {
+        console.log('🧪 [TEST] Iniciando teste de TTS...');
+        
+        const { gerarAudioTTS } = require('./tts');
+        
+        const textoTeste = req.query.texto || 'Olá! Este é um teste do sistema de áudio TTS da Enerzee. Se você está ouvindo isso, o edge-tts está funcionando perfeitamente no Railway.';
+        
+        console.log('🎙️ [TEST] Gerando áudio...');
+        const buffer = await gerarAudioTTS(textoTeste);
+        
+        console.log(`✅ [TEST] Áudio gerado com sucesso! Tamanho: ${buffer.length} bytes`);
+        
+        res.set({
+            'Content-Type': 'audio/mpeg',
+            'Content-Length': buffer.length,
+            'Content-Disposition': 'inline; filename="teste-tts.mp3"'
+        });
+        
+        res.send(buffer);
+        
+    } catch (error) {
+        console.error('❌ [TEST] Falha no teste de TTS:', error.message);
+        res.status(500).json({ 
+            erro: error.message,
+            stack: error.stack,
+            solucao: 'Verifique se edge-tts está no PATH: /root/.local/bin/edge-tts'
+        });
+    }
+});
+
 // Entrega o Frontend (Sempre depois das rotas de API)
 app.get(/.*/, (req, res) => {
     res.sendFile(path.join(__dirname, 'frontend', 'dist', 'index.html'));
