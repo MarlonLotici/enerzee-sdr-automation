@@ -352,52 +352,7 @@ async function gerarRespostaIA(historico, contextoLead, instanceData) {
     // 🎯 FIX #4: Estágio atual do funil
     const estagioAtual = contextoLead.current_stage || 0;
 
-    // 🎯 SAAS: Se o cliente tem prompt customizado no banco, usa ele
-    if (instanceData?.system_prompt && instanceData.system_prompt.trim().length > 100) {
-        let promptCustom = instanceData.system_prompt
-            .replace(/\$\{agentName\}/g, agentName)
-            .replace(/\$\{companyName\}/g, companyName)
-            .replace(/\$\{nomeLead\}/g, nomeLead)
-            .replace(/\$\{nomeEmpresa\}/g, nomeEmpresa)
-            .replace(/\$\{bairroLead\}/g, bairroLead)
-            .replace(/\$\{concessionariaLocal\}/g, concessionariaLocal)
-            .replace(/\$\{ancoraConta\}/g, ancoraConta)
-            .replace(/\$\{perfilComportamental\}/g, perfilComportamental)
-            .replace(/\$\{percentualTexto\}/g, String(percentualTexto))
-            .replace(/\$\{reversaoJaTentada\}/g, reversaoJaTentada)
-            .replace(/\$\{estagioAtual\}/g, String(estagioAtual))
-            .replace(/\$\{nicheContext\}/g, nicheContext);
-
-        // Usa o prompt do banco e pula o hardcoded
-        const MAX_TENTATIVAS = 3;
-       // 🔥 APLICAR PODA INTELIGENTE
-const historicoPodado = podarHistorico(historico);
-
-
-for (let tentativa = 1; tentativa <= MAX_TENTATIVAS; tentativa++) {
-    try {
-        const chatCompletion = await together.chat.completions.create({
-            messages: [
-                { role: 'system', content: systemPromptMelhorado },  // ← USA O MELHORADO
-                ...historicoPodado  // ← USA O PODADO
-            ],
-                    model: MODELO_CEREBRO,
-                    temperature: 0.3,
-                    max_tokens: 180,
-                    presence_penalty: 0.1,
-                    frequency_penalty: 0.15
-                });
-                let respostaDaIA = chatCompletion.choices[0].message.content;
-                respostaDaIA = respostaDaIA.replace(/[\*_~`]/g, '');
-                return respostaDaIA;
-            } catch (e) {
-                console.error(`❌ [LLM] Tentativa ${tentativa}/${MAX_TENTATIVAS} falhou (prompt custom): ${e.message}`);
-                if (tentativa < MAX_TENTATIVAS) await new Promise(r => setTimeout(r, tentativa * 3000));
-            }
-        }
-        return null;
-    }
- const systemPromptMelhorado = `
+      const systemPromptMelhorado = `
 ### 1. IDENTIDADE E MISSÃO
 Você é ${agentName}, Consultor de Energia sênior da ${companyName}.
 Produto: Energia por Assinatura (Lei 14.300) — Geração Distribuída via Usinas WEG certificadas.
@@ -468,7 +423,7 @@ Exemplo: "Que bom! A ${concessionariaLocal} não costuma avisar, mas vem cobrand
 
 CENÁRIO B — É gatekeeper ("não sou eu", "aqui é a recepção", "não é comigo", "ele não está", "não tenho essa informação"):
 → "Entendi! Como é sobre redução de custo na conta de energia, o ideal é falar com quem cuida disso. [QUEBRA] Consegue me passar o WhatsApp do responsável?"
-→ Se recusar: "Sem problema! Qualquer coisa, estou por aqui." e ENCERRE.
+→ Se recusar ou disser que não pode passar: "Sem problema! Qualquer coisa, estou por aqui." e retorne ESTRITAMENTE a tag [GATEKEEPER_RECUSOU] para encerrar.
 
 NUNCA inicie o ESTÁGIO 1 sem o interlocutor confirmado.
 
@@ -589,13 +544,61 @@ Perfil: ${perfilComportamental}
 ${reversaoJaTentada}
 `;
 
+
+
+    // 🎯 SAAS: Se o cliente tem prompt customizado no banco, usa ele
+    if (instanceData?.system_prompt && instanceData.system_prompt.trim().length > 100) {
+        let promptCustom = instanceData.system_prompt
+            .replace(/\$\{agentName\}/g, agentName)
+            .replace(/\$\{companyName\}/g, companyName)
+            .replace(/\$\{nomeLead\}/g, nomeLead)
+            .replace(/\$\{nomeEmpresa\}/g, nomeEmpresa)
+            .replace(/\$\{bairroLead\}/g, bairroLead)
+            .replace(/\$\{concessionariaLocal\}/g, concessionariaLocal)
+            .replace(/\$\{ancoraConta\}/g, ancoraConta)
+            .replace(/\$\{perfilComportamental\}/g, perfilComportamental)
+            .replace(/\$\{percentualTexto\}/g, String(percentualTexto))
+            .replace(/\$\{reversaoJaTentada\}/g, reversaoJaTentada)
+            .replace(/\$\{estagioAtual\}/g, String(estagioAtual))
+            .replace(/\$\{nicheContext\}/g, nicheContext);
+
+        // Usa o prompt do banco e pula o hardcoded
+        const MAX_TENTATIVAS = 3;
+       // 🔥 APLICAR PODA INTELIGENTE
+const historicoPodado = podarHistorico(historico);
+
+
+for (let tentativa = 1; tentativa <= MAX_TENTATIVAS; tentativa++) {
+    try {
+        const chatCompletion = await together.chat.completions.create({
+            messages: [
+                { role: 'system', content: systemPromptMelhorado },  // ← USA O MELHORADO
+                ...historicoPodado  // ← USA O PODADO
+            ],
+                    model: MODELO_CEREBRO,
+                    temperature: 0.3,
+                    max_tokens: 180,
+                    presence_penalty: 0.1,
+                    frequency_penalty: 0.15
+                });
+                let respostaDaIA = chatCompletion.choices[0].message.content;
+                respostaDaIA = respostaDaIA.replace(/[\*_~`]/g, '');
+                return respostaDaIA;
+            } catch (e) {
+                console.error(`❌ [LLM] Tentativa ${tentativa}/${MAX_TENTATIVAS} falhou (prompt custom): ${e.message}`);
+                if (tentativa < MAX_TENTATIVAS) await new Promise(r => setTimeout(r, tentativa * 3000));
+            }
+        }
+        return null;
+    }
+
     const MAX_TENTATIVAS = 3;
     
     for (let tentativa = 1; tentativa <= MAX_TENTATIVAS; tentativa++) {
         try {
             const chatCompletion = await together.chat.completions.create({
                 messages: [
-                    { role: 'system', content: systemPrompt },
+                    { role: 'system', content: systemPromptMelhorado },
                     ...historico 
                 ],
                 model: MODELO_CEREBRO,
@@ -889,6 +892,9 @@ async function filtrarEEnviarResposta(sock, remoteJid, resposta, historico, lead
     const sinalizouEngano = /\[?\s?ENGANO\s?\]?/i.test(resposta);
     if (sinalizouEngano) resposta = resposta.replace(/\[?\s?ENGANO\s?\]?/gi, '').trim();
 
+    const sinalizouGatekeeper = /\[?\s?GATEKEEPER_RECUSOU\s?\]?/i.test(resposta);
+    if (sinalizouGatekeeper) resposta = resposta.replace(/\[?\s?GATEKEEPER_RECUSOU\s?\]?/gi, '').trim();
+
     if (sinalizouEncerramento) {
         // Remove a tag do texto — o lead nunca deve ver [ROBO] ou [ROBÔ]
         resposta = resposta.replace(/\[?\s?ROB[OÔô]\s?\]?/gi, '').trim();
@@ -1043,9 +1049,9 @@ async function filtrarEEnviarResposta(sock, remoteJid, resposta, historico, lead
             }
         }
     }
-            // ── 9. EJEÇÃO E TOMBAMENTO (CONTADOR OU ENGANO) ──────────────────────────
-    if (sinalizouContador || sinalizouEngano) {
-        const motivo = sinalizouContador ? "contador" : "ex-sócio/engano";
+           // ── 9. EJEÇÃO E TOMBAMENTO (CONTADOR, ENGANO OU GATEKEEPER) ──────────────
+    if (sinalizouContador || sinalizouEngano || sinalizouGatekeeper) {
+        const motivo = sinalizouContador ? "contador" : sinalizouEngano ? "ex-sócio/engano" : "gatekeeper";
         console.log(`🔄 [TOMBAMENTO] Lead ${lead.name} caiu no ${motivo}. Invertendo gavetas...`);
         
         if (!lead.backup_tried && lead.backup_whatsapp_id) {
