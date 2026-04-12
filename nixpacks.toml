@@ -1,5 +1,5 @@
 [phases.setup]
-nixPkgs = ["google-chrome-stable", "python311", "python311Packages.pip", "nodejs_22", "ffmpeg", "bash"]
+nixPkgs = ["chromium", "python311", "python311Packages.pip", "nodejs_22", "ffmpeg", "bash"]
 
 [phases.install]
 cmds = [
