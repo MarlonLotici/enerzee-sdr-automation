@@ -53,6 +53,31 @@ function identificarArtigo(nome) {
     const ehFeminino = nomeLimpo.endsWith('a') || nomeLimpo.endsWith('as');
     return ehFeminino ? `da ${nome}` : `do ${nome}`;
 }
+
+// 🎯 NOVA FUNÇÃO: Chute de conta baseado em Capital Social e Nicho
+function calcularAncoraDinamica(lead) {
+    const capital = lead.capital_social_numeric || 0;
+    const nicho = (lead.niche || "").toLowerCase();
+    
+    // Lista de nichos que são "Vilões de Energia" (Refrigeração/Motores)
+    const nichosPesados = ['acougue', 'açougue', 'mercado', 'supermercado', 'padaria', 'panificadora', 'sorveteria', 'industria', 'frigorifico', 'conveniencia', 'lavanderia', 'marcenaria'];
+    const ePesado = nichosPesados.some(n => nicho.includes(n));
+
+    // NÍVEL 1: Gigantes (Capital > 500k)
+    if (capital >= 500000) return "R$ 10.000";
+
+    // NÍVEL 2: Médio-Grande (Capital 150k - 500k)
+    if (capital >= 150000) return ePesado ? "R$ 5.000" : "R$ 3.000";
+
+    // NÍVEL 3: Estrutura Operacional (Capital 50k - 150k)
+    if (capital >= 50000) return ePesado ? "R$ 2.500" : "R$ 1.500";
+
+    // NÍVEL 4: Pequeno Varejo / ME (Capital < 50k)
+    if (ePesado) return "R$ 1.200";
+
+    // PADRÃO (Escritórios, lojas secas, etc)
+    return "R$ 700";
+}
 // 🕒 CONFIGURAÇÃO DE CICLO DE TRABALHO (Fadiga)
 const HORAS_DE_TRABALHO = 2; // X horas disparando
 const MINUTOS_DE_DESCANSO = 40; // X minutos parado em repouso
@@ -335,8 +360,20 @@ async function gerarRespostaIA(historico, contextoLead, instanceData) {
     const agentName  = instanceData?.agent_name  || "Marlon";
     const companyName = instanceData?.company_name || "Enerzee";
 
+    // 🎯 IA SNIPER: Cálculo de autoridade e contexto geográfico
+    const ancoraConta = calcularAncoraDinamica(contextoLead);
+    
+    // Prova social do bairro (Busca rápida no banco para ver quantos leads temos na mesma região)
+    const { count: leadsNoBairro } = await supabase
+        .from('leads')
+        .select('*', { count: 'exact', head: true })
+        .eq('bairro', contextoLead.bairro);
+
+    const contextoBairro = leadsNoBairro > 1 
+        ? `A gente está fazendo um trabalho forte aí no ${bairroLead}. Já mapeamos outras ${leadsNoBairro} empresas da região que podem ter direito à isenção da tarifa.`
+        : `Mapeamos empresas similares à sua aqui no ${bairroLead} que estão pagando tarifa cheia na ${concessionariaLocal} sem necessidade.`;
+
     const isBigFish = (contextoLead.capital_social_numeric > 500000);
-    const ancoraConta = isBigFish ? "R$ 3.000" : "R$ 700";
 
     const perfilComportamental = isBigFish 
         ? "ARQUÉTIPO: O BANQUEIRO DE INVESTIMENTOS. Tom: Direto, focado em redução de OPEX e Zero CAPEX." 
@@ -582,10 +619,9 @@ SE o lead disser que não viu simulação ainda: "Então vale a pena a gente abr
 ---
 
 ### 7. PROVA SOCIAL E DESCONTOS REGIONAIS
-- Prova social (máx 1x por conversa): "Só aqui no ${bairroLead}, mapeamos comércios similares economizando entre R$ 200 e R$ 600 por mês — sem obra e sem fidelidade."
+- Prova social (máx 1x por conversa): "${contextoBairro}"
 - Âncora de desconto: "até 20% de redução". Não detalhe as frações a menos que o lead pergunte.
 - Por estado: MS/MT/GO/PA (12-15%), PR (15%), SC/RS (10-15%), PE/BA/CE/MG (25% primeiros 2 meses).
-
 ---
 
 ### 8. DADOS DO LEAD
@@ -612,8 +648,10 @@ ${reversaoJaTentada}
             .replace(/\$\{percentualTexto\}/g, String(percentualTexto))
             .replace(/\$\{reversaoJaTentada\}/g, reversaoJaTentada)
             .replace(/\$\{estagioAtual\}/g, String(estagioAtual))
-            .replace(/\$\{nicheContext\}/g, nicheContext);
-
+            .replace(/\$\{nicheContext\}/g, nicheContext)
+            .replace(/\$\{ancoraConta\}/g, ancoraConta)
+            .replace(/\$\{contextoBairro\}/g, contextoBairro);
+            
         // Usa o prompt do banco e pula o hardcoded
         const MAX_TENTATIVAS = 3;
        // 🔥 APLICAR PODA INTELIGENTE
