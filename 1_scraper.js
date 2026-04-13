@@ -5,18 +5,31 @@ puppeteer.use(StealthPlugin());
 // ─── CONSTANTES ───────────────────────────────────────────────────────────────
 
 const SINONIMOS = {
-    'padaria': ['panificadora', 'confeitaria'],
-    'mercado': ['supermercado', 'mercearia'],
-    'restaurante': ['churrascaria', 'pizzaria', 'hamburgueria'],
-    'oficina': ['mecânica', 'auto center'],
-    'posto': ['posto de combustível', 'posto de gasolina'],
-    'clinica': ['consultório', 'clínica médica'],
+    // 🥶 REFRIGERAÇÃO PESADA (Faturas Altíssimas)
+    'mercado': ['supermercado', 'mercearia', 'atacarejo', 'minimercado'],
+    'acougue': ['açougue', 'casa de carnes', 'frigorífico', 'boutique de carnes'],
+    'distribuidora': ['distribuidora de bebidas', 'depósito de bebidas', 'conveniência'],
+    'sorveteria': ['sorveteria', 'açaiteria', 'fábrica de sorvete'],
+    
+    // 🔥 CALOR E MOTORES (Vilões de Energia)
+    'padaria': ['panificadora', 'confeitaria', 'padaria e confeitaria'],
+    'lavanderia': ['lavanderia', 'lavagem a seco', 'lavanderia industrial'],
+    'marcenaria': ['marcenaria', 'móveis planejados', 'serralheria', 'vidraçaria'],
+    'petshop': ['pet shop', 'banho e tosa', 'clínica veterinária'],
+    
+    // ⚙️ SERVIÇOS E COMÉRCIO (Ar condicionado o dia todo)
+    'restaurante': ['churrascaria', 'pizzaria', 'hamburgueria', 'lanchonete', 'restaurante'],
+    'clinica': ['clínica médica', 'clínica de estética', 'clínica de imagem', 'laboratório'],
+    'odontologia': ['clínica odontológica', 'consultório dentário', 'odontologia'],
     'farmacia': ['drogaria', 'farmácia de manipulação'],
-    'energia solar': ['instalação solar', 'energia fotovoltaica'],
-    'escola': ['colégio', 'educação infantil'],
-    'academia': ['crossfit', 'estúdio fitness'],
-    'hotel': ['pousada', 'hostel'],
-    'escritório': ['coworking', 'escritório de advocacia', 'contabilidade'],
+    'beleza': ['salão de beleza', 'barbearia', 'estúdio de beleza'],
+    
+    // 🏭 INFRAESTRUTURA
+    'oficina': ['oficina mecânica', 'auto center', 'funilaria e pintura'],
+    'posto': ['posto de combustível', 'posto de gasolina'],
+    'academia': ['academia', 'crossfit', 'estúdio fitness', 'pilates'],
+    'hotel': ['hotel', 'pousada', 'motel', 'hostel'],
+    'industria': ['fábrica', 'indústria', 'confecção', 'metalúrgica']
 };
 
 const delay = (ms) => new Promise(res => setTimeout(res, ms));
