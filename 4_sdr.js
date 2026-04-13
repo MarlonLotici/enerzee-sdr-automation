@@ -1051,6 +1051,14 @@ async function filtrarEEnviarResposta(sock, remoteJid, resposta, historico, lead
     resposta = resposta.replace(/est[aá]gio\s?\d/gi, '').trim();
     resposta = resposta.replace(/tag\s?[:]\s?\d/gi, '').trim();
 
+    // 🛡️ PREVENÇÃO DE LOOP DO VIGIA: Se a IA retornou só a tag e ficou vazia
+    if (resposta.trim().length === 0) {
+        console.log(`⚠️ [PREVENÇÃO DE LOOP] IA retornou apenas tag para ${lead.name}. Salvando log silencioso no banco.`);
+        // Salva uma mensagem invisível do 'assistant' para o Vigia entender que já foi respondido
+        await db.saveMessage(lead.whatsapp_id, 'assistant', '[AÇÃO SILENCIOSA] Estágio atualizado internamente.', instanceId);
+        return; 
+    }
+
  // ── 5. FATIADOR E SIMULADOR HUMANO DE DIGITAÇÃO ──────────────────────────
     const mensagensSplit = resposta
         .split('[QUEBRA]')
