@@ -753,46 +753,74 @@ async function filtrarEEnviarResposta(sock, remoteJid, resposta, historico, lead
     // ── 4. SE A IA GEROU APENAS TAG (texto ficou vazio após remoção) ─────────
     if (resposta.trim().length === 0) return;
 
-    // ── 4.5. PARSER DE ESTÁGIO, CLIMA E LIMPEZA TOTAL (PROTEÇÃO V14) ─────────────────
-    // Captura variações do estágio
-    const regexEstagioGlobal = /\[?EST[AÁ]GIO:?\s?(\d)\]?/gi;
-    const matchEstagio = regexEstagioGlobal.exec(resposta);
+    // ── 4.5. PARSER DE ESTÁGIO, CLIMA, MANUAL E LIMPEZA TOTAL ─────────────────
+    // Captura variações do estágio
+    const regexEstagioGlobal = /\[?EST[AÁ]GIO:?\s?(\d)\]?/gi;
+    const matchEstagio = regexEstagioGlobal.exec(resposta);
 
-    // Captura variações do clima emocional
-    const regexClima = /\[?CLIMA:?\s?([a-zA-Z_]+)\]?/gi;
-    const matchClima = regexClima.exec(resposta);
+    // Captura variações do clima emocional
+    const regexClima = /\[?CLIMA:?\s?([a-zA-Z_]+)\]?/gi;
+    const matchClima = regexClima.exec(resposta);
 
-    let updates = {};
-    let fezUpdate = false;
+    // 👇 NOVO: DETECTOR DE AGENDAMENTO DE BOCA 👇
+    const regexManual = /\[?AGENDAMENTO_MANUAL\]?/gi;
+    const matchManual = regexManual.exec(resposta);
 
-    if (matchEstagio) {
-        const novoEstagio = parseInt(matchEstagio[1]);
-        updates.current_stage = novoEstagio;
-        updates.lead_temperature = novoEstagio >= 3 ? 'hot' : novoEstagio >= 1 ? 'warm' : 'cold';
-        console.log(`📊 [FUNIL] ${lead.name} sincronizado para estágio ${novoEstagio}`);
-        fezUpdate = true;
-    }
+    let updates = {};
+    let fezUpdate = false;
 
-    if (matchClima) {
-        const clima = matchClima[1].toLowerCase();
-        updates.sentiment = clima;
-        console.log(`🌡️ [SENTIMENTO] ${lead.name} está ${clima.toUpperCase()}`);
-        fezUpdate = true;
-    }
+    if (matchEstagio) {
+        const novoEstagio = parseInt(matchEstagio[1]);
+        updates.current_stage = novoEstagio;
+        updates.lead_temperature = novoEstagio >= 3 ? 'hot' : novoEstagio >= 1 ? 'warm' : 'cold';
+        console.log(`📊 [FUNIL] ${lead.name} sincronizado para estágio ${novoEstagio}`);
+        fezUpdate = true;
+    }
 
-    if (fezUpdate) {
-        // Atualiza a base de dados com Estágio e/ou Clima numa única chamada (alta performance)
-        await supabase.from('leads').update(updates).eq('id', lead.id);
-    }
+    if (matchClima) {
+        const clima = matchClima[1].toLowerCase();
+        updates.sentiment = clima;
+        console.log(`🌡️ [SENTIMENTO] ${lead.name} está ${clima.toUpperCase()}`);
+        fezUpdate = true;
+    }
 
-    // A MÁGICA: Remove TODA e QUALQUER menção a estágio e clima do texto antes do envio
-    resposta = resposta.replace(regexEstagioGlobal, '').trim();
-    resposta = resposta.replace(regexClima, '').trim();
-    
-    // Proteção extra contra IA "conversadeira" que escreve fora dos padrões
-    resposta = resposta.replace(/est[aá]gio\s?\d/gi, '').trim();
-    resposta = resposta.replace(/tag\s?[:]\s?\d/gi, '').trim();
+    // 👇 A MÁGICA DO AVISO INTERNO 👇
+    if (matchManual) {
+        console.log(`🚨 [ALERTA] ${lead.name} agendou de boca (sem Calendly)!`);
+        updates.calendly_booked = true; // Marca como agendado no banco
+        updates.status = 'booked';
+        fezUpdate = true;
 
+        // O robô manda uma mensagem para o DONO da instância (você)
+        try {
+            const { data: instData } = await supabase.from('instances').select('owner_phone').eq('id', instanceId).single();
+            if (instData && instData.owner_phone) {
+                const numeroDono = `${instData.owner_phone.replace(/\D/g, '')}@s.whatsapp.net`;
+                const aviso = `🚨 *AGENDAMENTO MANUAL DETECTADO*\n\nO lead *${lead.name}* (${lead.phone || 'Número no CRM'}) acabou de marcar um horário pelo WhatsApp sem usar o link.\n\nAbra a conversa dele agora para conferir o dia e horário que ele pediu e anote na sua agenda!`;
+                
+                // Envia o alerta silencioso direto pro seu celular
+                await sock.sendMessage(numeroDono, { text: aviso });
+                console.log(`✅ [ALERTA ENVIADO] Aviso mandado para o celular do dono: ${numeroDono}`);
+            }
+        } catch (erroAviso) {
+            console.log(`⚠️ [AVISO FALHOU] Erro ao tentar avisar o dono sobre o agendamento:`, erroAviso.message);
+        }
+    }
+
+    if (fezUpdate) {
+        // Atualiza a base de dados com Estágio, Clima e Agendamento numa única chamada (alta performance)
+        await supabase.from('leads').update(updates).eq('id', lead.id);
+    }
+
+    // A MÁGICA: Remove TODA e QUALQUER menção a tags do texto antes do envio
+    resposta = resposta.replace(regexEstagioGlobal, '').trim();
+    resposta = resposta.replace(regexClima, '').trim();
+    resposta = resposta.replace(regexManual, '').trim();
+    
+    // Proteção extra contra IA "conversadeira" que escreve fora dos padrões
+    resposta = resposta.replace(/est[aá]gio\s?\d/gi, '').trim();
+    resposta = resposta.replace(/tag\s?[:]\s?\d/gi, '').trim();
+    
  // ── 5. FATIADOR E SIMULADOR HUMANO DE DIGITAÇÃO ──────────────────────────
     const mensagensSplit = resposta
         .split('[QUEBRA]')
