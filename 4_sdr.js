@@ -675,31 +675,42 @@ async function enviarMensagemIA(sock, jid, content) {
     }
 }
 
+
 async function enviarAudioTTS(sock, remoteJid, texto, lead, instanceId) {
     try {
-        console.log(`🎙️ [TTS] Gerando áudio Opus para ${lead.name}...`);
+        console.log(`🎙️ [TTS] Gerando áudio humanizado para ${lead.name}...`);
         
+        // 1. HUMANIZAÇÃO DO TEXTO (O Pulo do Gato)
+        // Adicionamos pontuações que forçam a IA a fazer pausas naturais de quem está pensando.
+        let textoHumanizado = texto
+            .replace(/\?/g, '? ... ') // Pausa reflexiva após pergunta
+            .replace(/!/g, '! ... ') // Pausa após exclamação
+            .replace(/\./g, ', ... ') // Transforma ponto final em pausa curta de continuação
+            .replace(/energia/gi, 'energia, né,') // Vício de linguagem comum no Brasil
+            .replace(/fatura/gi, 'fatura, ... tipo,') // Hesitação natural
+            .replace(/economizar/gi, 'dar uma economizada'); // Termo mais informal
+
         await sock.sendPresenceUpdate('recording', remoteJid);
         
-        const buffer = await gerarAudioTTS(texto);
-        
-        // O mimetype correto e o formato Opus impedem o Erro 400 da Meta
+        // 2. ENVIAR O TEXTO JÁ HUMANIZADO
+        // Note que agora passamos 'textoHumanizado' e não mais o 'texto' original
+        const buffer = await gerarAudioTTS(textoHumanizado);
+
         await sock.sendMessage(remoteJid, {
             audio: buffer,
             mimetype: 'audio/ogg; codecs=opus',
-            ptt: true  // Faz aparecer o microfone azul de "gravado na hora"
+            ptt: true 
         });
 
-        // Salva no histórico para a IA saber que já usou áudio
         await db.saveMessage(lead.whatsapp_id, 'assistant', `[AUDIO_TTS] ${texto}`, instanceId);
-        console.log(`✅ [TTS] Áudio enviado com sucesso para ${lead.name}`);
-        
         return true;
     } catch (err) {
-        console.error(`❌ [TTS] Falha crítica no áudio:`, err.message);
-        return false; // Retornar false aqui joga a execução de volta para o envio de texto
+        console.error(`❌ [TTS] Falha:`, err.message);
+        return false;
     }
 }
+
+
 // ============================================================================
 // 🧠 NÚCLEO UNIFICADO DE RESPOSTA — elimina duplicação entre processarMensagem
 // e processarMensagemManual. Toda lógica de áudio e envio vive aqui.
@@ -742,39 +753,45 @@ async function filtrarEEnviarResposta(sock, remoteJid, resposta, historico, lead
     // ── 4. SE A IA GEROU APENAS TAG (texto ficou vazio após remoção) ─────────
     if (resposta.trim().length === 0) return;
 
-         // ── 4.5. PARSER DE ESTÁGIO E LIMPEZA TOTAL (PROTEÇÃO V13) ─────────────────
-    // Captura variações: [ESTAGIO:0], [Estágio: 0], estágio 0, Estagio:0
-    const regexEstagioGlobal = /\[?EST[AÁ]GIO:?\s?(\d)\]?/gi;
-    
-    // Executa o match para pegar o número antes de limpar o texto
-    const matchEstagio = regexEstagioGlobal.exec(resposta);
+    // ── 4.5. PARSER DE ESTÁGIO, CLIMA E LIMPEZA TOTAL (PROTEÇÃO V14) ─────────────────
+    // Captura variações do estágio
+    const regexEstagioGlobal = /\[?EST[AÁ]GIO:?\s?(\d)\]?/gi;
+    const matchEstagio = regexEstagioGlobal.exec(resposta);
 
-    if (matchEstagio) {
-        const novoEstagio = parseInt(matchEstagio[1]);
-        const tempUpdate = novoEstagio >= 3 ? 'hot' : novoEstagio >= 1 ? 'warm' : 'cold';
-        
-        // Atualiza o Supabase
-        await supabase.from('leads').update({ 
-            current_stage: novoEstagio,
-            lead_temperature: tempUpdate
-        }).eq('id', lead.id);
-        
-        console.log(`📊 [FUNIL] ${lead.name} sincronizado para estágio ${novoEstagio}`);
-    }
+    // Captura variações do clima emocional
+    const regexClima = /\[?CLIMA:?\s?([a-zA-Z_]+)\]?/gi;
+    const matchClima = regexClima.exec(resposta);
 
-    // A MÁGICA: Remove TODA e QUALQUER menção a estágio do texto antes do envio
-    resposta = resposta.replace(regexEstagioGlobal, '').trim();
-    // Proteção extra contra IA "conversadeira" que escreve fora dos padrões
-    resposta = resposta.replace(/est[aá]gio\s?\d/gi, '').trim();
-    resposta = resposta.replace(/tag\s?[:]\s?\d/gi, '').trim();
+    let updates = {};
+    let fezUpdate = false;
 
-    // 🛡️ PREVENÇÃO DE LOOP DO VIGIA: Se a IA retornou só a tag e ficou vazia
-    if (resposta.trim().length === 0) {
-        console.log(`⚠️ [PREVENÇÃO DE LOOP] IA retornou apenas tag para ${lead.name}. Salvando log silencioso no banco.`);
-        // Salva uma mensagem invisível do 'assistant' para o Vigia entender que já foi respondido
-        await db.saveMessage(lead.whatsapp_id, 'assistant', '[AÇÃO SILENCIOSA] Estágio atualizado internamente.', instanceId);
-        return; 
-    }
+    if (matchEstagio) {
+        const novoEstagio = parseInt(matchEstagio[1]);
+        updates.current_stage = novoEstagio;
+        updates.lead_temperature = novoEstagio >= 3 ? 'hot' : novoEstagio >= 1 ? 'warm' : 'cold';
+        console.log(`📊 [FUNIL] ${lead.name} sincronizado para estágio ${novoEstagio}`);
+        fezUpdate = true;
+    }
+
+    if (matchClima) {
+        const clima = matchClima[1].toLowerCase();
+        updates.sentiment = clima;
+        console.log(`🌡️ [SENTIMENTO] ${lead.name} está ${clima.toUpperCase()}`);
+        fezUpdate = true;
+    }
+
+    if (fezUpdate) {
+        // Atualiza a base de dados com Estágio e/ou Clima numa única chamada (alta performance)
+        await supabase.from('leads').update(updates).eq('id', lead.id);
+    }
+
+    // A MÁGICA: Remove TODA e QUALQUER menção a estágio e clima do texto antes do envio
+    resposta = resposta.replace(regexEstagioGlobal, '').trim();
+    resposta = resposta.replace(regexClima, '').trim();
+    
+    // Proteção extra contra IA "conversadeira" que escreve fora dos padrões
+    resposta = resposta.replace(/est[aá]gio\s?\d/gi, '').trim();
+    resposta = resposta.replace(/tag\s?[:]\s?\d/gi, '').trim();
 
  // ── 5. FATIADOR E SIMULADOR HUMANO DE DIGITAÇÃO ──────────────────────────
     const mensagensSplit = resposta
