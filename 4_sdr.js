@@ -11,6 +11,7 @@ const fs = require('fs');
 const Groq = require('groq-sdk');
 const pdf = require('pdf-parse');
 const db = require('./database');
+const { useSupabaseAuthState } = require('./auth_adapter');
 const { gerarAudioTTS } = require('./tts');
 const { createClient } = require('@supabase/supabase-js');
 const motoresEmExecucao = new Set(); // 🛡️ Impede que o mesmo chip ligue dois loops infinitos
@@ -548,7 +549,9 @@ async function startInstance(instanceId, instanceName) {
     instanciasLigando.add(instanceId);
 
     console.log(`[MANAGER] 🚀 Ligando SDR: ${instanceName}`);
-    const { state, saveCreds } = await useMultiFileAuthState(`wpp_sessions/${instanceId}`);
+    //const { state, saveCreds } = await useMultiFileAuthState(`wpp_sessions/${instanceId}`);
+    // Agora as chaves do WhatsApp vivem no Supabase, protegidas contra restarts
+    const { state, saveCreds } = await useSupabaseAuthState(instanceId);
     const { version } = await fetchLatestBaileysVersion();
 
     const sock = makeWASocket({
