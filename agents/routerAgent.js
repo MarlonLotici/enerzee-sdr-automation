@@ -3,8 +3,7 @@ const Groq = require('groq-sdk');
 const groq = new Groq({ apiKey: process.env.GROQ_API_KEY });
 
 // Usamos um modelo rápido e barato apenas para triagem
-const MODELO_ROTEADOR = "llama3-8b-8192"; 
-
+const MODELO_ROTEADOR = "llama-3.1-8b-instant";
 async function classificarMensagem(ultimaMensagemLead) {
     const prompt = `
     És o supervisor de tráfego de um CRM.

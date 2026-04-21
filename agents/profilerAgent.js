@@ -18,7 +18,7 @@ async function analisarPerfil(ultimaMsg) {
     try {
         const res = await groq.chat.completions.create({
             messages: [{ role: "system", content: prompt }],
-            model: "llama3-8b-8192", // Rápido e barato
+            model: "llama-3.1-8b-instant", // Rápido e barato
             temperature: 0.1,
             max_tokens: 60,
         });

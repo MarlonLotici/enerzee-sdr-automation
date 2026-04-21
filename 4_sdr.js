@@ -738,235 +738,39 @@ async function enviarAudioTTS(sock, remoteJid, texto, lead, instanceId) {
 async function filtrarEEnviarResposta(sock, remoteJid, resposta, historico, lead, instanceId) {
     if (!resposta) return;
 
-    // ── 1. INTERCEPTADOR [ROBO] ULTRA-BLINDADO (Pega qualquer variação, incluindo ROBÔ com acento) ──
-    // Detecta o sinal mas NÃO silencia imediatamente — primeiro verifica se há despedida a enviar
-    const sinalizouEncerramento = /\[?\s?ROB[OÔô]\s?\]?/i.test(resposta);
+    // ── 1. LIMPEZA TOTAL DE TAGS (NÃO DEIXA VAZAR NADA) ──
+    const regexTags = /\[(ESTAGIO|CLIMA|RAIO-X|PERFIL|ROBO|CONTADOR|ENGANO|GATEKEEPER|AGENDAMENTO_MANUAL)[^\]]*\]/gi;
+    
+    // Captura os dados antes de apagar o texto
+    const matchEstagio = /\[?EST[AÁ]GIO:?\s?(\d)\]?/gi.exec(resposta);
+    const matchClima = /\[?CLIMA:?\s?([a-zA-Z_]+)\]?/gi.exec(resposta);
+    const matchManual = /\[?AGENDAMENTO_MANUAL\]?/gi.exec(resposta);
 
-    const sinalizouContador = /\[?\s?CONTADOR\s?\]?/i.test(resposta);
-    if (sinalizouContador) resposta = resposta.replace(/\[?\s?CONTADOR\s?\]?/gi, '').trim();
+    // Limpa o texto que vai para o cliente
+    let textoLimpo = resposta.replace(regexTags, '').replace(/est[aá]gio\s?\d/gi, '').trim();
+    
+    if (textoLimpo.length === 0) return;
 
-    const sinalizouEngano = /\[?\s?ENGANO\s?\]?/i.test(resposta);
-    if (sinalizouEngano) resposta = resposta.replace(/\[?\s?ENGANO\s?\]?/gi, '').trim();
-
-    const sinalizouGatekeeper = /\[?\s?GATEKEEPER_RECUSOU\s?\]?/i.test(resposta);
-    if (sinalizouGatekeeper) resposta = resposta.replace(/\[?\s?GATEKEEPER_RECUSOU\s?\]?/gi, '').trim();
-
-    if (sinalizouEncerramento) {
-        // Remove a tag do texto — o lead nunca deve ver [ROBO] ou [ROBÔ]
-        resposta = resposta.replace(/\[?\s?ROB[OÔô]\s?\]?/gi, '').trim();
-
-        if (!resposta || resposta.trim().length === 0) {
-            // Autoresposta pura (IA só retornou a tag): silencia completamente
-            console.log(`🤖 [SILÊNCIO] Autoresposta detectada para ${lead.name}. Sem texto — IA silenciada.`);
-            // FIX: Troca a tag para o Vigia ignorar e PAUSA o lead no banco
-            await db.saveMessage(lead.whatsapp_id, 'user', `[AUTORESPOSTA] Robô detectado, IA silenciada.`, instanceId);
-            await supabase.from('leads').update({ is_paused: true }).eq('id', lead.id);
-            return;
-        }
-
-        // Há texto restante (ex: despedida hand-off): envia a mensagem e pausa depois
-        console.log(`🤖 [HAND-OFF] IA sinalizou encerramento para ${lead.name}. Enviando despedida antes de pausar.`);
-    }
-    const memoriaHistorico = JSON.stringify(historico);
-
-   
-    // ── 4. SE A IA GEROU APENAS TAG (texto ficou vazio após remoção) ─────────
-    if (resposta.trim().length === 0) return;
-
-    // ── 4.5. PARSER DE ESTÁGIO, CLIMA, MANUAL E LIMPEZA TOTAL ─────────────────
-    // Captura variações do estágio
-    const regexEstagioGlobal = /\[?EST[AÁ]GIO:?\s?(\d)\]?/gi;
-    const matchEstagio = regexEstagioGlobal.exec(resposta);
-
-    // Captura variações do clima emocional
-    const regexClima = /\[?CLIMA:?\s?([a-zA-Z_]+)\]?/gi;
-    const matchClima = regexClima.exec(resposta);
-
-    // 👇 NOVO: DETECTOR DE AGENDAMENTO DE BOCA 👇
-    const regexManual = /\[?AGENDAMENTO_MANUAL\]?/gi;
-    const matchManual = regexManual.exec(resposta);
-
+    // ── 2. ATUALIZAÇÃO DE STATUS NO BANCO ──
     let updates = {};
-    let fezUpdate = false;
-
-    if (matchEstagio) {
-        const novoEstagio = parseInt(matchEstagio[1]);
-        updates.current_stage = novoEstagio;
-        updates.lead_temperature = novoEstagio >= 3 ? 'hot' : novoEstagio >= 1 ? 'warm' : 'cold';
-        console.log(`📊 [FUNIL] ${lead.name} sincronizado para estágio ${novoEstagio}`);
-        fezUpdate = true;
-    }
-
-    if (matchClima) {
-        const clima = matchClima[1].toLowerCase();
-        updates.sentiment = clima;
-        console.log(`🌡️ [SENTIMENTO] ${lead.name} está ${clima.toUpperCase()}`);
-        fezUpdate = true;
-    }
-
-    // 👇 A MÁGICA DO AVISO INTERNO 👇
+    if (matchEstagio) updates.current_stage = parseInt(matchEstagio[1]);
+    if (matchClima) updates.sentiment = matchClima[1].toLowerCase();
     if (matchManual) {
-        console.log(`🚨 [ALERTA] ${lead.name} agendou de boca (sem Calendly)!`);
-        updates.calendly_booked = true; // Marca como agendado no banco
+        updates.calendly_booked = true;
         updates.status = 'booked';
-        fezUpdate = true;
-
-        // O robô manda uma mensagem para o DONO da instância (você)
-        try {
-            const { data: instData } = await supabase.from('instances').select('owner_phone').eq('id', instanceId).single();
-            if (instData && instData.owner_phone) {
-                const numeroDono = `${instData.owner_phone.replace(/\D/g, '')}@s.whatsapp.net`;
-                const aviso = `🚨 *AGENDAMENTO MANUAL DETECTADO*\n\nO lead *${lead.name}* (${lead.phone || 'Número no CRM'}) acabou de marcar um horário pelo WhatsApp sem usar o link.\n\nAbra a conversa dele agora para conferir o dia e horário que ele pediu e anote na sua agenda!`;
-                
-                // Envia o alerta silencioso direto pro seu celular
-                await sock.sendMessage(numeroDono, { text: aviso });
-                console.log(`✅ [ALERTA ENVIADO] Aviso mandado para o celular do dono: ${numeroDono}`);
-            }
-        } catch (erroAviso) {
-            console.log(`⚠️ [AVISO FALHOU] Erro ao tentar avisar o dono sobre o agendamento:`, erroAviso.message);
-        }
     }
-
-    if (fezUpdate) {
-        // Atualiza a base de dados com Estágio, Clima e Agendamento numa única chamada (alta performance)
+    if (Object.keys(updates).length > 0) {
         await supabase.from('leads').update(updates).eq('id', lead.id);
     }
 
-    // A MÁGICA: Remove TODA e QUALQUER menção a tags do texto antes do envio
-    resposta = resposta.replace(regexEstagioGlobal, '').trim();
-    resposta = resposta.replace(regexClima, '').trim();
-    resposta = resposta.replace(regexManual, '').trim();
+    // ── 3. ENVIO FATIADO ──
+    const mensagensSplit = textoLimpo.split('[QUEBRA]').map(t => t.trim()).filter(t => t.length > 0);
     
-    // Proteção extra contra IA "conversadeira" que escreve fora dos padrões
-    resposta = resposta.replace(/est[aá]gio\s?\d/gi, '').trim();
-    resposta = resposta.replace(/tag\s?[:]\s?\d/gi, '').trim();
-    //--
- // ── 5. FATIADOR E SIMULADOR HUMANO DE DIGITAÇÃO ──────────────────────────
-    const mensagensSplit = resposta
-        .split('[QUEBRA]')
-        .map(t => t.trim())
-        .filter(t => t.length > 0)
-        .slice(0, 2);
-
-    // ── DECISÃO TTS ──────────────────────────────────────────────────────────
-    const ultimaMsgLead = historico.filter(m => m.role === 'user').slice(-1)[0];
-    const leadMandouAudio = ultimaMsgLead?.content?.startsWith('(Áudio)');
-
-    const respostaTexto = mensagensSplit.join(' ').toLowerCase();
-    const estaNoEstagio3ou4 = (
-        respostaTexto.includes('como funciona') ||
-        respostaTexto.includes('sem obra') ||
-        respostaTexto.includes('simulador') ||
-        respostaTexto.includes('calendly') ||
-        respostaTexto.includes('30 minutos') ||
-        respostaTexto.includes('amanhã')
-    );
-    const disparoEspontaneo = estaNoEstagio3ou4 && Math.random() < 0.30;
-
-    const audiosRecentes = historico
-        .filter(m => m.role === 'assistant' && m.content?.startsWith('[AUDIO_TTS]'))
-        .length;
-    const podeUsarTTS = audiosRecentes < 2;
-    const usarTTS = podeUsarTTS && (leadMandouAudio || disparoEspontaneo);
-
-    if (usarTTS) {
-        const textoParaAudio = mensagensSplit.join('. ');
-        console.log(`🎙️ [TTS] Modo ${leadMandouAudio ? 'espelho' : 'espontâneo'} ativado para ${lead.name}`);
-        const enviouAudio = await enviarAudioTTS(sock, remoteJid, textoParaAudio, lead, instanceId);
-        if (enviouAudio) return;
-        console.log(`⚠️ [TTS] Fallback para texto após falha no áudio`);
-    }
-
-    for (let i = 0; i < mensagensSplit.length; i++) {
-        const trecho = mensagensSplit[i];
-        const tempoDigitacao = (trecho.length * 80) + 4000;
-
+    for (const trecho of mensagensSplit) {
         await sock.sendPresenceUpdate('composing', remoteJid);
-        await delay(Math.max(5000, Math.min(tempoDigitacao, 14000)));
-
+        await delay(Math.min(trecho.length * 60 + 3000, 10000));
         await enviarMensagemIA(sock, remoteJid, { text: trecho });
         await db.saveMessage(lead.whatsapp_id, 'assistant', trecho, instanceId);
-
-        if (i < mensagensSplit.length - 1) {
-            await sock.sendPresenceUpdate('paused', remoteJid);
-            await delay(Math.random() * 3000 + 3500);
-        }
-    }
-
-    // ── 6. DETECTOR DE REVERSÃO DE OBJEÇÃO ──────────────────────────────────
-    const respostaFinal = mensagensSplit.join(' ').toLowerCase();
-    const sinaisDeReversao = [
-        'só por curiosidade',
-        'só curiosidade',
-        'a conta aí passa',
-        'a conta passa de',
-        'antes de encerrar'
-    ];
-    const tentouReverter = sinaisDeReversao.some(s => respostaFinal.includes(s));
-
-    if (tentouReverter && !lead.objection_reversed) {
-        console.log(`🔄 [REVERSÃO] IA tentou reverter objeção de ${lead.name}. Marcando no banco...`);
-        await supabase.from('leads').update({ objection_reversed: true }).eq('id', lead.id);
-        await db.saveMessage(lead.whatsapp_id, 'assistant', '[REVERSAO_TENTADA]', instanceId);
-    }
-
-    // ── 7. PAUSA PÓS HAND-OFF ────────────────────────────────────────────────
-    if (sinalizouEncerramento) {
-        await supabase.from('leads').update({ is_paused: true }).eq('id', lead.id);
-        console.log(`⏸️ [PAUSA HAND-OFF] Conversa com ${lead.name} pausada após despedida enviada.`);
-
-    }
-
-// ── 8. DETECTOR DE NÚMERO DO DECISOR ─────────────────────────────────────
-    // Se a IA sinalizou hand-off E há um número no texto da conversa, salva e dispara
-    if (sinalizouEncerramento) {
-        // Busca número brasileiro na última mensagem do usuário (não na resposta da IA)
-        const ultimaMsgUsuario = historico
-            .filter(m => m.role === 'user')
-            .slice(-1)[0]?.content || '';
-
-        const regexTelefone = /(?:\+?55\s?)?(?:\(?\d{2}\)?\s?)?(?:9\s?)?\d{4}[-\s]?\d{4}/g;
-        const numerosEncontrados = ultimaMsgUsuario.match(regexTelefone);
-
-        if (numerosEncontrados && numerosEncontrados.length > 0) {
-            const numeroRaw = numerosEncontrados[0];
-            console.log(`📱 [DECISOR] Número detectado na conversa: ${numeroRaw}. Iniciando captura...`);
-
-            // Salva o decisor no banco linkado à empresa do lead atual
-            const novoDecisor = await salvarDecisor(numeroRaw, lead, instanceId);
-
-            if (novoDecisor && sdrEventsGlobal) {
-                // Delay humanizado antes de chamar o decisor (entre 1 e 3 minutos)
-                const delayMs = Math.floor(Math.random() * 120000) + 60000;
-                console.log(`⏳ [DECISOR] Aguardando ${Math.round(delayMs/1000)}s antes de chamar o decisor...`);
-
-                setTimeout(() => {
-                    console.log(`🔔 [DECISOR] Acordando motor para chamar decisor da ${lead.name}...`);
-                    sdrEventsGlobal.emit('NOVO_LEAD_DISPONIVEL', instanceId);
-                }, delayMs);
-            }
-        }
-    }
-           // ── 9. EJEÇÃO E TOMBAMENTO (CONTADOR, ENGANO OU GATEKEEPER) ──────────────
-    if (sinalizouContador || sinalizouEngano || sinalizouGatekeeper) {
-        const motivo = sinalizouContador ? "contador" : sinalizouEngano ? "ex-sócio/engano" : "gatekeeper";
-        console.log(`🔄 [TOMBAMENTO] Lead ${lead.name} caiu no ${motivo}. Invertendo gavetas...`);
-        
-        if (!lead.backup_tried && lead.backup_whatsapp_id) {
-            // Inverte o número pro Maps e devolve pra fila como 'new'
-            await supabase.from('leads').update({
-                whatsapp_id: lead.backup_whatsapp_id,
-                phone: lead.backup_phone,
-                backup_tried: true,
-                status: 'new', 
-                is_paused: false // Garante que a IA não fique travada no novo número
-            }).eq('id', lead.id);
-            console.log(`✅ [TOMBAMENTO] Concluído! Lead voltará para a fila no número do Maps.`);
-        } else {
-            // Se já tentou o backup ou não tem, o lead morre de vez.
-            await supabase.from('leads').update({ status: 'invalid' }).eq('id', lead.id);
-            console.log(`💀 [DESCARTE] Sem número reserva para ${lead.name}.`);
-        }
     }
 }
 

@@ -34,7 +34,7 @@ async function analisarEmpresa(historico, lead) {
     try {
         const res = await groq.chat.completions.create({
             messages: [{ role: "system", content: prompt }],
-            model: "llama3-8b-8192", // Rápido, leve e analítico
+            model: "llama-3.1-8b-instant", // Rápido, leve e analítico
             temperature: 0.1, // Quase zero alucinação, foco em fatos
             max_tokens: 120,
         });
