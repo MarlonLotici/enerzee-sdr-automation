@@ -24,11 +24,22 @@ async function gerarAudioTTS(texto, voz = VOZ_PADRAO) {
         .replace(/agendar/gi, 'dar uma olhadinha') // Linguagem mais informal
         .replace(/"/g, '\\"');
 
-    // 🎙️ 2. AJUSTE DE CADÊNCIA (--rate)
-    // Reduzi a velocidade para -4%. Isso dá um tom de voz mais calmo e "seguro", 
-    // fugindo daquele ritmo acelerado de telemarketing.
-    const cmdEdgeTTS = `edge-tts --voice "${voz}" --text "${textoHumanizado}" --write-media "${tempMp3}" --rate "-4%" --volume "+0%"`;
-    
+    // 1. Recebe o texto original da IA
+const textoOriginal = textoHumanizado; 
+
+// 2. Aplica a Limpeza Estratégica (Sanitização)
+// Esta versão limpa o excesso, mas mantém uma pausa natural
+const textoParaAudio = textoOriginal
+    .replace(/(,\s*){2,}/g, ', ')      // Transforma ", , ," em apenas uma vírgula
+    .replace(/(\.\.\.\s*){2,}/g, '... ') // Transforma "... ... ..." em apenas uma reticência
+    .replace(/\s+/g, ' ')              // Remove espaços duplos que confundem o motor
+    .replace(/"/g, '')                 // Remove aspas duplas para não quebrar o comando shell
+    .trim();
+
+// 3. Agora sim, monta o comando com o texto limpo e os parâmetros corrigidos
+const cmdEdgeTTS = `edge-tts --voice "${voz}" --text "${textoParaAudio}" --write-media "${tempMp3}" --rate=-4% --volume=+0%`;
+
+// 4. Executa o comando...  
     try {
         await execPromise(cmdEdgeTTS, { timeout: 15000 });
         

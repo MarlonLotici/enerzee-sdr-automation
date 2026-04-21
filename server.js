@@ -16,6 +16,28 @@ const { processarLimpeza } = require('./2_clean');
 const { enriquecerLeadIndividual } = require('./3_enrich'); 
 const db = require('./database'); 
 
+const { Worker } = require('bullmq');
+const { redisConnection } = require('./queue');
+// Importe aqui a sua função que processa a IA (ajuste o nome para o que você usa hoje)
+const { processarMensagemIA } = require('./4_sdr'); 
+
+// === INICIA O WORKER DE MENSAGENS ===
+const workerMensagens = new Worker('FilaMensagensIA', async (job) => {
+    console.log(`⏳ [BULLMQ] Processando job ${job.id}: Mensagem de ${job.data.whatsapp_id}`);
+    
+    try {
+        // Chama o motor pesadão (Llama + TTS) de forma controlada
+        await processarMensagemIA(job.data.lead, job.data.mensagem);
+        console.log(`✅ [BULLMQ] Job ${job.id} finalizado com sucesso!`);
+    } catch (error) {
+        console.error(`❌ [BULLMQ] Erro no job ${job.id}:`, error.message);
+        throw error; // Lança o erro para o BullMQ tentar novamente
+    }
+}, { 
+    connection: redisConnection,
+    concurrency: 5 // Processa no máximo 5 leads ao mesmo tempo para não explodir a RAM
+});
+
 // 🚀 O NOVO MOTOR V12 (BAILEYS MULTI-TENANCY)
 let sdr = null;
 

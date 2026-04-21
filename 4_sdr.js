@@ -94,6 +94,17 @@ const together = new OpenAI({
 const MODELO_CEREBRO = "meta-llama/Llama-3.3-70B-Instruct-Turbo";
 const MODELO_VISAO = "meta-llama/Llama-3.2-11B-Vision-Instruct-Turbo";
 
+// === INÍCIO CONFIG REDIS & BULLMQ ===
+const { Queue, Worker } = require('bullmq');
+const Redis = require('ioredis');
+
+const redisConnection = new Redis(process.env.REDIS_URL || 'redis://127.0.0.1:6379', {
+    maxRetriesPerRequest: null
+});
+
+const filaMensagensIA = new Queue('FilaIA', { connection: redisConnection });
+// === FIM CONFIG REDIS & BULLMQ ===
+
 // --- TRAVA DE SEGURANÇA (MEMÓRIA VIVA) ---
 const leadsEmProcessamento = new Set();
 const mensagensEnviadasPelaIA = new Set(); // 🛡️ PASSO 1: A Memória Anti-Eco do Robô
@@ -820,7 +831,7 @@ async function filtrarEEnviarResposta(sock, remoteJid, resposta, historico, lead
     // Proteção extra contra IA "conversadeira" que escreve fora dos padrões
     resposta = resposta.replace(/est[aá]gio\s?\d/gi, '').trim();
     resposta = resposta.replace(/tag\s?[:]\s?\d/gi, '').trim();
-    
+    //--
  // ── 5. FATIADOR E SIMULADOR HUMANO DE DIGITAÇÃO ──────────────────────────
     const mensagensSplit = resposta
         .split('[QUEBRA]')
@@ -1224,26 +1235,35 @@ if (fromMe) {
     iaRespondendo.add(lead.whatsapp_id); // 🔒 TRANCA A PORTA
 
     try {
-        console.log(`🧠 [IA] Gerando resposta para ${lead.name}...`);
-        if (messageType !== 'audioMessage') await db.saveMessage(lead.whatsapp_id, 'user', texto, instanceId);
-        // 🎯 OPP #3: Atualiza temperatura quando lead responde pela primeira vez
+        console.log(`📦 [FILA] Enviando lead ${lead.name} para a fila industrial de IA.`);
+        
+        // 1. Salva a mensagem do usuário imediatamente para não perder contexto
+        if (messageType !== 'audioMessage') {
+            await db.saveMessage(lead.whatsapp_id, 'user', texto, instanceId);
+        }
+        // 2. Atualiza a temperatura do lead
         if (lead.lead_temperature === 'cold' || !lead.lead_temperature) {
             await supabase.from('leads').update({ lead_temperature: 'warm' }).eq('id', lead.id);
         }
-        const histRaw = await db.getHistory(lead.whatsapp_id, instanceId);
-        const historico = histRaw.map(m => ({ role: m.role, content: m.content }));
-        const instanceData = await getRegrasEmCache(instanceId);
-        
-        let resposta = await gerarRespostaIA(historico, lead, instanceData);
-        await filtrarEEnviarResposta(sock, remoteJid, resposta, historico, lead, instanceId);
 
-    } catch (erroNaResposta) {
-        console.error(`❌ [ERRO NA RESPOSTA IA] Falha ao gerar/enviar para ${lead.name}:`, erroNaResposta);
-    } finally {
-        // 🔓 DESTRANCA A PORTA: Deu certo ou deu erro, ele solta a trava aqui no final!
-        iaRespondendo.delete(lead.whatsapp_id); // ✅ Destranca usando o ID real
-        console.log(`🔓 [TRAVA LIBERADA] IA pronta para conversar com ${lead.name} novamente.`);
+        // 3. JOGA NA FILA DO REDIS (Delega o peso pro Worker)
+        await filaMensagensIA.add('gerar_resposta', {
+            leadId: lead.id,
+            whatsappId: lead.whatsapp_id,
+            instanceId: instanceId,
+            remoteJid: remoteJid
+        }, {
+            attempts: 3,           // Se o Llama cair, o sistema tenta de novo sozinho 3x
+            backoff: { type: 'exponential', delay: 5000 },
+            removeOnComplete: true // Mantém a memória do servidor limpa
+        });
+
+    } catch (erroFila) {
+        console.error(`❌ [ERRO FILA] Falha ao enfileirar ${lead.name}:`, erroFila);
+        iaRespondendo.delete(lead.whatsapp_id); // Solta a trava apenas se falhar ao enfileirar
     }
+    // OBS: O `finally` com iaRespondendo.delete foi removido daqui!
+    // A trava agora só será liberada quando o WORKER terminar de responder.
 
 } // <-- ÚNICO E EXATO FECHAMENTO DA FUNÇÃO processarMensagem
 
@@ -1718,6 +1738,49 @@ async function processarMensagemManual(sock, lead) {
         console.log(`🔓 [TRAVA RECUPERAÇÃO LIBERADA] ${lead.name} livre novamente.`);
     }
 }
+
+// ============================================================================
+// 🏭 WORKER DA FILA (A FÁBRICA INDUSTRIAL DE RESPOSTAS)
+// ============================================================================
+const workerIA = new Worker('FilaIA', async (job) => {
+    const { leadId, whatsappId, instanceId, remoteJid } = job.data;
+    console.log(`⚙️ [WORKER] Processando o job de IA para o WhatsApp ID: ${whatsappId}`);
+    
+    try {
+        // 1. Recupera os dados frescos do lead
+        const { data: lead } = await supabase.from('leads').select('*').eq('id', leadId).single();
+        if (!lead) throw new Error("Lead não encontrado no banco.");
+
+        // 2. Recupera o Socket (Baileys) do chip deste cliente específico
+        const instancia = sessions.get(instanceId);
+        if (!instancia || !instancia.ready) throw new Error("Socket do WhatsApp não está conectado.");
+
+        // 3. Monta o contexto pesado
+        const histRaw = await db.getHistory(whatsappId, instanceId);
+        const historico = histRaw.map(m => ({ role: m.role, content: m.content }));
+        const instanceData = await getRegrasEmCache(instanceId);
+
+        console.log(`🧠 [WORKER-IA] Acionando Llama 3.3 para ${lead.name}...`);
+        
+        // 4. Executa a IA e faz o disparo
+        let resposta = await gerarRespostaIA(historico, lead, instanceData);
+        await filtrarEEnviarResposta(instancia.sock, remoteJid, resposta, historico, lead, instanceId);
+
+    } catch (error) {
+        console.error(`❌ [WORKER-ERRO] Falha ao processar job ${job.id}:`, error.message);
+        throw error; // Força o BullMQ a tentar de novo (Retry)
+    } finally {
+        // 5. Destranca o cérebro deste lead para que ele possa receber novas mensagens
+        iaRespondendo.delete(whatsappId);
+        console.log(`🔓 [WORKER-TRAVA] IA pronta para ${whatsappId} novamente.`);
+    }
+}, { 
+    connection: redisConnection,
+    concurrency: 5 // ATENÇÃO: Limita o servidor a processar 5 IAs por vez. Impede o Out of Memory!
+});
+
+// Adiciona tratamento para não travar o log caso o Redis caia
+workerIA.on('error', err => console.error('❌ [REDIS WORKER ERROR]:', err));
 
 // 👇 Adicione esta variável de controle aqui fora
 
