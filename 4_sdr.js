@@ -1685,8 +1685,9 @@ const workerIA = new Worker('FilaIA', async (job) => {
             resposta = await objectionAgent.quebrarObjecao(historico, promptResolvido);
 
         } else {
+            // 👇 A CORREÇÃO ENTRA AQUI: Se for LIXO, manda o Closer lidar com o prompt já resolvido.
             console.log(`🧹 [WORKER-IA] Mensagem de baixo valor detectada. Acionando fallback leve...`);
-            resposta = await gerarRespostaIA(historico, lead, instanceData);
+            resposta = await closerAgent.gerarRespostaCloser(historico, lead, promptResolvido);
         }
 
         // 4.3. Filtra, Carimba no WPP e Envia

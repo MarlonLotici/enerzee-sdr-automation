@@ -5,14 +5,15 @@ const groq = new Groq({ apiKey: process.env.GROQ_API_KEY });
 async function analisarPerfil(ultimaMsg) {
     const prompt = `
     Você é um Profiler de Vendas B2B.
-    Leia a mensagem do lead e identifique o Perfil Comportamental e o Clima Emocional.
+    Leia a mensagem do lead e identifique internamente o Perfil Comportamental (pragmático, afável, analítico) e o Clima Emocional (curioso, irritado, apressado, neutro).
 
     MENSAGEM: "${ultimaMsg}"
 
-    SAÍDA EXIGIDA (Gere apenas um parágrafo curto instruindo o Closer, sem explicações extras):
-    1. Identifique se o lead é: PRAGMÁTICO (seco, direto), AFÁVEL (educado, usa emojis/rsrs) ou ANALÍTICO (faz perguntas lógicas).
-    2. Identifique o clima: CURIOSO, IRRITADO, APRESSADO ou NEUTRO.
-    3. Dê a instrução de tom de voz. Exemplo: "Lead pragmático e apressado. Responda em uma linha. Corte cordialidades."
+    [SAÍDA EXIGIDA - REGRA ABSOLUTA]
+    NÃO use números (1., 2., 3.). NÃO explique os motivos da sua análise.
+    Gere APENAS UMA FRASE curta de instrução direta para o tom de voz do Closer.
+    
+    Exemplo de saída perfeita: "Lead pragmático e apressado. Responda em uma única linha direta, corte cordialidades e vá direto ao número."
     `;
 
     try {

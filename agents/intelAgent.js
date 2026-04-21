@@ -23,12 +23,14 @@ async function analisarEmpresa(historico, lead) {
     [A REALIDADE NO CHAT AGORA]
     ${historicoRecente || "Nenhuma conversa ainda (Primeiro contato)."}
 
-    [SUA TAREFA]
-    1. CONGRUÊNCIA: O que ele diz no chat bate com o CNPJ? (Ex: o CNPJ diz padaria, mas ele falou de máquinas de solda?).
-    2. OURO TÁTICO: Ele revelou algum detalhe operacional? (Ex: turnos, equipamentos pesados, filiais, contas altas).
-    3. GERE O BRIEFING: Escreva no máximo 50 palavras instruindo o Vendedor sobre como se posicionar baseando-se nessa fusão de dados. Seja cirúrgico.
+    [INSTRUÇÕES DE ANÁLISE INTERNA]
+    Mentalmente, avalie a congruência (O chat bate com o CNPJ?) e busque Ouro Tático (turnos, equipamentos pesados, contas altas).
 
-    RESPOSTA ESTRITAMENTE EM PORTUGUÊS (Direto ao ponto, formato de ordem militar):
+    [SAÍDA EXIGIDA - REGRA ABSOLUTA]
+    NÃO escreva tópicos. NÃO escreva as palavras "Congruência" ou "Ouro Tático". NÃO explique seu raciocínio.
+    Gere ÚNICA e EXCLUSIVAMENTE uma frase (máx 30 palavras) instruindo o vendedor.
+    
+    Exemplo de saída perfeita: "Lead confirmou uso intensivo de freezers. Aumente a urgência sobre o gasto contínuo de motores 24h e ignore a objeção de tempo."
     `;
 
     try {
