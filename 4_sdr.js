@@ -19,6 +19,7 @@ const closerAgent = require('./agents/closerAgent');
 const intelAgent = require('./agents/intelAgent');
 const profilerAgent = require('./agents/profilerAgent');
 const objectionAgent = require('./agents/objectionAgent');
+const auditorAgent = require('./agents/auditorAgent');
 // Podes criar o objectionAgent.js depois e importar aqui
 const motoresEmExecucao = new Set(); // 🛡️ Impede que o mesmo chip ligue dois loops infinitos
 const MAPA_CONCESSIONARIAS = {
@@ -1523,6 +1524,57 @@ async function loopRecuperacaoConversas() {
     }
 }
 
+// ============================================================================
+// 📋 MOTOR DE AUDITORIA (POST-MORTEM QA)
+// ============================================================================
+let auditorEmExecucao = false;
+
+async function loopAuditor() {
+    if (auditorEmExecucao) return;
+    auditorEmExecucao = true;
+
+    try {
+        // Busca 5 leads que já terminaram o funil (booked ou dead) e ainda não foram auditados
+        const { data: leadsParaAuditar } = await supabase
+            .from('leads')
+            .select('id, name, whatsapp_id, instance_id, status, niche')
+            .in('status', ['booked', 'dead', 'invalid'])
+            .eq('is_audited', false)
+            .limit(5);
+
+        if (leadsParaAuditar && leadsParaAuditar.length > 0) {
+            console.log(`📋 [QA AUDITOR] Encontrados ${leadsParaAuditar.length} leads finalizados. Iniciando análise crítica...`);
+
+            for (const lead of leadsParaAuditar) {
+                const histRaw = await db.getHistory(lead.whatsapp_id, lead.instance_id);
+                
+                // Só audita se tiver havido conversa real (evita auditar leads que nem responderam)
+                if (histRaw && histRaw.length > 2) {
+                    const historico = histRaw.map(m => ({ role: m.role, content: m.content }));
+                    
+                    const relatorio = await auditorAgent.gerarAuditoria(historico, lead);
+                    
+                    await supabase.from('leads').update({ 
+                        audit_report: relatorio, 
+                        is_audited: true 
+                    }).eq('id', lead.id);
+
+                    console.log(`✅ [QA AUDITOR] Relatório gerado para ${lead.name}.`);
+                } else {
+                    // Sem conversa suficiente, apenas marca como auditado para sair da fila
+                    await supabase.from('leads').update({ is_audited: true, audit_report: "Sem interação suficiente." }).eq('id', lead.id);
+                }
+            }
+        }
+    } catch (erroAuditor) {
+        console.error("❌ [QA AUDITOR] Erro na varredura:", erroAuditor.message);
+    } finally {
+        auditorEmExecucao = false;
+        // Roda a cada 2 horas (7200000 ms) para não gastar tokens à toa
+        setTimeout(loopAuditor, 7200000); 
+    }
+}
+
 async function processarMensagemManual(sock, lead) {
     const remoteJid = lead.whatsapp_id;
     const instanceId = lead.instance_id;
@@ -1663,6 +1715,10 @@ let loopIniciado = false;
 module.exports = {
     // 👇 Recebe a porta de comunicação (io) e o Alarme (sdrEvents)
     initMultiTenancy: async (io, sdrEvents) => {
+
+        
+
+        
         
         // 🚀 INJEÇÃO DINÂMICA DO BAILEYS (Resolve o Crash ESM)
         const baileys = await import('@whiskeysockets/baileys');
@@ -1698,7 +1754,8 @@ module.exports = {
         if (!loopIniciado) {
             loopIniciado = true;
             loopRecuperacaoConversas(); 
-
+            loopAuditor();
+            
             // ⏰ VIGIA NOTURNO: Varredura de segurança a cada 30 minutos
             setInterval(() => {
                 console.log("⏰ [VIGIA] Varredura de segurança ativada...");
