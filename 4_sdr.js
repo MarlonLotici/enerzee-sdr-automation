@@ -14,6 +14,9 @@ const db = require('./database');
 const { useSupabaseAuthState } = require('./auth_adapter');
 const { gerarAudioTTS } = require('./tts');
 const { createClient } = require('@supabase/supabase-js');
+const routerAgent = require('./agents/routerAgent');
+const closerAgent = require('./agents/closerAgent');
+// Podes criar o objectionAgent.js depois e importar aqui
 const motoresEmExecucao = new Set(); // 🛡️ Impede que o mesmo chip ligue dois loops infinitos
 const MAPA_CONCESSIONARIAS = {
     'MT': 'Energisa', 'MS': 'Energisa', 'SC': 'Celesc', 'PR': 'Copel',
@@ -1763,10 +1766,46 @@ const workerIA = new Worker('FilaIA', async (job) => {
         const historico = histRaw.map(m => ({ role: m.role, content: m.content }));
         const instanceData = await getRegrasEmCache(instanceId);
 
-        console.log(`🧠 [WORKER-IA] Acionando Llama 3.3 para ${lead.name}...`);
+        console.log(`🧠 [WORKER-IA] Acionando Roteador para a mensagem de ${lead.name}...`);
         
-        // 4. Executa a IA e faz o disparo
-        let resposta = await gerarRespostaIA(historico, lead, instanceData);
+        // 4.1. O Maestro Roteador entra em cena para classificar a intenção
+        const ultimaMsg = historico[historico.length - 1].content;
+        const intencao = await routerAgent.classificarMensagem(ultimaMsg);
+
+        console.log(`🎯 [ROTEADOR] A intenção do lead foi classificada como: ${intencao}`);
+
+        let resposta;
+        
+        // 4.2. Delegação aos Especialistas (Estratégia Híbrida)
+        if (intencao === 'COMPRA' || intencao === 'DUVIDA') {
+            
+            // INJEÇÃO DA PERSONALIDADE: Pega o "system_prompt" da base de dados e injeta os dados reais.
+            // Nota: Para isto funcionar, precisamos extrair a lógica de injeção que estava presa 
+            // dentro da antiga gerarRespostaIA. Vamos buscar o prompt da BD e resolvê-lo aqui:
+            let userId = instanceData?.user_id; 
+            if (!userId) {
+                const { data: inst } = await supabase.from('instances').select('user_id').eq('id', lead.instance_id).maybeSingle();
+                userId = inst?.user_id;
+            }
+            
+            const { data: brain } = await supabase.from('tenant_prompts').select('system_prompt').eq('user_id', userId).maybeSingle();
+            let promptBase = brain?.system_prompt || "Responda como um consultor da Enerzee.";
+            
+            // Injeções básicas para o Closer (podes adicionar mais depois)
+            const agentName = instanceData?.agent_name || "Marlon";
+            const promptResolvido = promptBase.replaceAll('${agentName}', agentName);
+            
+            console.log(`🧠 [WORKER-IA] Acionando Closer Socrático para ${lead.name}...`);
+            resposta = await closerAgent.gerarRespostaCloser(historico, lead, promptResolvido);
+            
+        } else {
+            // Se for OBJECAO ou LIXO, usamos a velha e fiável gerarRespostaIA como "fallback"
+            // (até criarmos um objectionAgent.js dedicado).
+            console.log(`🧠 [WORKER-IA] Acionando IA Monolítica (Fallback) para ${lead.name}...`);
+            resposta = await gerarRespostaIA(historico, lead, instanceData);
+        }
+
+        // 4.3. Filtra, Carimba no WPP e Envia
         await filtrarEEnviarResposta(instancia.sock, remoteJid, resposta, historico, lead, instanceId);
 
     } catch (error) {
