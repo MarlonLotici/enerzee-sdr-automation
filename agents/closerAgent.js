@@ -26,6 +26,12 @@ A SUA ÚNICA MISSÃO AGORA É O FECHAMENTO (Estágio 3/4) USANDO A TÁTICA ABAIX
 2. Exponha uma "ferida" estratégica sobre a taxa de distribuição.
 3. Termine forçando o lead a aceitar uma chamada de 10 minutos amanhã (Manhã ou Tarde).
 4. MANTENHA as regras absolutas de formato do Supabase (Máx 2 balões, tag [ESTAGIO], tag [CLIMA], e terminar com '?').
+[REGRAS ABSOLUTAS DE ALTA PERFORMANCE - CUMPRA OU FALHE]
+    1. TAMANHO MÁXIMO: Suas respostas não podem passar de 35 palavras. Seja direto, seco e profissional.
+    2. FECHAMENTO IMEDIATO: Se o cliente disse "Sim", "Pode ser amanhã", ou concordou em avançar, PARE DE EXPLICAR. 
+       Diga apenas que o próximo passo é uma reunião rápida e envie OBRIGATORIAMENTE o link:  https://calendly.com/marlonlotici6/30min
+       Quando enviar o link, adicione a tag [ESTAGIO:4] no final da mensagem.
+    3. NUNCA faça duas perguntas na mesma mensagem.
 `;
 
     try {

@@ -2,20 +2,30 @@
 const Groq = require('groq-sdk');
 const groq = new Groq({ apiKey: process.env.GROQ_API_KEY });
 
-// Usamos um modelo rápido e barato apenas para triagem
 const MODELO_ROTEADOR = "llama-3.1-8b-instant";
-async function classificarMensagem(ultimaMensagemLead) {
-    const prompt = `
-    És o supervisor de tráfego de um CRM.
-    Lê a mensagem do cliente e classifica-a com UMA das seguintes tags (apenas a tag, sem texto adicional):
-    
-    [OBJECAO] - O cliente diz que é caro, que não tem tempo, ou que já tem energia solar.
-    [DUVIDA] - O cliente faz uma pergunta sobre como funciona, prazos, ou pede informações técnicas.
-    [COMPRA] - O cliente demonstra interesse claro, pergunta o próximo passo, envia a fatura ou aceita ouvir a proposta.
-    [LIXO] - Mensagens curtas sem intenção ("ok", "bom dia", "tá").
 
-    Mensagem: "${ultimaMensagemLead}"
-    `;
+async function classificarMensagem(ultimaMensagemLead) {
+    // 🛡️ Blindagem: se vier vazio, devolve LIXO sem gastar token
+    if (!ultimaMensagemLead || ultimaMensagemLead.trim().length === 0) {
+        return 'LIXO';
+    }
+
+    const prompt = `
+Você é um classificador de intenções ultra-rápido de vendas B2B no WhatsApp.
+Leia a mensagem do cliente e classifique ESTRITAMENTE em UMA destas 4 opções:
+
+COMPRA - Cliente demonstra interesse claro, concorda em avançar, aceita reunião, diz "sim", "pode ser", "amanhã", "quero", "fechado", "vamos", escolhe horário.
+
+DUVIDA - Cliente faz perguntas genuínas sobre o produto/processo: "como funciona?", "o que é?", "pq tá falando isso?", "quem é você?", "de onde veio meu número?", "do que se trata?", pergunta por valor, prazo, segurança.
+
+OBJECAO - Cliente resiste ativamente: "tá caro", "sem tempo", "é golpe?", "vou pensar", "não quero", "já tenho proposta", "tô sem grana", "não é o momento", "manda por email".
+
+LIXO - Mensagens sem conteúdo acionável: "oi", "opa", "ok", "legal", "entendi", "tá", emojis isolados, monossílabos sem contexto.
+
+MENSAGEM DO CLIENTE: "${ultimaMensagemLead}"
+
+Responda APENAS com a palavra da classificação em maiúsculas. Sem pontuação, sem explicação.
+    `.trim();
 
     try {
         const res = await groq.chat.completions.create({
@@ -24,16 +34,23 @@ async function classificarMensagem(ultimaMensagemLead) {
             temperature: 0.1,
             max_tokens: 10,
         });
-        
+
         const resposta = res.choices[0].message.content.trim().toUpperCase();
-        
-        if (resposta.includes('OBJECAO')) return 'OBJECAO';
-        if (resposta.includes('DUVIDA')) return 'DUVIDA';
+
+        // Ordem importa: checa COMPRA antes porque "COMPRA" não contém outras palavras,
+        // mas se a LLM devolver algo tipo "É COMPRA", pega certo.
         if (resposta.includes('COMPRA')) return 'COMPRA';
-        return 'LIXO'; // Fallback padrão
+        if (resposta.includes('OBJECAO') || resposta.includes('OBJEÇÃO')) return 'OBJECAO';
+        if (resposta.includes('DUVIDA') || resposta.includes('DÚVIDA')) return 'DUVIDA';
+        if (resposta.includes('LIXO')) return 'LIXO';
+
+        // Se a LLM devolveu algo inesperado, default seguro é DUVIDA
+        // (manda pro Closer, que é mais educado que tratar como lixo)
+        console.warn(`⚠️ [ROTEADOR] Resposta inesperada da LLM: "${resposta}". Fallback → DUVIDA`);
+        return 'DUVIDA';
     } catch (error) {
         console.error("❌ Erro no Roteador:", error.message);
-        return 'DUVIDA'; // Em caso de falha, assume que é dúvida para não forçar vendas
+        return 'DUVIDA'; // Em falha de API, assume dúvida (não ignora o lead)
     }
 }
 
