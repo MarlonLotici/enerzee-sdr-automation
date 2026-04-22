@@ -396,6 +396,12 @@ async function resolverPromptCompleto(promptBase, contextoLead, instanceData, hi
 
     // --- 3. Estratégia tática ---
     const ancoraConta = calcularAncoraDinamica(contextoLead);
+    // 🧮 Pré-computa a economia pra não depender da LLM fazer matemática
+const valorAncoraNumerico = parseInt(ancoraConta.replace(/\D/g, '')) || 700;
+const economiaMensal = Math.round(valorAncoraNumerico * (percentualReal || 0.20));
+const economiaAnual = economiaMensal * 12;
+const economiaMensalFormatada = `R$ ${economiaMensal.toLocaleString('pt-BR')}`;
+const economiaAnualFormatada = `R$ ${economiaAnual.toLocaleString('pt-BR')}`;
     const isBigFish = (contextoLead.capital_social_numeric > 500000);
     const perfilComportamental = isBigFish
         ? "ARQUÉTIPO: O BANQUEIRO DE INVESTIMENTOS. Tom: Direto, focado em redução de OPEX e Zero CAPEX."
@@ -456,7 +462,11 @@ async function resolverPromptCompleto(promptBase, contextoLead, instanceData, hi
         .replaceAll('${saudacaoTempo}', saudacaoTempo)
         .replaceAll('${ancoragemContexto}', ancoragemContexto)
         .replaceAll('${raioXDoLead}', raioXDoLead)
-        .replaceAll('${perfilEmocional}', perfilEmocional);
+        .replaceAll('${perfilEmocional}', perfilEmocional)
+        .replaceAll('${economiaMensal}', economiaMensalFormatada)      // ← NOVO
+        .replaceAll('${economiaAnual}', economiaAnualFormatada);       // ← NOVO
+        ;
+         
 
     return promptFinal;
 }
