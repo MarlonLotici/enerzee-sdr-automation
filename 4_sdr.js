@@ -789,20 +789,29 @@ async function enviarAudioTTS(sock, remoteJid, texto, lead, instanceId) {
 // e processarMensagemManual. Toda lógica de áudio e envio vive aqui.
 // ============================================================================
 async function filtrarEEnviarResposta(sock, remoteJid, resposta, historico, lead, instanceId) {
-    if (!resposta) return;
+    if (!resposta) {
+        console.warn(`⚠️ [FILTRO] Resposta NULA chegou pro envio. Lead: ${lead.name}`);
+        return;
+    }
 
-    // ── 1. LIMPEZA TOTAL DE TAGS (NÃO DEIXA VAZAR NADA) ──
+    // 🔍 LOG DE DIAGNÓSTICO: mostra o que a LLM gerou
+    console.log(`📝 [FILTRO] Resposta RAW da LLM (${resposta.length} chars): "${resposta.substring(0, 200)}..."`);
+
+    // ── 1. LIMPEZA TOTAL DE TAGS ──
     const regexTags = /\[(ESTAGIO|CLIMA|RAIO-X|PERFIL|ROBO|CONTADOR|ENGANO|GATEKEEPER|AGENDAMENTO_MANUAL)[^\]]*\]/gi;
-    
-    // Captura os dados antes de apagar o texto
+
     const matchEstagio = /\[?EST[AÁ]GIO:?\s?(\d)\]?/gi.exec(resposta);
     const matchClima = /\[?CLIMA:?\s?([a-zA-Z_]+)\]?/gi.exec(resposta);
     const matchManual = /\[?AGENDAMENTO_MANUAL\]?/gi.exec(resposta);
 
-    // Limpa o texto que vai para o cliente
     let textoLimpo = resposta.replace(regexTags, '').replace(/est[aá]gio\s?\d/gi, '').trim();
-    
-    if (textoLimpo.length === 0) return;
+
+    if (textoLimpo.length === 0) {
+        console.error(`❌ [FILTRO] Texto ficou VAZIO após limpeza de tags! Resposta original: "${resposta}"`);
+        return;
+    }
+
+    console.log(`✅ [FILTRO] Texto limpo pronto pra envio (${textoLimpo.length} chars): "${textoLimpo.substring(0, 150)}..."`);
 
     // ── 2. ATUALIZAÇÃO DE STATUS NO BANCO ──
     let updates = {};
@@ -814,16 +823,29 @@ async function filtrarEEnviarResposta(sock, remoteJid, resposta, historico, lead
     }
     if (Object.keys(updates).length > 0) {
         await supabase.from('leads').update(updates).eq('id', lead.id);
+        console.log(`📊 [FILTRO] Lead atualizado:`, updates);
     }
 
     // ── 3. ENVIO FATIADO ──
     const mensagensSplit = textoLimpo.split('[QUEBRA]').map(t => t.trim()).filter(t => t.length > 0);
-    
-    for (const trecho of mensagensSplit) {
-        await sock.sendPresenceUpdate('composing', remoteJid);
-        await delay(Math.min(trecho.length * 60 + 3000, 10000));
-        await enviarMensagemIA(sock, remoteJid, { text: trecho });
-        await db.saveMessage(lead.whatsapp_id, 'assistant', trecho, instanceId);
+    console.log(`📤 [FILTRO] Enviando ${mensagensSplit.length} balão(ões) para ${lead.name}...`);
+
+    for (let i = 0; i < mensagensSplit.length; i++) {
+        const trecho = mensagensSplit[i];
+        try {
+            await sock.sendPresenceUpdate('composing', remoteJid);
+            await delay(Math.min(trecho.length * 60 + 3000, 10000));
+            const enviado = await enviarMensagemIA(sock, remoteJid, { text: trecho });
+            
+            if (enviado) {
+                console.log(`✅ [ENVIO ${i + 1}/${mensagensSplit.length}] Balão entregue: "${trecho.substring(0, 80)}..."`);
+                await db.saveMessage(lead.whatsapp_id, 'assistant', trecho, instanceId);
+            } else {
+                console.error(`❌ [ENVIO ${i + 1}/${mensagensSplit.length}] FALHOU ao entregar: "${trecho.substring(0, 80)}..."`);
+            }
+        } catch (errEnvio) {
+            console.error(`❌ [ENVIO ${i + 1}] Exception:`, errEnvio.message);
+        }
     }
 }
 
@@ -1691,20 +1713,33 @@ const workerIA = new Worker('FilaIA', async (job) => {
         const historico = histRaw.map(m => ({ role: m.role, content: m.content }));
         const instanceData = await getRegrasEmCache(instanceId);
 
-        // 🚀 Executa os 3 agentes EM PARALELO (ganho de ~2 segundos)
-console.log(`🧠 [WORKER-IA] Despachando Router + Intel + Profiler em paralelo para ${lead.name}...`);
-const ultimaMsg = historico[historico.length - 1].content;
+// 🚀 Executa os 3 agentes EM PARALELO com SKIP INTELIGENTE
+        console.log(`🧠 [WORKER-IA] Despachando Router + Intel + Profiler em paralelo para ${lead.name}...`);
+        const ultimaMsg = historico[historico.length - 1].content;
 
-const [intencao, raioXDoLead, perfilEmocional] = await Promise.all([
-    routerAgent.classificarMensagem(ultimaMsg),
-    intelAgent.analisarEmpresa(historico, lead),
-    profilerAgent.analisarPerfil(ultimaMsg)
-]);
+        // 🎯 Mensagens de 1-2 palavras ("oi", "ok", "sim") não geram análise útil
+        // e fazem o Intel alucinar. Então pulamos esses 2 agentes e economizamos ~1.5s + evitamos invenção.
+        const msgCurta = ultimaMsg.trim().split(/\s+/).length <= 2;
 
-console.log(`🎯 [ROTEADOR] Intenção: ${intencao}`);
-console.log(`📊 [RAIO-X]: ${raioXDoLead}`);
-console.log(`🧠 [PROFILER]: ${perfilEmocional}`);
+        const promessas = [
+            routerAgent.classificarMensagem(ultimaMsg),
+            msgCurta
+                ? Promise.resolve("Conversa muito curta para análise. Seguir Constituição padrão.")
+                : intelAgent.analisarEmpresa(historico, lead),
+            msgCurta
+                ? Promise.resolve("Perfil neutro — mensagem curta sem carga emocional clara.")
+                : profilerAgent.analisarPerfil(ultimaMsg)
+        ];
 
+        const [intencao, raioXDoLead, perfilEmocional] = await Promise.all(promessas);
+
+        if (msgCurta) {
+            console.log(`⚡ [SKIP] Mensagem curta ("${ultimaMsg.substring(0, 30)}"). Intel + Profiler pulados.`);
+        }
+        console.log(`🎯 [ROTEADOR] Intenção: ${intencao}`);
+        console.log(`📊 [RAIO-X]: ${raioXDoLead}`);
+        console.log(`🧠 [PROFILER]: ${perfilEmocional}`);
+        
         // --- BUSCA DA CONSTITUIÇÃO NO BANCO ---
 // 🛡️ Busca user_id com fallback em cascata (instanceData → lead.instance_id → instanceId do job)
 let userId = instanceData?.user_id;

@@ -3,48 +3,61 @@ const Groq = require('groq-sdk');
 const groq = new Groq({ apiKey: process.env.GROQ_API_KEY });
 
 async function analisarEmpresa(historico, lead) {
-    // Pega apenas as últimas 6 mensagens para não sobrecarregar o modelo rápido
-    // e focar no que é relevante AGORA.
+    // 🛡️ Blindagem 1: histórico muito curto = não tem o que analisar
+    const mensagensUsuario = historico.filter(m => m.role === 'user');
+    if (mensagensUsuario.length < 2) {
+        return `Conversa muito inicial. Sem dados comportamentais ainda. Mantenha abordagem padrão da Constituição.`;
+    }
+
+    // 🛡️ Blindagem 2: usa só últimas 6 mensagens (foco no presente)
     const historicoRecente = historico
         .slice(-6)
         .map(m => `${m.role === 'user' ? 'Cliente' : 'Vendedor'}: ${m.content}`)
         .join('\n');
 
     const prompt = `
-    Você é um Analista de Inteligência B2B (Data Enrichment). 
-    Sua missão é cruzar os dados frios e oficiais do CNPJ com o que o cliente REALMENTE está dizendo no WhatsApp agora, gerando um BRIEFING TÁTICO para o vendedor (Closer).
+Você é um Analista de Inteligência B2B ULTRA RIGOROSO. Sua função é cruzar dados de CNPJ com o que o lead REALMENTE DISSE no chat.
 
-    [DADOS OFICIAIS DO CRM]
-    - Empresa: ${lead.name}
-    - Nicho: ${lead.niche}
-    - Estado: ${lead.estado}
-    - Capital Social: R$ ${lead.capital_social_numeric || 0}
+REGRA ABSOLUTA DE HONESTIDADE:
+- Você NÃO PODE inventar fatos. Se o lead não mencionou algo, NÃO ESCREVA que ele mencionou.
+- Se a conversa não tem sinais táticos claros, responda APENAS: "Sem sinais táticos relevantes. Seguir Constituição padrão."
+- É MELHOR dizer "sem dados" do que inventar.
 
-    [A REALIDADE NO CHAT AGORA]
-    ${historicoRecente || "Nenhuma conversa ainda (Primeiro contato)."}
+[DADOS OFICIAIS DO CRM]
+- Empresa: ${lead.name || 'não informado'}
+- Nicho: ${lead.niche || 'não informado'}
+- Estado: ${lead.estado || 'não informado'}
+- Capital Social: R$ ${lead.capital_social_numeric || 0}
 
-    [INSTRUÇÕES DE ANÁLISE INTERNA]
-    Mentalmente, avalie a congruência (O chat bate com o CNPJ?) e busque Ouro Tático (turnos, equipamentos pesados, contas altas).
+[O QUE O LEAD REALMENTE ESCREVEU]
+${historicoRecente}
 
-    [SAÍDA EXIGIDA - REGRA ABSOLUTA]
-    NÃO escreva tópicos. NÃO escreva as palavras "Congruência" ou "Ouro Tático". NÃO explique seu raciocínio.
-    Gere ÚNICA e EXCLUSIVAMENTE uma frase (máx 30 palavras) instruindo o vendedor.
-    
-    Exemplo de saída perfeita: "Lead confirmou uso intensivo de freezers. Aumente a urgência sobre o gasto contínuo de motores 24h e ignore a objeção de tempo."
-    `;
+[ANÁLISE INTERNA OBRIGATÓRIA]
+Antes de responder, pergunte a si mesmo:
+1. O lead mencionou explicitamente algum equipamento, valor, turno, problema, concorrente?
+2. O lead expressou alguma dor específica (conta alta, desperdício)?
+3. Há alguma congruência ou incongruência entre o CNPJ e a fala dele?
+
+Se a resposta pra TODAS as 3 for "não", responda:
+"Sem sinais táticos relevantes. Seguir Constituição padrão."
+
+Se houver sinal REAL e EXPLÍCITO (citado pelo lead), gere UMA frase de até 25 palavras com a instrução tática.
+
+[SAÍDA EXIGIDA]
+Uma única frase curta. Sem tópicos, sem explicação, sem inventar.
+    `.trim();
 
     try {
         const res = await groq.chat.completions.create({
             messages: [{ role: "system", content: prompt }],
-            model: "llama-3.1-8b-instant", // Rápido, leve e analítico
-            temperature: 0.1, // Quase zero alucinação, foco em fatos
-            max_tokens: 120,
+            model: "llama-3.1-8b-instant",
+            temperature: 0,  // 🎯 ZERO criatividade — evita alucinação
+            max_tokens: 80,
         });
         return res.choices[0].message.content.trim();
     } catch (e) {
         console.error("❌ Erro no Intel Agent:", e.message);
-        // Fallback blindado caso a API falhe
-        return `Aborde como uma empresa do ramo de ${lead.niche || 'varejo'}. Foco em redução de custos operacionais.`;
+        return `Sem dados adicionais. Seguir Constituição padrão.`;
     }
 }
 
