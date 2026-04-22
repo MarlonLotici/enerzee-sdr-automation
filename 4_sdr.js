@@ -266,16 +266,30 @@ function analisarIntencaoRegex(texto) {
 async function getRegrasEmCache(instanceId) {
     const agora = Date.now();
     const cache = cacheRegrasInstancia.get(instanceId);
-    
-    // Se existe na memória e tem menos de 30 minutos (1800000 ms), usa a RAM!
+
     if (cache && (agora - cache.timestamp < 1800000)) {
         return cache.dados;
     }
-    
-    // Se não tem na memória ou o tempo expirou, vai no banco de dados buscar
+
     const regrasDoBanco = await db.getInstanceRules(instanceId);
+
+    // 🛡️ Blindagem: se o db.getInstanceRules não trouxer user_id, busca e injeta
+    if (regrasDoBanco && !regrasDoBanco.user_id) {
+        const { data: inst } = await supabase
+            .from('instances')
+            .select('user_id, agent_name, company_name')
+            .eq('id', instanceId)
+            .maybeSingle();
+
+        if (inst) {
+            regrasDoBanco.user_id = inst.user_id;
+            regrasDoBanco.agent_name = regrasDoBanco.agent_name || inst.agent_name;
+            regrasDoBanco.company_name = regrasDoBanco.company_name || inst.company_name;
+            console.log(`🔧 [CACHE] Enriquecendo instanceData com user_id para chip ${instanceId}`);
+        }
+    }
+
     if (regrasDoBanco) {
-        // Salva na RAM com a hora exata da consulta
         cacheRegrasInstancia.set(instanceId, { dados: regrasDoBanco, timestamp: agora });
     }
     return regrasDoBanco;
@@ -1677,26 +1691,48 @@ const workerIA = new Worker('FilaIA', async (job) => {
         const historico = histRaw.map(m => ({ role: m.role, content: m.content }));
         const instanceData = await getRegrasEmCache(instanceId);
 
-        console.log(`🧠 [WORKER-IA] Acionando Roteador para a mensagem de ${lead.name}...`);
-        const ultimaMsg = historico[historico.length - 1].content;
-        const intencao = await routerAgent.classificarMensagem(ultimaMsg);
-        console.log(`🎯 [ROTEADOR] Intenção: ${intencao}`);
+        // 🚀 Executa os 3 agentes EM PARALELO (ganho de ~2 segundos)
+console.log(`🧠 [WORKER-IA] Despachando Router + Intel + Profiler em paralelo para ${lead.name}...`);
+const ultimaMsg = historico[historico.length - 1].content;
 
-        // === THE INTEL AGENT ===
-        console.log(`🕵️ [WORKER-IA] Gerando Raio-X cruzando CNPJ e Histórico...`);
-        const raioXDoLead = await intelAgent.analisarEmpresa(historico, lead);
-        console.log(`📊 [RAIO-X GERADO]: ${raioXDoLead}`);
+const [intencao, raioXDoLead, perfilEmocional] = await Promise.all([
+    routerAgent.classificarMensagem(ultimaMsg),
+    intelAgent.analisarEmpresa(historico, lead),
+    profilerAgent.analisarPerfil(ultimaMsg)
+]);
 
-        // === THE PROFILER AGENT ===
-        console.log(`🎭 [WORKER-IA] Lendo o estado mental do lead...`);
-        const perfilEmocional = await profilerAgent.analisarPerfil(ultimaMsg);
-        console.log(`🧠 [PROFILER]: ${perfilEmocional}`);
+console.log(`🎯 [ROTEADOR] Intenção: ${intencao}`);
+console.log(`📊 [RAIO-X]: ${raioXDoLead}`);
+console.log(`🧠 [PROFILER]: ${perfilEmocional}`);
 
         // --- BUSCA DA CONSTITUIÇÃO NO BANCO ---
+// 🛡️ Busca user_id com fallback em cascata (instanceData → lead.instance_id → instanceId do job)
 let userId = instanceData?.user_id;
+
 if (!userId) {
-    const { data: inst } = await supabase.from('instances').select('user_id').eq('id', lead.instance_id).maybeSingle();
-    userId = inst?.user_id;
+    // Prioriza SEMPRE o instanceId do job (sempre válido, veio do Baileys)
+    const instanceIdParaBuscar = instanceId || lead.instance_id;
+    
+    if (instanceIdParaBuscar) {
+        const { data: inst } = await supabase
+            .from('instances')
+            .select('user_id')
+            .eq('id', instanceIdParaBuscar)
+            .maybeSingle();
+        userId = inst?.user_id;
+
+        // 🔗 Já aproveita e amarra o lead ao chip (corrige leads órfãos)
+        if (userId && lead.instance_id !== instanceIdParaBuscar) {
+            await supabase.from('leads').update({ instance_id: instanceIdParaBuscar }).eq('id', lead.id);
+            lead.instance_id = instanceIdParaBuscar;
+            console.log(`🔗 [WORKER] Lead ${lead.name} vinculado ao chip ${instanceIdParaBuscar}`);
+        }
+    }
+}
+
+if (!userId) {
+    console.error(`❌ [WORKER] user_id não encontrado para lead ${lead.name} (instance_id: ${lead.instance_id}, job instanceId: ${instanceId}). Abortando.`);
+    return;
 }
 
 const { data: brain } = await supabase.from('tenant_prompts').select('system_prompt').eq('user_id', userId).maybeSingle();
