@@ -353,79 +353,78 @@ function podarHistorico(historico) {
     return resultado;
 }
  
-
 // ============================================================================
-// 🧠 NÚCLEO IA: "THE ARCHITECT" - STATE OF THE ART SDR V3.0 (MULTI-TENANT REAL)
+// 🧠 RESOLVEDOR UNIVERSAL DE PROMPT — fonte única de verdade
+// Usado por: gerarRespostaIA, Worker da fila, e futuras recuperações.
 // ============================================================================
-
-async function gerarRespostaIA(historico, contextoLead, instanceData) {
-    // 1. Busca o Dono da Conta (user_id) com dupla checagem de segurança
-    let userId = instanceData?.user_id; 
-    if (!userId) {
-        const { data: inst } = await supabase.from('instances').select('user_id').eq('id', contextoLead.instance_id).maybeSingle();
-        userId = inst?.user_id;
-    }
-
-    if (!userId) {
-        console.error("❌ ERRO FATAL: user_id não encontrado. Impossível buscar o prompt.");
+async function resolverPromptCompleto(promptBase, contextoLead, instanceData, historico = [], extras = {}) {
+    // 🛡️ Blindagem básica
+    if (!promptBase || promptBase.trim().length < 50) {
+        console.error("❌ [RESOLVER] Prompt base vazio ou muito curto.");
         return null;
     }
 
-    // 2. Busca o Cérebro Centralizado (1 prompt para todos os chips do usuário)
-    const { data: brain } = await supabase
-        .from('tenant_prompts')
-        .select('system_prompt')
-        .eq('user_id', userId)
-        .maybeSingle();
-        
-    let promptBase = brain?.system_prompt;
-
-    if (!promptBase || promptBase.trim().length < 100) {
-        console.error(`❌ ERRO FATAL: Prompt não configurado na tabela tenant_prompts para o usuário: ${userId}`);
-        return null; 
-    }
-
-    // 3. Preparação das Variáveis de Contexto
-    const concessionariaLocal = MAPA_CONCESSIONARIAS[contextoLead.estado] || 'concessionária de energia';
-    const nomeLead = (contextoLead.dono && typeof contextoLead.dono === 'string') 
-        ? contextoLead.dono.split(' ')[0] 
-        : (contextoLead.name || "Gestor");
-    const nomeEmpresa = (contextoLead.name || "sua empresa").replace(/\s(LTDA|ME|EIRELI|S\.A|LIMITED)\b/gi, '').trim();
-    const bairroLead = contextoLead.bairro || "sua região";
-    
-    const reversaoJaTentada = contextoLead.objection_reversed 
-        ? '\n\nAVISO CRÍTICO: Este lead já recebeu UMA tentativa de reversão de objeção. Se recusar novamente, encerre. PROIBIDO tentar reverter de novo.'
-        : '';
-    
-    const agentName  = instanceData?.agent_name  || "Marlon";
+    // --- 1. Dados básicos do agente e empresa ---
+    const agentName = instanceData?.agent_name || "Marlon";
     const companyName = instanceData?.company_name || "Enerzee";
+
+    // --- 2. Dados do lead ---
+    const nomeLead = (contextoLead.dono && typeof contextoLead.dono === 'string')
+        ? contextoLead.dono.split(' ')[0]
+        : (contextoLead.name || "Gestor");
+
+    const nomeEmpresa = (contextoLead.name || "sua empresa")
+        .replace(/\s(LTDA|ME|EIRELI|S\.A|LIMITED)\b/gi, '')
+        .trim();
+
+    const bairroLead = contextoLead.bairro || "sua região";
+    const concessionariaLocal = MAPA_CONCESSIONARIAS[contextoLead.estado] || 'concessionária de energia';
+
+    // --- 3. Estratégia tática ---
     const ancoraConta = calcularAncoraDinamica(contextoLead);
-    
     const isBigFish = (contextoLead.capital_social_numeric > 500000);
-    const perfilComportamental = isBigFish 
-        ? "ARQUÉTIPO: O BANQUEIRO DE INVESTIMENTOS. Tom: Direto, focado em redução de OPEX e Zero CAPEX." 
+    const perfilComportamental = isBigFish
+        ? "ARQUÉTIPO: O BANQUEIRO DE INVESTIMENTOS. Tom: Direto, focado em redução de OPEX e Zero CAPEX."
         : "ARQUÉTIPO: O CONSULTOR PARCEIRO. Tom: Educativo, focado em 'sobrar dinheiro no caixa'.";
-        
+
     const percentualReal = MAPA_DESCONTO_REGIONAL[contextoLead.estado] || 0.15;
     const percentualTexto = String(Math.round(percentualReal * 100));
     const nicheContext = gerarContextoNicho(contextoLead.niche);
     const estagioAtual = String(contextoLead.current_stage || 0);
-    
-    const horaAtual = new Date(new Date().toLocaleString("en-US", {timeZone: "America/Sao_Paulo"})).getHours();
+
+    // --- 4. Reversão de objeção ---
+    const reversaoJaTentada = contextoLead.objection_reversed
+        ? '\n\nAVISO CRÍTICO: Este lead já recebeu UMA tentativa de reversão de objeção. Se recusar novamente, encerre. PROIBIDO tentar reverter de novo.'
+        : '';
+
+    // --- 5. Saudação dinâmica ---
+    const horaAtual = new Date(new Date().toLocaleString("en-US", { timeZone: "America/Sao_Paulo" })).getHours();
     const saudacaoTempo = horaAtual < 12 ? "Bom dia" : horaAtual < 18 ? "Boa tarde" : "Boa noite";
 
-    const { count: leadsNoBairro } = await supabase
-        .from('leads')
-        .select('*', { count: 'exact', head: true })
-        .eq('bairro', contextoLead.bairro);
+    // --- 6. Contexto de bairro (prova social) ---
+    let contextoBairro = `Mapeamos empresas similares à sua aqui no ${bairroLead} pagando tarifa cheia na ${concessionariaLocal} sem necessidade.`;
+    try {
+        const { count: leadsNoBairro } = await supabase
+            .from('leads')
+            .select('*', { count: 'exact', head: true })
+            .eq('bairro', contextoLead.bairro);
 
-    const contextoBairro = leadsNoBairro > 1 
-        ? `A gente está fazendo um trabalho forte aí no ${bairroLead}. Já mapeamos outras ${leadsNoBairro} empresas da região.`
-        : `Mapeamos empresas similares à sua aqui no ${bairroLead} pagando tarifa cheia na ${concessionariaLocal} sem necessidade.`;
+        if (leadsNoBairro > 1) {
+            contextoBairro = `A gente está fazendo um trabalho forte aí no ${bairroLead}. Já mapeamos outras ${leadsNoBairro} empresas da região.`;
+        }
+    } catch (e) {
+        // Se a query falhar, usa o fallback — não trava o fluxo
+        console.warn("⚠️ [RESOLVER] Falha ao contar leads do bairro, usando fallback.");
+    }
 
+    // --- 7. Ancoragem de contexto (invisível, só pra conversas longas) ---
     const ancoragemContexto = gerarAncoragemContexto(contextoLead, estagioAtual, historico);
 
-    // 4. Injeção Blindada de Variáveis (.replaceAll previne bugs em textos grandes)
+    // --- 8. Extras dinâmicos (Raio-X e Profiler — só existem no fluxo do Worker) ---
+    const raioXDoLead = extras.raioXDoLead || "Sem dados adicionais de inteligência ainda.";
+    const perfilEmocional = extras.perfilEmocional || "Perfil emocional neutro.";
+
+    // --- 9. Substituição universal ---
     const promptFinal = promptBase
         .replaceAll('${agentName}', agentName)
         .replaceAll('${companyName}', companyName)
@@ -441,9 +440,48 @@ async function gerarRespostaIA(historico, contextoLead, instanceData) {
         .replaceAll('${nicheContext}', nicheContext)
         .replaceAll('${contextoBairro}', contextoBairro)
         .replaceAll('${saudacaoTempo}', saudacaoTempo)
-        .replaceAll('${ancoragemContexto}', ancoragemContexto);
+        .replaceAll('${ancoragemContexto}', ancoragemContexto)
+        .replaceAll('${raioXDoLead}', raioXDoLead)
+        .replaceAll('${perfilEmocional}', perfilEmocional);
 
-    // 5. Chamada LLM (Together)
+    return promptFinal;
+}
+// ============================================================================
+// 🧠 NÚCLEO IA: "THE ARCHITECT" - STATE OF THE ART SDR V3.0 (MULTI-TENANT REAL)
+// ============================================================================
+
+async function gerarRespostaIA(historico, contextoLead, instanceData) {
+    // 1. Busca o Dono da Conta
+    let userId = instanceData?.user_id;
+    if (!userId) {
+        const { data: inst } = await supabase.from('instances').select('user_id').eq('id', contextoLead.instance_id).maybeSingle();
+        userId = inst?.user_id;
+    }
+
+    if (!userId) {
+        console.error("❌ ERRO FATAL: user_id não encontrado. Impossível buscar o prompt.");
+        return null;
+    }
+
+    // 2. Busca o Cérebro Centralizado
+    const { data: brain } = await supabase
+        .from('tenant_prompts')
+        .select('system_prompt')
+        .eq('user_id', userId)
+        .maybeSingle();
+
+    const promptBase = brain?.system_prompt;
+
+    if (!promptBase || promptBase.trim().length < 100) {
+        console.error(`❌ ERRO FATAL: Prompt não configurado para o usuário: ${userId}`);
+        return null;
+    }
+
+    // 3. Resolve o prompt usando o resolver centralizado
+    const promptFinal = await resolverPromptCompleto(promptBase, contextoLead, instanceData, historico);
+    if (!promptFinal) return null;
+
+    // 4. Chamada LLM com retry
     const MAX_TENTATIVAS = 3;
     const historicoPodado = podarHistorico(historico);
 
@@ -452,7 +490,7 @@ async function gerarRespostaIA(historico, contextoLead, instanceData) {
             const chatCompletion = await together.chat.completions.create({
                 messages: [
                     { role: 'system', content: promptFinal },
-                    ...historicoPodado 
+                    ...historicoPodado
                 ],
                 model: MODELO_CEREBRO,
                 temperature: 0.3,
@@ -460,7 +498,7 @@ async function gerarRespostaIA(historico, contextoLead, instanceData) {
                 presence_penalty: 0.1,
                 frequency_penalty: 0.15
             });
-            let respostaDaIA = chatCompletion.choices[0].message.content;
+            const respostaDaIA = chatCompletion.choices[0].message.content;
             return respostaDaIA.replace(/[\*_~`]/g, '');
         } catch (e) {
             console.error(`❌ [LLM] Tentativa ${tentativa}/${MAX_TENTATIVAS} falhou: ${e.message}`);
@@ -1654,22 +1692,34 @@ const workerIA = new Worker('FilaIA', async (job) => {
         const perfilEmocional = await profilerAgent.analisarPerfil(ultimaMsg);
         console.log(`🧠 [PROFILER]: ${perfilEmocional}`);
 
-        // --- BUSCA DA CONSTITUIÇÃO NO BANCO (Antes de decidir qual agente chamar) ---
-        let userId = instanceData?.user_id; 
-        if (!userId) {
-            const { data: inst } = await supabase.from('instances').select('user_id').eq('id', lead.instance_id).maybeSingle();
-            userId = inst?.user_id;
-        }
-        
-        const { data: brain } = await supabase.from('tenant_prompts').select('system_prompt').eq('user_id', userId).maybeSingle();
-        let promptBase = brain?.system_prompt || "Responda como um consultor da Enerzee.";
-        
-        // INJEÇÃO TÁTICA E EMOCIONAL (Preparando a munição para os agentes pesados)
-        const agentName = instanceData?.agent_name || "Marlon";
-        const promptResolvido = promptBase
-            .replaceAll('${agentName}', agentName)
-            .replaceAll('${raioXDoLead}', raioXDoLead)
-            .replaceAll('${perfilEmocional}', perfilEmocional);
+        // --- BUSCA DA CONSTITUIÇÃO NO BANCO ---
+let userId = instanceData?.user_id;
+if (!userId) {
+    const { data: inst } = await supabase.from('instances').select('user_id').eq('id', lead.instance_id).maybeSingle();
+    userId = inst?.user_id;
+}
+
+const { data: brain } = await supabase.from('tenant_prompts').select('system_prompt').eq('user_id', userId).maybeSingle();
+const promptBase = brain?.system_prompt;
+
+if (!promptBase || promptBase.trim().length < 100) {
+    console.error(`❌ [WORKER] Prompt não configurado para user_id ${userId}. Abortando.`);
+    return;
+}
+
+// 🧠 Resolve TODAS as variáveis de uma vez (inclui Raio-X e Profiler como extras)
+const promptResolvido = await resolverPromptCompleto(
+    promptBase,
+    lead,
+    instanceData,
+    historico,
+    { raioXDoLead, perfilEmocional }
+);
+
+if (!promptResolvido) {
+    console.error(`❌ [WORKER] Falha ao resolver prompt para ${lead.name}. Abortando.`);
+    return;
+}
         // -----------------------------------------------------------------------------
 
         let resposta;
