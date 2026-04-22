@@ -10,9 +10,9 @@ async function classificarMensagem(ultimaMensagemLead) {
         return 'LIXO';
     }
 
-    const prompt = `
+const prompt = `
 Você é um classificador de intenções ultra-rápido de vendas B2B no WhatsApp.
-Leia a mensagem do cliente e classifique ESTRITAMENTE em UMA destas 4 opções:
+Leia a mensagem do cliente e classifique ESTRITAMENTE em UMA destas 5 opções:
 
 COMPRA - Cliente demonstra interesse claro, concorda em avançar, aceita reunião, diz "sim", "pode ser", "amanhã", "quero", "fechado", "vamos", escolhe horário.
 
@@ -20,12 +20,16 @@ DUVIDA - Cliente faz perguntas genuínas sobre o produto/processo: "como funcion
 
 OBJECAO - Cliente resiste ativamente: "tá caro", "sem tempo", "é golpe?", "vou pensar", "não quero", "já tenho proposta", "tô sem grana", "não é o momento", "manda por email".
 
-LIXO - Mensagens sem conteúdo acionável: "oi", "opa", "ok", "legal", "entendi", "tá", emojis isolados, monossílabos sem contexto.
+ENCERRAMENTO - Cliente está se despedindo ou finalizando cordialmente SEM perguntar nada: "obrigado", "boa semana", "desejo o mesmo", "fica com Deus", "até logo", "abraço", "bom dia pra vc também". 
+IMPORTANTE: Se a mensagem é claramente uma despedida/resposta cordial a uma despedida anterior, classifique como ENCERRAMENTO — NÃO como DUVIDA nem COMPRA.
+
+LIXO - Mensagens sem conteúdo acionável: "oi", "opa", "ok", "legal", "entendi", "tá", emojis isolados, monossílabos sem contexto específico.
 
 MENSAGEM DO CLIENTE: "${ultimaMensagemLead}"
 
 Responda APENAS com a palavra da classificação em maiúsculas. Sem pontuação, sem explicação.
     `.trim();
+
 
     try {
         const res = await groq.chat.completions.create({
@@ -41,6 +45,7 @@ Responda APENAS com a palavra da classificação em maiúsculas. Sem pontuação
         // mas se a LLM devolver algo tipo "É COMPRA", pega certo.
         if (resposta.includes('COMPRA')) return 'COMPRA';
         if (resposta.includes('OBJECAO') || resposta.includes('OBJEÇÃO')) return 'OBJECAO';
+         if (resposta.includes('ENCERRAMENTO')) return 'ENCERRAMENTO';  
         if (resposta.includes('DUVIDA') || resposta.includes('DÚVIDA')) return 'DUVIDA';
         if (resposta.includes('LIXO')) return 'LIXO';
 

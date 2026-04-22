@@ -841,9 +841,22 @@ async function filtrarEEnviarResposta(sock, remoteJid, resposta, historico, lead
     let textoLimpo = resposta.replace(regexTags, '').replace(/est[aá]gio\s?\d/gi, '').trim();
 
     if (textoLimpo.length === 0) {
-        console.error(`❌ [FILTRO] Texto ficou VAZIO após limpeza de tags! Resposta original: "${resposta}"`);
-        return;
+    console.error(`❌ [FILTRO] Texto ficou VAZIO após limpeza de tags! Resposta original: "${resposta}"`);
+    
+    // 🛡️ Marca o lead como "conversa encerrada silenciosamente" pra não ficar em loop
+    // O vigia de recuperação não vai mais tentar reativar esse lead
+    try {
+        await supabase.from('leads').update({ 
+            is_paused: true,
+            manual_pause: false,
+            internal_notes: `IA abortou resposta (texto vazio após tags) em ${new Date().toLocaleString('pt-BR')}. Conversa finalizada.`
+        }).eq('id', lead.id);
+        console.log(`🔕 [FILTRO] Lead ${lead.name} pausado automaticamente (conversa finalizada por bloco vazio).`);
+    } catch (e) {
+        console.error(`❌ [FILTRO] Falha ao pausar lead vazio:`, e.message);
     }
+    return;
+}
 
     console.log(`✅ [FILTRO] Texto limpo pronto pra envio (${textoLimpo.length} chars): "${textoLimpo.substring(0, 150)}..."`);
 
@@ -1271,27 +1284,26 @@ async function processarFilaDeAtaque(instanceId) {
                     empresa: instanceData.company_name || "Enerzee"
                 };
 
-                const { data: lead, error } = await supabase
-                    .from('leads')
-                    .select('id, name, whatsapp_id, dono, bairro, instance_id, estado')
-                    .eq('status', 'new')
-                    .or(`instance_id.eq.${instanceId},instance_id.is.null`)
-                    .order('created_at', { ascending: true })
-                    .limit(1)
-                    .maybeSingle();
+               // ⚡ RESERVA ATÔMICA: SELECT + UPDATE em uma única operação
+// Previne que dois chips peguem o mesmo lead ao mesmo tempo
+const { data: leadReservado, error } = await supabase.rpc('reservar_proximo_lead', {
+    p_instance_id: instanceId
+});
 
-                if (error) throw error;
+if (error) {
+    console.error(`❌ [RESERVA ATÔMICA] Erro:`, error.message);
+    break;
+}
 
-                // 👇 A GRANDE MUDANÇA: O BREAK QUE SALVA SEU BOLSO 👇
-                if (!lead) {
-                    console.log(`🌕 [MOTOR HÍBRIDO] Fila limpa para ${config.nome}. Repouso absoluto (0 Egress).`);
-                    break; // 🛑 HÍBRIDO: Não tem chumbo, ele não espera 5 min, ele desliga!
-                }
+if (!leadReservado || leadReservado.length === 0) {
+    console.log(`🌕 [MOTOR HÍBRIDO] Fila limpa para ${config.nome}. Repouso absoluto (0 Egress).`);
+    break;
+}
 
-                currentLeadId = lead.id;
+const lead = leadReservado[0];
+currentLeadId = lead.id;
 
-                // ⚡ 1. TRAVA RELÂMPAGO NO BANCO
-                await supabase.from('leads').update({ status: 'reservado', instance_id: instanceId }).eq('id', lead.id);
+console.log(`🔒 [RESERVA] Lead ${lead.name} travado atomicamente para chip ${config.nome}`);
 
                 // 🛡️ 2. TRAVA NA MEMÓRIA
                 if (leadsEmProcessamento.has(lead.id)) { 
@@ -1837,7 +1849,22 @@ if (!promptResolvido) {
         let resposta;
         
         // 4.2. Delegação aos Especialistas (Elite Squad)
-        if (intencao === 'COMPRA') {
+        if (intencao === 'ENCERRAMENTO') {
+    console.log(`👋 [WORKER-IA] ENCERRAMENTO detectado. Finalizando conversa educadamente e pausando o lead...`);
+    
+    // Pausa o lead pra o vigia não insistir nessa conversa já finalizada
+    await supabase.from('leads').update({ 
+        is_paused: true,
+        manual_pause: false,
+        internal_notes: `Conversa encerrada cordialmente em ${new Date().toLocaleString('pt-BR')}.`
+    }).eq('id', lead.id);
+    
+    // Não gera resposta — o cliente se despediu, não vamos mandar mais mensagem
+    console.log(`🔕 [WORKER-IA] Lead ${lead.name} pausado após despedida cordial.`);
+    return; // Encerra o worker aqui, sem chamar nenhum agente
+    
+} else if (intencao === 'COMPRA') {
+    // ... resto do código igual
     console.log(`💰 [WORKER-IA] Sinal de COMPRA! Acionando Closer em modo fechamento para ${lead.name}...`);
     resposta = await closerAgent.gerarRespostaCloser(historico, lead, promptResolvido, 'COMPRA');
 
