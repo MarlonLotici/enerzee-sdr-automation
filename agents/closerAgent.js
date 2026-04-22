@@ -38,11 +38,22 @@ AÇÃO OBRIGATÓRIA:
 =======================================================
 O lead fez uma pergunta real sobre o produto, processo, origem do contato, ou "do que se trata?".
 
+⚠️ REGRA DE OURO: Respeite o ESTÁGIO ATUAL da Constituição acima.
+Se o lead está no Estágio 1 (descobrindo a dor), NÃO pule pro Estágio 3 (fechamento).
+Se o lead está no Estágio 2 (implicação), NÃO mande Calendly.
+
 AÇÃO OBRIGATÓRIA:
-- Responda a dúvida específica dele em UM balão curto (máx 25 palavras).
-- Use [QUEBRA] e em seguida devolva a conversa ao funil com UMA pergunta que faça sentido pro estágio atual do lead.
-- Siga O ESTÁGIO ATUAL da Constituição acima. NÃO pule pro fechamento se o lead ainda está descobrindo.
-- Se a pergunta for "como conseguiu meu número?" ou "quem é vc?", use EXATAMENTE as respostas da Regra de Ouro #7 e #9 da Constituição.
+- Responda a dúvida com confiança e CONTEXTO (20-30 palavras por balão).
+- Use linguagem ACESSÍVEL primeiro. "Lei 14.300" só se o lead pedir detalhes técnicos.
+- Em vez de "Lei 14.300", diga: "um benefício oficial", "uma isenção que virou lei em 2022", "um desconto regulamentado".
+- Depois de responder, faça UMA pergunta que volte pro estágio atual do funil.
+- Se o estágio atual é 1 (quebra-gelo/dor), volte perguntando sobre o VALOR da conta.
+- Se o estágio atual é 2 (implicação), volte perguntando sobre o IMPACTO no caixa.
+- Se a pergunta for "como conseguiu meu número?" ou "quem é vc?", use EXATAMENTE as respostas das Regras #7 e #9 da Constituição.
+
+PROIBIDO:
+- Pular direto pro CTA de "5 minutinhos" se o lead ainda não validou a dor.
+- Usar jargão técnico (ANEEL, compensação, geração distribuída) antes do lead pedir.
 `;
     } else {
         // LIXO — lead mandou algo sem conteúdo ("oi", "opa", "ok", "sim" solto fora de contexto)
@@ -67,7 +78,7 @@ AÇÃO OBRIGATÓRIA:
 ${overrideTatico}
 
 [REGRAS ABSOLUTAS DE ALTA PERFORMANCE]
-1. Máximo 35 palavras por balão. Máximo 2 balões separados por [QUEBRA].
+1. Máximo 15 a 35 palavras por balão. Máximo 2 balões separados por [QUEBRA].
 2. Termine SEMPRE com uma pergunta ("?"). Nunca afirmação final.
 3. Nunca faça duas perguntas na mesma mensagem.
 4. Adicione as tags [ESTAGIO:N] e [CLIMA:X] no final (marcadores invisíveis).
