@@ -1675,20 +1675,29 @@ const workerIA = new Worker('FilaIA', async (job) => {
         let resposta;
         
         // 4.2. Delegação aos Especialistas (Elite Squad)
-        if (intencao === 'COMPRA' || intencao === 'DUVIDA') {
-            console.log(`🧠 [WORKER-IA] Acionando Closer Socrático para ${lead.name}...`);
-            resposta = await closerAgent.gerarRespostaCloser(historico, lead, promptResolvido);
+        if (intencao === 'COMPRA') {
+    console.log(`💰 [WORKER-IA] Sinal de COMPRA! Acionando Closer em modo fechamento para ${lead.name}...`);
+    resposta = await closerAgent.gerarRespostaCloser(historico, lead, promptResolvido, 'COMPRA');
 
-        } else if (intencao === 'OBJECAO') {
-            // === THE TANK ENTRA EM AÇÃO ===
-            console.log(`🛡️ [WORKER-IA] Objeção detectada! Acionando The Tank para defender a venda...`);
-            resposta = await objectionAgent.quebrarObjecao(historico, promptResolvido);
+} else if (intencao === 'DUVIDA') {
+    console.log(`🔍 [WORKER-IA] DÚVIDA detectada. Acionando Closer em modo consultivo para ${lead.name}...`);
+    resposta = await closerAgent.gerarRespostaCloser(historico, lead, promptResolvido, 'DUVIDA');
 
-        } else {
-            // 👇 A CORREÇÃO ENTRA AQUI: Se for LIXO, manda o Closer lidar com o prompt já resolvido.
-            console.log(`🧹 [WORKER-IA] Mensagem de baixo valor detectada. Acionando fallback leve...`);
-            resposta = await closerAgent.gerarRespostaCloser(historico, lead, promptResolvido);
-        }
+} else if (intencao === 'OBJECAO') {
+    console.log(`🛡️ [WORKER-IA] OBJEÇÃO detectada! Acionando The Tank para ${lead.name}...`);
+    resposta = await objectionAgent.quebrarObjecao(historico, promptResolvido);
+
+} else {
+    // LIXO — "oi", "opa", "ok", "sim" solto
+    console.log(`🧹 [WORKER-IA] Mensagem LIXO. Closer seguirá estágio atual da Constituição...`);
+    resposta = await closerAgent.gerarRespostaCloser(historico, lead, promptResolvido, 'LIXO');
+}
+
+// 🛡️ Blindagem final: se todos os agentes falharam, avisa o log
+if (!resposta) {
+    console.error(`❌ [WORKER-IA] Nenhum agente gerou resposta válida para ${lead.name}. Abortando envio.`);
+    return;
+}
 
         // 4.3. Filtra, Carimba no WPP e Envia
         await filtrarEEnviarResposta(instancia.sock, remoteJid, resposta, historico, lead, instanceId);
