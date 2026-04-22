@@ -624,7 +624,17 @@ async function startInstance(instanceId, instanceName) {
     // Guardamos o socket com uma flag 'ready' falsa inicialmente
     sessions.set(instanceId, { sock, ready: false }); 
     sock.ev.on('creds.update', saveCreds);
-
+ 
+    // 🛡️ Captura erros de descriptografia (Bad MAC) sem travar o chip
+sock.ev.on('messages.upsert', async () => {}); // fallback silencioso
+process.on('unhandledRejection', (reason) => {
+    const msg = String(reason?.message || reason);
+    if (msg.includes('Bad MAC') || msg.includes('Failed to decrypt')) {
+        // Silencia o spam do libsignal — não é erro fatal, só mensagem perdida
+        return;
+    }
+    console.error('⚠️ [UNHANDLED]:', reason);
+});
     sock.ev.on('connection.update', async (update) => {
         const { connection, lastDisconnect, qr } = update;
         if (qr && ioSocket) ioSocket.emit('qr_code', { qr, instanceId, name: instanceName })
@@ -638,14 +648,38 @@ async function startInstance(instanceId, instanceName) {
         }
 
         if (connection === 'close') {
-            sessions.set(instanceId, { sock, ready: false });
-            instanciasLigando.delete(instanceId);
-            const reason = (lastDisconnect.error)?.output?.statusCode;
-            if (reason !== DisconnectReason.loggedOut) {
-                console.log(`🔄 [SDR] Conexão instável em ${instanceName}. Reiniciando em 5s...`);
-                setTimeout(() => startInstance(instanceId, instanceName), 5000);
-            }
-        }
+    sessions.set(instanceId, { sock, ready: false });
+    instanciasLigando.delete(instanceId);
+    const reason = (lastDisconnect?.error)?.output?.statusCode;
+
+    // 🔴 Sessão corrompida (Bad Session) → limpa chaves e força novo QR
+    if (reason === DisconnectReason.badSession) {
+        console.log(`🔴 [BAD SESSION] ${instanceName} com chaves corrompidas. Limpando e pedindo novo QR...`);
+        await supabase.from('whatsapp_sessions').delete().eq('id', instanceId);
+        await supabase.from('whatsapp_keys').delete().eq('instance_id', instanceId);
+        await db.updateInstanceStatus(instanceId, 'DISCONNECTED');
+        setTimeout(() => startInstance(instanceId, instanceName), 3000);
+        return;
+    }
+
+    // 🔴 Deslogou manualmente → não religa sozinho
+    if (reason === DisconnectReason.loggedOut) {
+        console.log(`🔴 [LOGOUT] ${instanceName} foi deslogado manualmente.`);
+        await db.updateInstanceStatus(instanceId, 'DISCONNECTED');
+        return;
+    }
+
+    // 🔴 Conflito (logou em outro lugar) → limpa e aguarda intervenção
+    if (reason === DisconnectReason.connectionReplaced) {
+        console.log(`⚠️ [CONFLITO] ${instanceName} foi conectado em outro lugar. Pausando.`);
+        await db.updateInstanceStatus(instanceId, 'DISCONNECTED');
+        return;
+    }
+
+    // Demais casos → reconecta
+    console.log(`🔄 [SDR] Conexão instável em ${instanceName} (reason: ${reason}). Reiniciando em 5s...`);
+    setTimeout(() => startInstance(instanceId, instanceName), 5000);
+}
     });
     
     sock.ev.on('contacts.upsert', async (contacts) => {
@@ -1704,6 +1738,13 @@ const workerIA = new Worker('FilaIA', async (job) => {
         const { data: lead } = await supabase.from('leads').select('*').eq('id', leadId).single();
         if (!lead) throw new Error("Lead não encontrado no banco.");
 
+        // 🎯 Detecção de estados finais — evita IA tentar vender num funil já encerrado
+const estadosFinais = ['dead', 'invalid', 'blacklisted', 'booked'];
+const funilEncerrado = estadosFinais.includes(lead.status);
+
+if (funilEncerrado) {
+    console.log(`🏁 [WORKER] Lead ${lead.name} tem funil encerrado (status: ${lead.status}). IA seguirá em modo pós-venda/encerrado.`);
+}
         // 2. Recupera o Socket (Baileys) do chip deste cliente específico
         const instancia = sessions.get(instanceId);
         if (!instancia || !instancia.ready) throw new Error("Socket do WhatsApp não está conectado.");
@@ -1739,7 +1780,7 @@ const workerIA = new Worker('FilaIA', async (job) => {
         console.log(`🎯 [ROTEADOR] Intenção: ${intencao}`);
         console.log(`📊 [RAIO-X]: ${raioXDoLead}`);
         console.log(`🧠 [PROFILER]: ${perfilEmocional}`);
-        
+
         // --- BUSCA DA CONSTITUIÇÃO NO BANCO ---
 // 🛡️ Busca user_id com fallback em cascata (instanceData → lead.instance_id → instanceId do job)
 let userId = instanceData?.user_id;
