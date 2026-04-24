@@ -15,6 +15,7 @@ const MODELO_PESADO = "meta-llama/Llama-3.3-70B-Instruct-Turbo";
  */
 async function gerarRespostaCloser(historico, lead, promptPersonalidade, intencao = 'DUVIDA') {
     // 🧠 Injeção tática por intenção — evita conflito de instruções
+    // 🧠 Injeção tática por intenção — evita conflito de instruções
     let overrideTatico = '';
 
     if (intencao === 'COMPRA') {
@@ -30,6 +31,23 @@ AÇÃO OBRIGATÓRIA:
 - Peça para ele ter uma fatura de luz em mãos na hora da call.
 - Adicione [ESTAGIO:4] no final.
 - NÃO explique novamente o benefício. NÃO faça rapport. APENAS trave o horário.
+`;
+    } else if (intencao === 'REPASSE') {
+        overrideTatico = `
+=======================================================
+🔄 MODO OPERACIONAL: REPASSE DE CONTATO
+=======================================================
+O lead informou que não é o responsável e repassou o contato, nome ou telefone da pessoa certa.
+
+AÇÃO OBRIGATÓRIA:
+- Agradeça a pessoa pela ajuda e pela informação.
+- Diga de forma simples que vai chamar a pessoa indicada.
+- Adicione [ESTAGIO:ENCERRADO] no final.
+
+⚠️ EXCEÇÃO ABSOLUTA DE SISTEMA (SOBRESCREVE REGRAS GERAIS):
+- NESTE MODO É ESTRITAMENTE PROIBIDO FAZER QUALQUER PERGUNTA.
+- IGNORE a regra de "Terminar SEMPRE com uma pergunta".
+- Apenas agradeça, afirme que vai contatar e encerre o texto.
 `;
     } else if (intencao === 'DUVIDA') {
         overrideTatico = `

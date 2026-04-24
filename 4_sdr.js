@@ -393,22 +393,24 @@ async function resolverPromptCompleto(promptBase, contextoLead, instanceData, hi
 
     const bairroLead = contextoLead.bairro || "sua região";
     const concessionariaLocal = MAPA_CONCESSIONARIAS[contextoLead.estado] || 'concessionária de energia';
-
-    // --- 3. Estratégia tática ---
+// --- 3. Estratégia tática ---
     const ancoraConta = calcularAncoraDinamica(contextoLead);
-    // 🧮 Pré-computa a economia pra não depender da LLM fazer matemática
-const valorAncoraNumerico = parseInt(ancoraConta.replace(/\D/g, '')) || 700;
-const economiaMensal = Math.round(valorAncoraNumerico * (percentualReal || 0.20));
-const economiaAnual = economiaMensal * 12;
-const economiaMensalFormatada = `R$ ${economiaMensal.toLocaleString('pt-BR')}`;
-const economiaAnualFormatada = `R$ ${economiaAnual.toLocaleString('pt-BR')}`;
     const isBigFish = (contextoLead.capital_social_numeric > 500000);
     const perfilComportamental = isBigFish
         ? "ARQUÉTIPO: O BANQUEIRO DE INVESTIMENTOS. Tom: Direto, focado em redução de OPEX e Zero CAPEX."
         : "ARQUÉTIPO: O CONSULTOR PARCEIRO. Tom: Educativo, focado em 'sobrar dinheiro no caixa'.";
 
-    const percentualReal = MAPA_DESCONTO_REGIONAL[contextoLead.estado] || 0.15;
+    // ✅ FIX: Declara a percentagem ANTES de a usar nos cálculos
+    const percentualReal = MAPA_DESCONTO_REGIONAL[contextoLead.estado] || 0.15; 
     const percentualTexto = String(Math.round(percentualReal * 100));
+
+    // 🧮 Pré-computa a economia para não depender de a LLM fazer matemática
+    const valorAncoraNumerico = parseInt(ancoraConta.replace(/\D/g, '')) || 700;
+    const economiaMensal = Math.round(valorAncoraNumerico * percentualReal); 
+    const economiaAnual = economiaMensal * 12;
+    const economiaMensalFormatada = `R$ ${economiaMensal.toLocaleString('pt-BR')}`;
+    const economiaAnualFormatada = `R$ ${economiaAnual.toLocaleString('pt-BR')}`;
+    
     const nicheContext = gerarContextoNicho(contextoLead.niche);
     const estagioAtual = String(contextoLead.current_stage || 0);
 
