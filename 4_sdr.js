@@ -2008,7 +2008,49 @@ module.exports = {
             }
         }
     },
-    enviarMensagemSDR: async () => {},
+    enviarMensagemSDR: async (instanceId, whatsappId, texto) => {
+        try {
+            // 1. Pega o canal de comunicação correto do chip
+            const instancia = sessions.get(instanceId);
+            
+            if (!instancia || !instancia.ready) {
+                console.error(`❌ [FRONTEND] Erro: Chip ${instanceId} não está conectado.`);
+                return { success: false, error: 'Chip offline ou não conectado.' };
+            }
+
+            console.log(`👤 [FRONTEND] Enviando mensagem manual para ${whatsappId}...`);
+
+            // 2. Simula o "Digitando..." para o lead
+            await instancia.sock.sendPresenceUpdate('composing', whatsappId);
+            await delay(1500);
+            await instancia.sock.sendPresenceUpdate('paused', whatsappId);
+
+            // 3. Envia a mensagem usando a função interna para registrar na memória viva (evita eco do bot)
+            const sentMsg = await enviarMensagemIA(instancia.sock, whatsappId, { text: texto });
+
+            if (sentMsg) {
+                // 4. Salva a mensagem no banco de dados para o histórico do front-end
+                await db.saveMessage(whatsappId, 'assistant', texto, instanceId);
+
+                // 5. PAUSA A IA (Intervenção Humana): Dá o tempo de 10 minutos para você falar
+                await supabase.from('leads').update({
+                    is_paused: true,
+                    last_human_interaction: new Date().toISOString(),
+                    internal_notes: `Intervenção humana via Dashboard em ${new Date().toLocaleString('pt-BR')}`
+                }).eq('whatsapp_id', whatsappId);
+
+                console.log(`✅ [FRONTEND] Mensagem manual entregue. IA pausada para o lead.`);
+                return { success: true, messageId: sentMsg.key.id };
+            } else {
+                throw new Error("Falha no disparo pelo Baileys.");
+            }
+            
+        } catch (error) {
+            console.error("❌ [FRONTEND] Erro no disparo manual:", error.message);
+            return { success: false, error: error.message };
+        }
+    },
+
     encerrarInstancia: (instanceId) => {
         const instancia = sessions.get(instanceId);
         if (instancia?.sock) {

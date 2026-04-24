@@ -330,6 +330,40 @@ app.get(/.*/, (req, res) => {
     res.sendFile(path.join(__dirname, 'frontend', 'dist', 'index.html'));
 });
 
+    // ============================================================================
+// 💬 ROTA DE DISPARO MANUAL (PAINEL FRONT-END -> WHATSAPP)
+// ============================================================================
+app.post('/api/send-message', autenticarMiddleware, async (req, res) => {
+    try {
+        const { instanceId, whatsappId, text } = req.body;
+
+        // 1. Trava de segurança: Verifica se os dados chegaram do front
+        if (!instanceId || !whatsappId || !text) {
+            return res.status(400).json({ success: false, error: "Faltam parâmetros obrigatórios." });
+        }
+
+        // 2. Trava de segurança: Verifica se o motor 4_sdr foi importado corretamente
+        if (!sdr || !sdr.enviarMensagemSDR) {
+            return res.status(500).json({ success: false, error: "Motor SDR não está pronto." });
+        }
+
+        console.log(`📡 [API] Ordem de disparo manual recebida para: ${whatsappId}`);
+
+        // 3. Chama a função que criamos no 4_sdr.js
+        const resultado = await sdr.enviarMensagemSDR(instanceId, whatsappId, text);
+
+        if (resultado.success) {
+            return res.status(200).json(resultado);
+        } else {
+            return res.status(500).json(resultado);
+        }
+
+    } catch (error) {
+        console.error("❌ [API] Falha crítica na rota de envio:", error);
+        return res.status(500).json({ success: false, error: "Falha interna no servidor." });
+    }
+});
+
 // LIGA O MOTOR (A última linha do sistema)
 server.listen(PORT, () => {
     console.log(`\n🚀 SERVIDOR SDR RODANDO NA PORTA ${PORT}`);
