@@ -14,13 +14,13 @@ const db = require('./database');
 const { useSupabaseAuthState } = require('./auth_adapter');
 const { gerarAudioTTS } = require('./tts');
 const { createClient } = require('@supabase/supabase-js');
-const routerAgent = require('./agents/routerAgent');
-const closerAgent = require('./agents/closerAgent');
-const intelAgent = require('./agents/intelAgent');
-const profilerAgent = require('./agents/profilerAgent');
-const objectionAgent = require('./agents/objectionAgent');
-const auditorAgent = require('./agents/auditorAgent');
-// Podes criar o objectionAgent.js depois e importar aqui
+const routerAgent = require('./agents/routerAgent'); // faz a distribuição entre os agentes dependendo da necessidade 
+const closerAgent = require('./agents/closerAgent'); //é o closer que assume a conversa
+const intelAgent = require('./agents/intelAgent'); // 
+const profilerAgent = require('./agents/profilerAgent'); // identifica o perfil do lead 
+const objectionAgent = require('./agents/objectionAgent'); // esse agente assume o controle quando o router identifica objeção 
+const auditorAgent = require('./agents/auditorAgent'); // faz auditoria das conversas como um 'juiz'
+const handoffAgent = require('./agents/handoffAgent');
 const motoresEmExecucao = new Set(); // 🛡️ Impede que o mesmo chip ligue dois loops infinitos
 const MAPA_CONCESSIONARIAS = {
     'MT': 'Energisa', 'MS': 'Energisa', 'SC': 'Celesc', 'PR': 'Copel',
@@ -866,7 +866,7 @@ async function filtrarEEnviarResposta(sock, remoteJid, resposta, historico, lead
         .replace(regexTags, '')
         .replace(/\[?\s*est[aá]gio\s*:?\s*\d\s*\]?/gi, '') // Pega casos bizarros como [ estágio 0 ]
         .trim();
-        
+
     if (textoLimpo.length === 0) {
     console.error(`❌ [FILTRO] Texto ficou VAZIO após limpeza de tags! Resposta original: "${resposta}"`);
     
@@ -1178,20 +1178,40 @@ if (fromMe) {
         }
     }
 
-    // --- 4. LÓGICA DE RESPOSTA IA ---
+    // --- 4. LÓGICA DE RESPOSTA IA (COMPORTAMENTO NA PAUSA) ---
     if (lead.is_paused) {
         if (texto && messageType !== 'audioMessage') {
             await db.saveMessage(lead.whatsapp_id, 'user', texto, instanceId);
-            
-            // O DESPERTADOR: O lead mandou mensagem. Foi um humano ou o robô dele de novo?
             const intencaoDespertador = analisarIntencaoRegex(texto);
             
+            // O lead falou, é humano, mas a pausa foi por intervenção manual do Marlon?
             if (intencaoDespertador === "[HUMANO]" && !lead.manual_pause) {
-                console.log(`⏰ [DESPERTADOR] Humano detectado após automação para ${lead.name}. Reativando IA...`);
-                await supabase.from('leads').update({ is_paused: false }).eq('id', lead.id);
-                lead.is_paused = false; // Destrava na memória viva para continuar o fluxo agora
+                // Aqui é o pulo do gato: A IA só "acorda" sozinha se você NUNCA tiver interagido 
+                // OU se a sua última interação manual foi há mais de 20 minutos.
+                const ultimaInteracaoMs = lead.last_human_interaction ? new Date(lead.last_human_interaction).getTime() : 0;
+                const tempoDecorridoMinutos = (Date.now() - ultimaInteracaoMs) / (1000 * 60);
+
+                if (tempoDecorridoMinutos > 20 || !lead.last_human_interaction) {
+                    console.log(`⏰ [DESPERTADOR] Lead reengajou sozinho após pausa. Reativando IA...`);
+                    await supabase.from('leads').update({ is_paused: false }).eq('id', lead.id);
+                    lead.is_paused = false; 
+
+                    // 🧠 HANDOFF REVERSO: A IA vai ler o que você falou antes de voltar a responder
+                    if (lead.last_human_interaction) {
+                        const histTotal = await db.getHistory(lead.whatsapp_id, instanceId);
+                        const resumoHandoff = await handoffAgent.gerarResumoHandoff(histTotal);
+                        if (resumoHandoff) {
+                            console.log(`🔄 [HANDOFF] Injetando contexto do Marlon: ${resumoHandoff}`);
+                            // Salvamos isso como nota interna no banco (vai ser sugado no extras.raioX)
+                            await supabase.from('leads').update({ internal_notes: resumoHandoff }).eq('id', lead.id);
+                        }
+                    }
+                } else {
+                    console.log(`🤐 [SILÊNCIO] Lead mandou msg, mas o Marlon interagiu há ${Math.round(tempoDecorridoMinutos)} min. Mantendo IA calada.`);
+                    return; // Retorna SEM atualizar o is_paused pra false
+                }
             } else {
-                return; // Continua sendo robô ou você pausou manualmente. Fica quieto.
+                return; // É robô ou você pausou forçado via /pausar
             }
         } else {
             return;
