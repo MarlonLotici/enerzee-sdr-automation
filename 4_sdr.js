@@ -238,10 +238,14 @@ function dentroDaJanelaDeDisparo() {
 function analisarIntencaoRegex(texto) {
     if (!texto || texto.trim().length === 0) return "[HUMANO]";
     const t = texto.toLowerCase().trim();
+    
     const PADROES_ROBO = [
-        /(?:digite|opcao|opção)\s*\d/i,
-        /^\s*\d\s*[-–—\.]\s*.+/m,
-        /(?:1\s*[-–]\s*.+\n\s*2\s*[-–])/,
+        // 1. Padrões de Menu e Digitação
+        /(?:digite|opcao|opção|selecione|escolha)\s*(?:a|uma)?\s*(?:opção|alternativa)?\s*\d/i,
+        /^\s*\d\s*[-–—\.)]\s*.+/m, // Deteta listas como "1- Menu" ou "2) Reservas"
+        /(?:1\s*[-–]\s*.+\n\s*2\s*[-–])/, // Deteta blocos de opções numeradas
+        
+        // 2. Mensagens de Ausência e Horário
         /agradec\w+\s+(?:seu|sua|o)\s+contato/i,
         /(?:retornaremos|em\s+breve\s+retorn|entraremos\s+em\s+contato)/i,
         /(?:em\s+)?hor[aá]rio\s+comercial/i,
@@ -249,14 +253,23 @@ function analisarIntencaoRegex(texto) {
         /bem[- ]?vind[oa]\s+(?:ao?|à)/i,
         /atendimento\s+(?:das|de)\s+\d/i,
         /^(?:seg\s+[aà]\s+sex|segunda\s+[aà]|funciona\w+\s+das?\s+\d)/i,
-        /(?:cardapio|card[áa]pio)\s*(?:digital|online|aqui)/i,
-        /(?:acesse|confira)\s+(?:nosso|o)\s+(?:cardápio|menu)/i,
+        
+        // 3. Links de Cardápios e Catálogos (Gargalo detetado nos logs)
+        /(?:cardapio|card[áa]pio|menu|catalogo|catálogo)\s*(?:digital|online|aqui)/i,
+        /(?:acesse|confira|veja)\s+(?:nosso|o)\s+(?:cardápio|menu|catálogo)/i,
+        /https?:\/\/(?:instadelivery|menudino|goomer|ola\.click|linktr\.ee|instagram\.com)/i,
+        
+        // 4. Frases típicas de Chatbots Business
         /(?:n[ãa]o\s+(?:é|e)\s+poss[ií]vel\s+atend|fora\s+do\s+hor[aá]rio)/i,
         /(?:para\s+falar\s+com\s+(?:um|nosso)\s+atendente)/i,
+        /atendimento\s+autom[áa]tico/i,
+        /voc[êe]\s+est[áa]\s+na\s+fila/i
     ];
+
     for (const padrao of PADROES_ROBO) {
         if (padrao.test(t)) return "[ROBO]";
     }
+    
     return "[HUMANO]";
 }
 
@@ -843,15 +856,17 @@ async function filtrarEEnviarResposta(sock, remoteJid, resposta, historico, lead
     // 🔍 LOG DE DIAGNÓSTICO: mostra o que a LLM gerou
     console.log(`📝 [FILTRO] Resposta RAW da LLM (${resposta.length} chars): "${resposta.substring(0, 200)}..."`);
 
-    // ── 1. LIMPEZA TOTAL DE TAGS ──
-    const regexTags = /\[(ESTAGIO|CLIMA|RAIO-X|PERFIL|ROBO|CONTADOR|ENGANO|GATEKEEPER|AGENDAMENTO_MANUAL)[^\]]*\]/gi;
+    // ── 1. LIMPEZA TOTAL DE TAGS (À PROVA DE ALUCINAÇÃO) ──
+    const regexTags = /\[\s*(ESTAGIO|ESTÁGIO|CLIMA|RAIO-X|PERFIL|ROBO|CONTADOR|ENGANO|GATEKEEPER|AGENDAMENTO_MANUAL)[^\]]*\]/gi;
+    const matchEstagio = /\[?\s*EST[AÁ]GIO\s*:?\s*(\d)\s*\]?/gi.exec(resposta);
+    const matchClima = /\[?\s*CLIMA\s*:?\s*([a-zA-Z_]+)\s*\]?/gi.exec(resposta);
+    const matchManual = /\[?\s*AGENDAMENTO_MANUAL\s*\]?/gi.exec(resposta);
 
-    const matchEstagio = /\[?EST[AÁ]GIO:?\s?(\d)\]?/gi.exec(resposta);
-    const matchClima = /\[?CLIMA:?\s?([a-zA-Z_]+)\]?/gi.exec(resposta);
-    const matchManual = /\[?AGENDAMENTO_MANUAL\]?/gi.exec(resposta);
-
-    let textoLimpo = resposta.replace(regexTags, '').replace(/est[aá]gio\s?\d/gi, '').trim();
-
+    let textoLimpo = resposta
+        .replace(regexTags, '')
+        .replace(/\[?\s*est[aá]gio\s*:?\s*\d\s*\]?/gi, '') // Pega casos bizarros como [ estágio 0 ]
+        .trim();
+        
     if (textoLimpo.length === 0) {
     console.error(`❌ [FILTRO] Texto ficou VAZIO após limpeza de tags! Resposta original: "${resposta}"`);
     

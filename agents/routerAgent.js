@@ -16,7 +16,7 @@ Leia a mensagem do cliente e classifique ESTRITAMENTE em UMA destas 6 opções:
 
 COMPRA - Cliente demonstra interesse claro, concorda em avançar, aceita reunião, diz "sim", "pode ser", "amanhã", "quero", "fechado", "vamos", escolhe horário.
 
-REPASSE - Cliente indica outra pessoa para falar, repassa um contato, número de telefone ou diz que não é o responsável: "fala com meu sócio", "chama o fulano no 9999-9999", "o gerente é que vê isso", "passa um zap pra ele".
+REPASSE - Cliente indica outra pessoa para falar, repassa um contato, ou a mensagem contém APENAS um número de telefone no formato brasileiro (com ou sem DDD/traços, ex: 88 9999-9999, 11988887777).
 
 DUVIDA - Cliente faz perguntas genuínas sobre o produto/processo: "como funciona?", "o que é?", "pq tá falando isso?", "quem é você?", "de onde veio meu número?", "do que se trata?", pergunta por valor, prazo, segurança.
 
@@ -25,7 +25,7 @@ OBJECAO - Cliente resiste ativamente: "tá caro", "sem tempo", "é golpe?", "vou
 ENCERRAMENTO - Cliente está se despedindo ou finalizando cordialmente SEM perguntar nada: "obrigado", "boa semana", "desejo o mesmo", "fica com Deus", "até logo", "abraço". 
 IMPORTANTE: Se a mensagem é claramente uma despedida/resposta cordial a uma despedida anterior, classifique como ENCERRAMENTO.
 
-LIXO - Mensagens sem conteúdo acionável: "oi", "opa", "ok", "legal", "entendi", "tá", emojis isolados, monossílabos sem contexto específico.
+LIXO - Mensagens sem conteúdo acionável: "oi", "opa", "ok", "legal", "entendi", "tá", emojis isolados. IMPORTANTE: Um número de telefone isolado NUNCA é lixo, deve ser classificado como REPASSE.
 
 MENSAGEM DO CLIENTE: "${ultimaMensagemLead}"
 
