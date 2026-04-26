@@ -7,7 +7,16 @@ const together = new OpenAI({
 
 const MODELO_PESADO = "meta-llama/Llama-3.3-70B-Instruct-Turbo";
 
-async function quebrarObjecao(historico, promptBaseResolvido) {
+/**
+ * Agente especialista em quebra de objeções (The Tank).
+ * @param {Array} historico - O histórico de mensagens podado.
+ * @param {string} promptBaseResolvido - A Constituição com os dados do lead (nicho, economia, etc).
+ * @param {number|string} estagioAtual - A fase atual do funil no banco de dados (CRUCIAL para a soldadura).
+ */
+async function quebrarObjecao(historico, promptBaseResolvido, estagioAtual) {
+    // 🛡️ Fallback de segurança: Se o estágio falhar na passagem, assume 0 para não quebrar a regex
+    const estagioSeguro = estagioAtual !== undefined && estagioAtual !== null ? estagioAtual : 0;
+
     const promptTank = `
 [CONSTITUIÇÃO DA EMPRESA E DADOS DO LEAD]
 ${promptBaseResolvido}
@@ -15,21 +24,29 @@ ${promptBaseResolvido}
 =======================================================
 ⚠️ OVERRIDE DE MISSÃO: MODO QUEBRADOR DE OBJEÇÕES (THE TANK) ⚠️
 =======================================================
-O Roteador detectou que o lead lançou uma OBJEÇÃO. 
-A sua missão não é agendar a reunião agora. A sua missão é DESARMAR a defesa do lead usando a técnica de Amortecimento e Isolamento.
+O Roteador detetou que o lead levantou uma barreira defensiva ou objeção.
+A sua ÚNICA missão agora é DESARMAR o lead usando a técnica de "Amortecimento e Isolamento". 
+
+NÃO TENTE AGENDAR A REUNIÃO NESTA MENSAGEM. A venda pausa até a objeção ser neutralizada.
 
 TÁTICA OBRIGATÓRIA (3 PASSOS):
-1. AMORTECER: Valide a objeção. Faça o lead sentir que você o entende e que ele tem razão em se preocupar. (Ex: "Totalmente compreensível. Tempo é o ativo mais caro que a gente tem.")
-2. REDIRECIONAR / ISOLAR: Mostre o ângulo cego ou isole a objeção. (Ex: "Mas me tira uma dúvida: fora a questão do tempo, tem algo na isenção em si que te deixou com o pé atrás?")
-3. CALL TO ACTION SUAVE: Termine com uma pergunta investigativa (NÃO PEÇA PARA AGENDAR AGORA).
+1. AMORTECER: Concorde com a perspetiva dele. Faça-o sentir que não o está a contrariar. 
+   (Ex: "Totalmente compreensível ter esse cuidado.", "Faz sentido, tempo é corrido mesmo.")
+2. ISOLAR/REDIRECIONAR: Mostre o ângulo cego de forma consultiva ou faça uma concessão.
+   (Ex: "A questão é que...", "Mas tira-me uma dúvida...")
+3. PERGUNTA DE CONTROLO: Termine com uma pergunta investigativa e suave para devolver a bola para ele.
 
-REGRAS DE OURO DO TANK:
-- NUNCA discuta ou tente provar que o lead está errado.
-- NUNCA pareça desesperado para vender. Mantenha a postura de quem está selecionando parceiros.
-- Se a objeção for "Já tenho proposta concorrente", aplique o Frame do Especialista: elogie a iniciativa dele, mas pergunte se a concorrente mostrou os dados *reais* do medidor ou só uma estimativa genérica.
-- Mantenha a restrição de tamanho: Máximo de 2 balões curtos.
-- Termine ESTRITAMENTE com uma PERGUNTA ('?').
-- Adicione as tags obrigatórias de [ESTAGIO:X] e [CLIMA:X] no final.
+[SITUAÇÕES SIMULADAS E COMO AGIR]:
+- Se "Já tenho proposta de outra empresa": Elogie a iniciativa, mas pergunte se a concorrente mostrou a simulação oficial da ANEEL ou só uma estimativa de Excel.
+- Se "Mande por email / Mande PDF": Diga que manda sim, mas que o PDF fica genérico porque o valor exato só aparece cruzando os dados do medidor dele no sistema. Pergunte se a conta costuma ser alta para ver se vale a pena o trabalho.
+- Se "É golpe? / Qual a pegadinha?": Concorde que o mercado tem muita coisa estranha. Reforce a lei 14.300 e a ANEEL.
+- Se "Não tenho tempo": Isole. "Tranquilo. Se eu te provar a economia em 2 minutos por mensagem mesmo, vale a tua atenção?"
+
+[REGRAS DE OURO DA SOLDADURA - PENA DE FALHA CRÍTICA]:
+1. Tamanho: Máximo absoluto de 2 balões curtos separados por [QUEBRA].
+2. Formato: SEMPRE termine com uma pergunta aberta ("?"). NUNCA termine com afirmação.
+3. ⚠️ MARCADOR DE ESTADO (OBRIGATÓRIO): No final da sua resposta, você DEVE escrever EXATAMENTE a tag [ESTAGIO:${estagioSeguro}]. Se você não enviar esta tag, o sistema vai colapsar.
+4. EMOÇÃO: Adicione a tag de clima correspondente à reação dele, ex: [CLIMA:DESCONFIADO] ou [CLIMA:OCUPADO].
 `;
 
     try {
@@ -39,16 +56,26 @@ REGRAS DE OURO DO TANK:
                 ...historico 
             ],
             model: MODELO_PESADO,
-            temperature: 0.35, // Um pouco mais de criatividade para saídas persuasivas
+            temperature: 0.35, // Ligeiramente criativo para gerar empatia natural
             max_tokens: 160,
-            presence_penalty: 0.1,
-            frequency_penalty: 0.2 // Evita repetir as palavras da objeção do cliente
+            presence_penalty: 0.2, // Penaliza repetição do que o cliente acabou de dizer
+            frequency_penalty: 0.1
         });
         
-        return res.choices[0].message.content;
+        const resposta = res.choices[0]?.message?.content;
+
+        // 🛡️ BLINDAGEM DE ALTA PERFORMANCE: A IA esqueceu a tag? Nós injetamos à força via código.
+        if (resposta && !resposta.includes('[ESTAGIO:')) {
+            console.warn(`⚠️ [THE TANK] A IA esqueceu a tag de estado. Injetando [ESTAGIO:${estagioSeguro}] à força para manter a soldadura.`);
+            return `${resposta} [ESTAGIO:${estagioSeguro}]`;
+        }
+
+        return resposta;
     } catch (error) {
-        console.error("❌ Erro no Objection Agent (The Tank):", error.message);
-        return null; 
+        console.error("❌ Erro Crítico no Objection Agent (The Tank):", error.message);
+        
+        // Em caso de falha da API, devolve um fallback humano para não deixar o cliente no vácuo
+        return `Entendo perfeitamente o teu ponto. Mas deixa-me perguntar de outra forma: considerando os custos fixos da empresa hoje, faz sentido avaliarmos uma redução se isso não te custar nada agora? [ESTAGIO:${estagioSeguro}] [CLIMA:NEUTRO]`;
     }
 }
 

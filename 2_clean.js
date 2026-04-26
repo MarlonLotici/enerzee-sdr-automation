@@ -119,8 +119,9 @@ function processarLimpeza(leadsBrutos) {
             whatsappId: foneInfo.whatsappId, // @s.whatsapp.net
             type: foneInfo.tipo,
             
-            // Dados Geográficos e Segmentação
+           // Dados Geográficos e Segmentação
             city: raw.city || "",
+            estado: raw.estado || null, // 🎯 CHAVE SALVA AQUI! Se o Scraper pegou, ela passa adiante.
             niche: raw.niche,
             endereco_fiscal: raw.address || "Endereço não identificado",
             bairro: bairroFinal, // Agora populado!

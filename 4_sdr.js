@@ -62,6 +62,34 @@ function identificarArtigo(nome) {
     return ehFeminino ? `da ${nome}` : `do ${nome}`;
 }
 
+
+// 👤 FILTRO DE IDENTIDADE HUMANA: Valida se o nome do WhatsApp é realmente de uma pessoa
+function extrairNomeHumano(pushName) {
+    if (!pushName) return null;
+
+    // 1. Remove emojis e caracteres estranhos, deixando só letras e espaços
+    let nomeLimpo = pushName.replace(/[^\p{L}\s]/gu, '').trim();
+    if (!nomeLimpo || nomeLimpo.length < 2) return null;
+
+    // 2. Pega só a primeira palavra para evitar nomes longos ou compostos estranhos
+    const primeiroNome = nomeLimpo.split(/\s+/)[0].toLowerCase();
+
+    // 3. Blacklist de palavras que parecem empresa ou lixo
+    const palavrasProibidas = [
+        'ltda', 'me', 'epp', 'eireli', 'mei', 'sa', 'loja', 'store', 'modas', 
+        'pizzaria', 'lanchonete', 'hamburgueria', 'padaria', 'restaurante', 
+        'oficina', 'mecanica', 'auto', 'center', 'estetica', 'salao', 'clinica', 
+        'farmacia', 'drogaria', 'imoveis', 'imobiliaria', 'tech', 'info', 'cell', 
+        'imports', 'atacado', 'varejo', 'distribuidora', 'comercio', 'servicos',
+        'adm', 'financeiro', 'vendas', 'atendimento', 'suporte', 'contato'
+    ];
+
+    if (palavrasProibidas.includes(primeiroNome)) return null;
+
+    // 4. Retorna o nome com a primeira letra maiúscula (Ex: "joão" -> "João")
+    return primeiroNome.charAt(0).toUpperCase() + primeiroNome.slice(1);
+}
+
 // 🎯 NOVA FUNÇÃO: Chute de conta baseado em Capital Social e Nicho
 function calcularAncoraDinamica(lead) {
     const capital = lead.capital_social_numeric || 0;
@@ -405,8 +433,9 @@ async function resolverPromptCompleto(promptBase, contextoLead, instanceData, hi
         .trim();
 
     const bairroLead = contextoLead.bairro || "sua região";
-    const concessionariaLocal = MAPA_CONCESSIONARIAS[contextoLead.estado] || 'concessionária de energia';
-// --- 3. Estratégia tática ---
+    // 🎯 LIMPEZA ESTÉTICA: Corta nomes compostos (ex: "Enel/CPFL" vira apenas "Enel")
+const concessionariaLocal = (MAPA_CONCESSIONARIAS[contextoLead.estado] || 'concessionária de energia').split('/')[0];
+    // --- 3. Estratégia tática ---
     const ancoraConta = calcularAncoraDinamica(contextoLead);
     const isBigFish = (contextoLead.capital_social_numeric > 500000);
     const perfilComportamental = isBigFish
@@ -456,8 +485,15 @@ async function resolverPromptCompleto(promptBase, contextoLead, instanceData, hi
     const ancoragemContexto = gerarAncoragemContexto(contextoLead, estagioAtual, historico);
 
     // --- 8. Extras dinâmicos (Raio-X e Profiler — só existem no fluxo do Worker) ---
-    const raioXDoLead = extras.raioXDoLead || "Sem dados adicionais de inteligência ainda.";
+    // Alteramos para 'let' para permitir a concatenação do Handoff
+    let raioXDoLead = extras.raioXDoLead || "Sem dados adicionais de inteligência ainda.";
     const perfilEmocional = extras.perfilEmocional || "Perfil emocional neutro.";
+
+    // 🧠 INJEÇÃO DO HANDOFF REVERSO
+    // Se o banco de dados tiver uma nota de intervenção, ela entra aqui como prioridade máxima
+    if (contextoLead.internal_notes) {
+        raioXDoLead += `\n\n⚠️ INSTRUÇÃO CRÍTICA (HANDOFF): O gestor humano (Marlon) assumiu a conversa e combinou o seguinte: "${contextoLead.internal_notes}". Ignore estágios anteriores se conflitarem e siga exatamente desta orientação.`;
+    }
 
     // --- 9. Substituição universal ---
     const promptFinal = promptBase
@@ -726,6 +762,27 @@ process.on('unhandledRejection', (reason) => {
             }
         }
     });
+
+    // 👀 OLHOS DO SDR: Detecta quando o lead visualiza a mensagem (setinhas azuis)
+    sock.ev.on('messages.update', async (updates) => {
+        for (const update of updates) {
+            // status 3 = Visualizado/Visto (setinhas azuis)
+            if (update.update.status === 3 || update.update.status === 4) { 
+                const jid = update.key.remoteJid;
+                const cleanJid = jid.split(':')[0].split('@')[0] + (jid.includes('@lid') ? '@lid' : '@s.whatsapp.net');
+
+                try {
+                    await supabase.from('leads')
+                        .update({ last_seen_at: new Date().toISOString() })
+                        .eq('whatsapp_id', cleanJid);
+                    // console.log(`👀 [VISTO] Lead ${cleanJid} visualizou a mensagem.`);
+                } catch (e) {
+                    // Falha silenciosa para não travar o socket
+                }
+            }
+        }
+    });
+
     sock.ev.on('messages.upsert', async ({ messages, type }) => {
         if (type !== 'notify') return;
         
@@ -904,16 +961,29 @@ async function filtrarEEnviarResposta(sock, remoteJid, resposta, historico, lead
     const mensagensSplit = textoLimpo.split('[QUEBRA]').map(t => t.trim()).filter(t => t.length > 0);
     console.log(`📤 [FILTRO] Enviando ${mensagensSplit.length} balão(ões) para ${lead.name}...`);
 
-    for (let i = 0; i < mensagensSplit.length; i++) {
+ for (let i = 0; i < mensagensSplit.length; i++) {
         const trecho = mensagensSplit[i];
         try {
             await sock.sendPresenceUpdate('composing', remoteJid);
-            await delay(Math.min(trecho.length * 60 + 3000, 10000));
+            
+            // ⚡ CÁLCULO DE JITTER DINÂMICO: Simula tempo de leitura + raciocínio + digitação
+            // Se a IA gerou a tag de desconfiança/ocupado, ela "pensa" mais antes de digitar
+            const isObjecao = resposta.includes('CLIMA:DESCONFIADO') || resposta.includes('CLIMA:OCUPADO');
+            const multiplicador = isObjecao ? 90 : 65; 
+            const tempoBase = Math.min(trecho.length * multiplicador + 3000, 12000);
+            
+            await delay(tempoBase);
             const enviado = await enviarMensagemIA(sock, remoteJid, { text: trecho });
             
             if (enviado) {
                 console.log(`✅ [ENVIO ${i + 1}/${mensagensSplit.length}] Balão entregue: "${trecho.substring(0, 80)}..."`);
                 await db.saveMessage(lead.whatsapp_id, 'assistant', trecho, instanceId);
+                
+                // 🕒 MARCADOR DE LINK: Carimba o banco se o Calendly foi enviado
+                if (trecho.includes('calendly.com')) {
+                    await supabase.from('leads').update({ link_sent_at: new Date().toISOString() }).eq('id', lead.id);
+                    console.log(`🔗 [TRACKING] Link enviado para ${lead.name}. Cronômetro de abandono ativado.`);
+                }
             } else {
                 console.error(`❌ [ENVIO ${i + 1}/${mensagensSplit.length}] FALHOU ao entregar: "${trecho.substring(0, 80)}..."`);
             }
@@ -987,6 +1057,26 @@ if (!lead && cleanJid.includes('@lid')) {
     return; // Fora da base, ignora.
 }
 
+// 🎯 A MÁGICA DA IDENTIDADE: Atualização dinâmica do nome pelo WhatsApp
+    if (!fromMe && msg.pushName) {
+        // Só atualizamos se o banco ainda não tiver o 'dono' preenchido 
+        // OU se o dono atual for genérico ("Gestor", "Empresa")
+        if (!lead.dono || lead.dono.length <= 2 || lead.dono.toLowerCase() === 'gestor') {
+            const nomeValidado = extrairNomeHumano(msg.pushName);
+            
+            if (nomeValidado) {
+                console.log(`👤 [IDENTIDADE] Nome humano validado no WhatsApp: "${msg.pushName}" -> "${nomeValidado}". Atualizando banco...`);
+                lead.dono = nomeValidado; // Atualiza na memória viva para a IA já usar agora
+                
+                // Salva no banco de dados silenciosamente
+                supabase.from('leads')
+                    .update({ dono: nomeValidado })
+                    .eq('id', lead.id)
+                    .then(() => {}) // Promessa solta para não atrasar o fluxo
+                    .catch(e => console.error("Erro ao salvar pushName:", e.message));
+            }
+        }
+    }
 
 
 // --- 📝 EXTRAÇÃO DE CONTEÚDO (ACEITANDO A GAVETA) ---
@@ -1449,7 +1539,8 @@ if (lead.dono && lead.dono.trim().length > 2) {
 }
 
 const ufLead = lead.estado || null;
-const concessionariaLocal = MAPA_CONCESSIONARIAS[ufLead] || 'concessionária de energia';
+// 🎯 LIMPEZA ESTÉTICA PARA ABERTURA: Corta nomes compostos para soar natural
+const concessionariaLocal = (MAPA_CONCESSIONARIAS[ufLead] || 'concessionária de energia').split('/')[0];
 const nomeEmpresa = lead.name
     ? lead.name.replace(/\s(LTDA|ME|EIRELI|S\.A|LIMITED)\b/gi, '').trim()
     : 'sua empresa';
@@ -1535,6 +1626,11 @@ const mensagensSplit = [balaoUnico]; // ← BALÃO ÚNICO (era [balao1, balao2])
 // 🔒 TRAVA DE SEGURANÇA GLOBAL: Coloque esta linha fora da função, no topo do arquivo
 let vigiaEmExecucao = false; 
 
+// ============================================================================
+// 🔄 LOOP TRIPLO DE RECUPERAÇÃO E FOLLOW-UP (OTIMIZADO)
+// ============================================================================
+let vigiaEmExecucao = false; 
+
 async function loopRecuperacaoConversas() {
     // 🛡️ 1. BLOQUEIO DE CLONES: Se o vigia anterior ainda estiver rodando, o novo nem entra.
     if (vigiaEmExecucao) return; 
@@ -1547,7 +1643,12 @@ async function loopRecuperacaoConversas() {
             return; 
         }
 
-        console.log("🕵️ [VIGIA DE CONVERSAS] Escaneando conversas perdidas e follow-ups...");
+        console.log("🕵️ [VIGIA DE CONVERSAS] Escaneando falhas, follow-ups e abandonos de link...");
+        
+        const agora = Date.now();
+        const UM_DIA = 24 * 60 * 60 * 1000;
+        const QUATRO_HORAS = 4 * 60 * 60 * 1000;
+        const dataAgoraDate = new Date(agora);
 
         // ====================================================================
         // 🌟 1. RECUPERAÇÃO DE FALHAS (O Bot ignorou o cliente)
@@ -1589,16 +1690,14 @@ async function loopRecuperacaoConversas() {
         }
 
         // ====================================================================
-        // 🚀 2. FOLLOW-UP ÚNICO (D1) + TOMBAMENTO POR SILÊNCIO
+        // 🚀 2. FOLLOW-UP ÚNICO (D1) + TOMBAMENTO POR SILÊNCIO (ANTES DO LINK)
         // ====================================================================
-        const agora = Date.now();
-        const UM_DIA = 24 * 60 * 60 * 1000;
-
         const { data: leadsFollowUp } = await supabase
             .from('leads')
             .select('id, name, whatsapp_id, instance_id, dono, followup_count, last_contact_at, backup_phone, backup_whatsapp_id, backup_tried')
             .eq('status', 'contact')
             .eq('calendly_booked', false)
+            .is('link_sent_at', null) // 🛡️ SÓ PEGA QUEM AINDA NÃO RECEBEU O LINK
             .lt('followup_count', 2) 
             .order('last_contact_at', { ascending: true })
             .limit(15);
@@ -1630,7 +1729,7 @@ async function loopRecuperacaoConversas() {
                         await enviarMensagemIA(instancia.sock, lf.whatsapp_id, { text: msgFollowUp });
                         await db.saveMessage(lf.whatsapp_id, 'assistant', msgFollowUp, lf.instance_id);
 
-                        await supabase.from('leads').update({ followup_count: 1, last_contact_at: new Date().toISOString() }).eq('id', lf.id);
+                        await supabase.from('leads').update({ followup_count: 1, last_contact_at: dataAgoraDate.toISOString() }).eq('id', lf.id);
                         await delay(8000);
                     } 
                     else if (followupAtual === 1) {
@@ -1653,7 +1752,48 @@ async function loopRecuperacaoConversas() {
         }
 
         // ====================================================================
-        // 👤 3. RETOMADA APÓS INTERVENÇÃO HUMANA (10 MINUTOS)
+        // 🔗 3. ABANDONO DE CARRINHO (LINK ENVIADO, MAS SEM AGENDAMENTO)
+        // ====================================================================
+        const quatroHorasAtrasISO = new Date(agora - QUATRO_HORAS).toISOString();
+        
+        const { data: leadsLink } = await supabase
+            .from('leads')
+            .select('id, name, whatsapp_id, instance_id, dono')
+            .eq('status', 'contact')
+            .eq('is_paused', false)
+            .eq('calendly_booked', false) // Sistema acha que ele não agendou
+            .not('link_sent_at', 'is', null) // O link foi enviado
+            .lt('link_sent_at', quatroHorasAtrasISO) // Faz mais de 4 horas
+            .is('last_followup_type', null) // Ainda não foi cobrado pelo link
+            .limit(10);
+
+        if (leadsLink) {
+            for (const ll of leadsLink) {
+                try {
+                    const instancia = sessions.get(ll.instance_id);
+                    if (!instancia || !instancia.ready || iaRespondendo.has(ll.whatsapp_id)) continue;
+
+                    // 🛡️ FAIL-SAFE: Culpa o sistema para não ofender se ele já tiver agendado
+                    let primeiroNome = ll.dono && ll.dono.trim().length > 2 ? ll.dono.trim().split(' ')[0] : 'Opa';
+                    primeiroNome = primeiroNome.charAt(0).toUpperCase() + primeiroNome.slice(1);
+                    
+                    const msgFollowUpLink = `${primeiroNome}, meu sistema de agenda deu uma travada hoje. Vc conseguiu travar o seu horário lá no link ou deu erro aí também?`;
+
+                    console.log(`🔔 [FOLLOW-UP LINK] Recuperando abandono de ${ll.name}`);
+                    await instancia.sock.sendPresenceUpdate('composing', ll.whatsapp_id);
+                    await delay(4000);
+                    await enviarMensagemIA(instancia.sock, ll.whatsapp_id, { text: msgFollowUpLink });
+                    await db.saveMessage(ll.whatsapp_id, 'assistant', msgFollowUpLink, ll.instance_id);
+                    
+                    // Marca que já mandou esse follow-up para não repetir
+                    await supabase.from('leads').update({ last_followup_type: 'link_abandoned' }).eq('id', ll.id);
+                    await delay(5000);
+                } catch (errLink) { console.error(`❌ Erro Follow-up Link ${ll.name}:`, errLink.message); }
+            }
+        }
+
+        // ====================================================================
+        // 👤 4. RETOMADA APÓS INTERVENÇÃO HUMANA (20 MINUTOS)
         // ====================================================================
         const { data: leadsPausados } = await supabase
             .from('leads')
@@ -1664,11 +1804,11 @@ async function loopRecuperacaoConversas() {
             for (const lp of leadsPausados) {
                 if (!lp.last_human_interaction || lp.manual_pause) continue; 
 
-                const dezMinutosEmMs = 10 * 60 * 1000; 
+                const vinteMinutosEmMs = 20 * 60 * 1000; // Atualizado para 20 min para bater com o novo Anti-Atropelo
                 const ultimaInteracao = new Date(lp.last_human_interaction).getTime();
-                const diff = Date.now() - ultimaInteracao;
+                const diff = agora - ultimaInteracao;
 
-                if (diff > dezMinutosEmMs) {
+                if (diff > vinteMinutosEmMs) {
                     if (iaRespondendo.has(lp.whatsapp_id)) continue;
                     
                     console.log(`🔄 [RETOMADA] Tempo de humano esgotado para ${lp.name}. Voltando para IA.`);
@@ -1687,7 +1827,7 @@ async function loopRecuperacaoConversas() {
     } finally {
         // 🔓 LIBERA O BLOQUEIO E AGENDA O PRÓXIMO CICLO
         vigiaEmExecucao = false; 
-        setTimeout(loopRecuperacaoConversas, 1000 * 60 * 5); 
+        setTimeout(loopRecuperacaoConversas, 1000 * 60 * 5); // Roda a cada 5 minutos
     }
 }
 
@@ -1915,13 +2055,16 @@ if (!promptResolvido) {
     console.log(`💰 [WORKER-IA] Sinal de COMPRA! Acionando Closer em modo fechamento para ${lead.name}...`);
     resposta = await closerAgent.gerarRespostaCloser(historico, lead, promptResolvido, 'COMPRA');
 
-} else if (intencao === 'DUVIDA') {
-    console.log(`🔍 [WORKER-IA] DÚVIDA detectada. Acionando Closer em modo consultivo para ${lead.name}...`);
+} else if (intencao === 'DUVIDA' || intencao === 'CONTINUAR') {
+    // 🎯 Aqui garantimos que o "Sim, sou eu" ou perguntas sobre o serviço 
+    // acionem o modo de qualificação do CloserAgent.
+    console.log(`🔍 [WORKER-IA] Fluxo de CONTINUIDADE/DÚVIDA. Acionando Closer para ${lead.name}...`);
     resposta = await closerAgent.gerarRespostaCloser(historico, lead, promptResolvido, 'DUVIDA');
 
 } else if (intencao === 'OBJECAO') {
     console.log(`🛡️ [WORKER-IA] OBJEÇÃO detectada! Acionando The Tank para ${lead.name}...`);
-    resposta = await objectionAgent.quebrarObjecao(historico, promptResolvido);
+    // Passamos lead.current_stage para o agente saber onde manter o lead
+    resposta = await objectionAgent.quebrarObjecao(historico, promptResolvido, lead.current_stage);
 
 } else {
     // LIXO — "oi", "opa", "ok", "sim" solto

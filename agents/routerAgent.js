@@ -2,64 +2,92 @@
 const Groq = require('groq-sdk');
 const groq = new Groq({ apiKey: process.env.GROQ_API_KEY });
 
+// Usando o modelo mais rápido para latência zero na triagem
 const MODELO_ROTEADOR = "llama-3.1-8b-instant";
 
 async function classificarMensagem(ultimaMensagemLead) {
-    // 🛡️ Blindagem: se vier vazio, devolve LIXO sem gastar token
+    // 🛡️ NÍVEL 1: Blindagem de Custo Zero (Bypass Cego)
     if (!ultimaMensagemLead || ultimaMensagemLead.trim().length === 0) {
         return 'LIXO';
     }
 
-const prompt = `
-Você é um classificador de intenções ultra-rápido de vendas B2B no WhatsApp.
-Leia a mensagem do cliente e classifique ESTRITAMENTE em UMA destas 6 opções:
+    // 🛡️ NÍVEL 2: Deteção de Repasse Direto (Regex)
+    // Se o cliente mandar apenas um número, não gastamos tokens para adivinhar.
+    const textoLimpo = ultimaMensagemLead.replace(/[\s\-\(\)\+]/g, '');
+    if (textoLimpo.length >= 8 && textoLimpo.length <= 13 && /^\d+$/.test(textoLimpo)) {
+        console.log("⚡ [ROTEADOR] Número isolado detetado. Bypass automático para REPASSE.");
+        return 'REPASSE';
+    }
 
-COMPRA - Cliente demonstra interesse claro, concorda em avançar, aceita reunião, diz "sim", "pode ser", "amanhã", "quero", "fechado", "vamos", escolhe horário.
+    // 🧠 NÍVEL 3: Análise Semântica de Alta Precisão
+    const prompt = `
+Você é o classificador de intenções ultra-rápido de um sistema SDR B2B de alta performance.
+A sua ÚNICA função é ler a mensagem do cliente e devolver ESTRITAMENTE UMA das 6 palavras-chave abaixo.
 
-REPASSE - Cliente indica outra pessoa para falar, repassa um contato, ou a mensagem contém APENAS um número de telefone no formato brasileiro (com ou sem DDD/traços, ex: 88 9999-9999, 11988887777).
+[REGRAS DE CLASSIFICAÇÃO]
 
-DUVIDA - Cliente faz perguntas genuínas sobre o produto/processo: "como funciona?", "o que é?", "pq tá falando isso?", "quem é você?", "de onde veio meu número?", "do que se trata?", pergunta por valor, prazo, segurança.
+1. COMPRA 
+- O lead ESTÁ PRONTO PARA AGENDAR. 
+- Ele escolhe um horário ("pode ser às 14h", "amanhã de manhã"), pede o link ("manda o link"), ou aceita explicitamente a videochamada.
+- ⚠️ ALERTA: Dizer apenas "sim", "isso" ou "sou eu" NO INÍCIO da conversa NÃO É COMPRA, é CONTINUAR.
 
-OBJECAO - Cliente resiste ativamente: "tá caro", "sem tempo", "é golpe?", "vou pensar", "não quero", "já tenho proposta", "tô sem grana", "não é o momento", "manda por email".
+2. CONTINUAR
+- O lead confirmou uma informação ("sim", "sou eu", "correto", "exato", "👍").
+- O lead mandou uma saudação ("opa", "bom dia", "pode falar").
+- O lead respondeu positivamente a uma pergunta de qualificação ("a conta dá uns 1000 reais", "gasto muito").
+- O lead fez perguntas genuínas ("como funciona?", "quem é vc?", "de onde tirou meu número?", "tem obra?").
+- Esta é a intenção padrão para manter a conversa a fluir no funil.
 
-ENCERRAMENTO - Cliente está se despedindo ou finalizando cordialmente SEM perguntar nada: "obrigado", "boa semana", "desejo o mesmo", "fica com Deus", "até logo", "abraço". 
-IMPORTANTE: Se a mensagem é claramente uma despedida/resposta cordial a uma despedida anterior, classifique como ENCERRAMENTO.
+3. REPASSE
+- O lead indica outra pessoa ou passa um contacto ("fala com o meu sócio", "chama a Maria no 9999-9999", "não cuido disso").
 
-LIXO - Mensagens sem conteúdo acionável: "oi", "opa", "ok", "legal", "entendi", "tá", emojis isolados. IMPORTANTE: Um número de telefone isolado NUNCA é lixo, deve ser classificado como REPASSE.
+4. OBJECAO
+- O lead resiste ativamente à abordagem ("tá caro", "sem tempo", "é golpe?", "já tenho energia solar", "não quero", "manda por email e eu leio depois").
+
+5. ENCERRAMENTO
+- O lead despede-se cordialmente sem intenção de continuar ("obrigado", "boa semana", "valeu", "fica com Deus").
+
+6. LIXO
+- Mensagens completamente ininteligíveis (ex: "asdfg", batidas no teclado) ou xingamentos sem contexto. 
+- ⚠️ ALERTA: Respostas curtas como "ok", "tá", "entendi" NÃO SÃO LIXO, são CONTINUAR.
 
 MENSAGEM DO CLIENTE: "${ultimaMensagemLead}"
 
-Responda APENAS com a palavra da classificação em maiúsculas. Sem pontuação, sem explicação.
-    `.trim();
-
+Retorne APENAS a palavra da intenção. Nada de pontuação, aspas ou justificações.
+`.trim();
 
     try {
         const res = await groq.chat.completions.create({
             messages: [{ role: "system", content: prompt }],
             model: MODELO_ROTEADOR,
-            temperature: 0.1,
+            temperature: 0.0, // Zero criatividade, queremos classificação determinística
             max_tokens: 10,
         });
 
         const resposta = res.choices[0].message.content.trim().toUpperCase();
 
-        // Ordem importa: checa COMPRA antes porque "COMPRA" não contém outras palavras,
-        // mas se a LLM devolver algo tipo "É COMPRA", pega certo.
+        // Mapeamento à prova de balas
         if (resposta.includes('COMPRA')) return 'COMPRA';
         if (resposta.includes('OBJECAO') || resposta.includes('OBJEÇÃO')) return 'OBJECAO';
-         if (resposta.includes('ENCERRAMENTO')) return 'ENCERRAMENTO';  
-        if (resposta.includes('DUVIDA') || resposta.includes('DÚVIDA')) return 'DUVIDA';
+        if (resposta.includes('ENCERRAMENTO')) return 'ENCERRAMENTO';  
+        if (resposta.includes('REPASSE')) return 'REPASSE';
+        
+        // 🎯 O SEGREDO DA SOLDADURA: 
+        // O Roteador devolve "CONTINUAR" ou "DUVIDA" para a intenção de fluxo natural.
+        // O código mapeia ambas para 'DUVIDA', pois no closerAgent.js, o modo 'DUVIDA' 
+        // é o motor consultivo que faz a qualificação do maquinário (Estágio 1 e 2).
+        if (resposta.includes('CONTINUAR') || resposta.includes('DUVIDA')) return 'DUVIDA';
+        
         if (resposta.includes('LIXO')) return 'LIXO';
-        if (resposta.includes('COMPRA')) return 'COMPRA';
-        if (resposta.includes('REPASSE')) return 'REPASSE'; // <- NOVA LINHA
-        if (resposta.includes('OBJECAO') || resposta.includes('OBJEÇÃO')) return 'OBJECAO';
-        // Se a LLM devolveu algo inesperado, default seguro é DUVIDA
-        // (manda pro Closer, que é mais educado que tratar como lixo)
-        console.warn(`⚠️ [ROTEADOR] Resposta inesperada da LLM: "${resposta}". Fallback → DUVIDA`);
+        
+        // Fallback de segurança: se a LLM tiver um colapso e devolver um texto aleatório, 
+        // assumimos que o lead está a continuar a conversa para não o perder.
+        console.warn(`⚠️ [ROTEADOR] Resposta atípica da LLM: "${resposta}". Acionando Fallback (DUVIDA/CONTINUAR).`);
         return 'DUVIDA';
+        
     } catch (error) {
-        console.error("❌ Erro no Roteador:", error.message);
-        return 'DUVIDA'; // Em falha de API, assume dúvida (não ignora o lead)
+        console.error("❌ Erro de processamento no Roteador (API Groq):", error.message);
+        return 'DUVIDA'; 
     }
 }
 

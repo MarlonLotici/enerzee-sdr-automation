@@ -42,9 +42,7 @@ function computeMetrics(leads, instances) {
     cutoff.setDate(1)
     cutoff.setHours(0, 0, 0, 0)
 
-    // ── 1. Evolução mensal: criados vs abordados ──────────────────────────────
-    // "criados"  = created_at dentro do período
-    // "abordados"= last_contact_at not null dentro do período
+    // ── 1. Evolução mensal: criados vs abordados ──
     const monthBuckets = {}
     for (let i = 5; i >= 0; i--) {
         const d = new Date(now)
@@ -54,13 +52,11 @@ function computeMetrics(leads, instances) {
     }
 
     leads.forEach(lead => {
-        // bucket de criação
         const created = new Date(lead.created_at)
         if (created >= cutoff) {
             const key = `${created.getFullYear()}-${String(created.getMonth() + 1).padStart(2, '0')}`
             if (monthBuckets[key]) monthBuckets[key].criados++
         }
-        // bucket de abordagem (só quem foi de fato contactado)
         if (lead.last_contact_at) {
             const contacted = new Date(lead.last_contact_at)
             if (contacted >= cutoff) {
@@ -71,18 +67,18 @@ function computeMetrics(leads, instances) {
     })
     const monthly = Object.values(monthBuckets)
 
-    // ── 2. Funil por status (exato, sem estimativa) ───────────────────────────
-    const sc = { new: 0, contact: 0, waiting_analysis: 0, closed: 0, error: 0, invalid: 0, blacklisted: 0 }
+    // ── 2. Funil por status (CORRIGIDO PARA V13: closed -> booked) ──
+    const sc = { new: 0, contact: 0, waiting_analysis: 0, booked: 0, error: 0, invalid: 0, blacklisted: 0, dead: 0 }
     leads.forEach(l => { if (sc[l.status] !== undefined) sc[l.status]++ })
 
     const funnel = [
-        { etapa: 'Capturados',  qtd: leads.length,                                         fill: NEON.blue },
-        { etapa: 'Abordados',   qtd: sc.contact + sc.waiting_analysis + sc.closed,         fill: NEON.cyan },
-        { etapa: 'Em análise',  qtd: sc.waiting_analysis + sc.closed,                      fill: NEON.violet },
-        { etapa: 'Agendados',   qtd: sc.closed,                                            fill: NEON.emerald },
+        { etapa: 'Capturados',  qtd: leads.length,                                     fill: NEON.blue },
+        { etapa: 'Abordados',   qtd: sc.contact + sc.waiting_analysis + sc.booked,        fill: NEON.cyan },
+        { etapa: 'Em análise',  qtd: sc.waiting_analysis + sc.booked,                      fill: NEON.violet },
+        { etapa: 'Agendados',   qtd: sc.booked,                                            fill: NEON.emerald },
     ]
 
-    // ── 3. Nichos (top 6) ─────────────────────────────────────────────────────
+    // ── 3. Nichos (top 6) ──
     const nicheCount = {}
     leads.forEach(l => {
         if (!l.niche) return
@@ -99,14 +95,12 @@ function computeMetrics(leads, instances) {
             fill: NICHE_COLORS[i % NICHE_COLORS.length],
         }))
 
-    // ── 4. Disparos por chip (instance_id) ────────────────────────────────────
-    // Conta leads com last_contact_at not null agrupados por instance_id
+    // ── 4. Disparos por chip (instance_id) ──
     const chipCount = {}
     leads.forEach(l => {
         if (!l.last_contact_at || !l.instance_id) return
         chipCount[l.instance_id] = (chipCount[l.instance_id] || 0) + 1
     })
-    // Resolve o nome do chip pelo array de instâncias (vindo do banco)
     const chipData = Object.entries(chipCount)
         .sort((a, b) => b[1] - a[1])
         .slice(0, 8)
@@ -119,7 +113,7 @@ function computeMetrics(leads, instances) {
             }
         })
 
-    // ── 5. Leads capturados por dia da semana (via created_at — sempre real) ──
+    // ── 5. Leads capturados por dia da semana ──
     const diaCriados = [0, 0, 0, 0, 0, 0, 0]
     leads.forEach(l => {
         if (!l.created_at) return
@@ -127,17 +121,7 @@ function computeMetrics(leads, instances) {
     })
     const dailyCapture = DIA_LABEL.map((dia, i) => ({ dia, leads: diaCriados[i] }))
 
-    // ── KPIs ──────────────────────────────────────────────────────────────────
-    const totalLeads     = leads.length
-    const totalAbordados = leads.filter(l => l.last_contact_at).length
-    const totalAgendados = sc.closed
-    const taxaAbordagem  = totalLeads > 0 ? Math.round(totalAbordados / totalLeads * 100) : 0
-
-    // Delta: último mês vs penúltimo
-    const last2 = monthly.slice(-2)
-    const deltaCriados   = last2.length === 2 && last2[0].criados   > 0 ? Math.round((last2[1].criados   - last2[0].criados)   / last2[0].criados   * 100) : 0
-    const deltaAbordados = last2.length === 2 && last2[0].abordados > 0 ? Math.round((last2[1].abordados - last2[0].abordados) / last2[0].abordados * 100) : 0
-    // ── 6. Funil SPIN por estágio (0-5) ───────────────────────────────────────
+    // ── 6. Funil SPIN por estágio (0-5) ──
     const estagioLabels = ['Qualificação', 'Situação', 'Dor/Implicação', 'Solução', 'Agendamento', 'Fechamento']
     const estagioColors = ['#64748b', '#3B82F6', '#06B6D4', '#8B5CF6', '#F59E0B', '#10B981']
     const estagioCount = [0, 0, 0, 0, 0, 0]
@@ -151,7 +135,7 @@ function computeMetrics(leads, instances) {
         fill: estagioColors[i],
     }))
 
-    // ── 7. Distribuição de temperatura ────────────────────────────────────────
+    // ── 7. Distribuição de temperatura ──
     const tempCount = { cold: 0, warm: 0, hot: 0, dead: 0 }
     leads.forEach(l => {
         const t = l.lead_temperature || 'cold'
@@ -164,7 +148,7 @@ function computeMetrics(leads, instances) {
         { name: 'Dead 💀',  value: tempCount.dead, fill: '#64748b' },
     ].filter(d => d.value > 0)
 
-    // ── 8. A/B Testing de aberturas ───────────────────────────────────────────
+    // ── 8. A/B Testing de aberturas (RECUPERADO) ──
     const templateStats = {}
     leads.forEach(l => {
         if (!l.opening_template) return
@@ -172,7 +156,6 @@ function computeMetrics(leads, instances) {
             templateStats[l.opening_template] = { enviados: 0, responderam: 0 }
         }
         templateStats[l.opening_template].enviados++
-        // Se tem current_stage > 0, significa que respondeu e avançou
         if ((l.current_stage || 0) > 0) {
             templateStats[l.opening_template].responderam++
         }
@@ -185,7 +168,8 @@ function computeMetrics(leads, instances) {
             taxa: stats.enviados > 0 ? Math.round(stats.responderam / stats.enviados * 100) : 0,
         }))
         .sort((a, b) => b.taxa - a.taxa)
-    // ── 9. Taxa de resposta por nicho ─────────────────────────────────────
+
+    // ── 9. Taxa de resposta por nicho (RECUPERADO) ──
     const nicheResponse = {}
     leads.forEach(l => {
         if (!l.niche) return
@@ -195,7 +179,7 @@ function computeMetrics(leads, instances) {
         if ((l.current_stage || 0) > 0) nicheResponse[n].responderam++
     })
     const nicheResponseData = Object.entries(nicheResponse)
-        .filter(([_, v]) => v.total >= 3) // só nichos com amostra mínima
+        .filter(([_, v]) => v.total >= 3)
         .map(([name, stats]) => ({
             name: name.length > 16 ? name.slice(0, 16) + '…' : name,
             taxa: Math.round(stats.responderam / stats.total * 100),
@@ -205,7 +189,7 @@ function computeMetrics(leads, instances) {
         .sort((a, b) => b.taxa - a.taxa)
         .slice(0, 8)
 
-    // ── 10. Taxa de passagem entre estágios SPIN ──────────────────────────
+    // ── 10. Taxa de passagem entre estágios SPIN (RECUPERADO) ──
     const spinPassagem = []
     for (let i = 0; i < 5; i++) {
         const atual = estagioCount[i]
@@ -220,6 +204,45 @@ function computeMetrics(leads, instances) {
         })
     }
 
+    // ── 11. Performance Geográfica (NOVO) ──
+    const geoPerformance = {}
+    leads.forEach(l => {
+        if (!l.estado) return
+        const uf = l.estado.toUpperCase()
+        if (!geoPerformance[uf]) geoPerformance[uf] = { total: 0, agendados: 0 }
+        geoPerformance[uf].total++
+        if (l.status === 'booked') geoPerformance[uf].agendados++
+    })
+    const geoData = Object.entries(geoPerformance)
+        .map(([uf, stats]) => ({
+            uf,
+            total: stats.total,
+            taxa: Math.round((stats.agendados / stats.total) * 100) || 0
+        }))
+        .sort((a, b) => b.total - a.total)
+        .slice(0, 5)
+
+    // ── 12. Métrica de Engajamento Real (NOVO) ──
+    let visualizados = 0
+    let responderamAposVer = 0
+    leads.forEach(l => {
+        if (l.last_seen_at) {
+            visualizados++
+            if (l.current_stage > 0) responderamAposVer++
+        }
+    })
+    const engagementRate = visualizados > 0 ? Math.round((responderamAposVer / visualizados) * 100) : 0
+
+    // ── KPIs ──
+    const totalLeads     = leads.length
+    const totalAbordados = leads.filter(l => l.last_contact_at).length
+    const totalAgendados = sc.booked // <-- Alterado de sc.closed para sc.booked (Correção da Falha)
+    const taxaAbordagem  = totalLeads > 0 ? Math.round(totalAbordados / totalLeads * 100) : 0
+
+    const last2 = monthly.slice(-2)
+    const deltaCriados   = last2.length === 2 && last2[0].criados   > 0 ? Math.round((last2[1].criados   - last2[0].criados)   / last2[0].criados   * 100) : 0
+    const deltaAbordados = last2.length === 2 && last2[0].abordados > 0 ? Math.round((last2[1].abordados - last2[0].abordados) / last2[0].abordados * 100) : 0
+
     return {
         monthly, funnel, nicheData, chipData, dailyCapture,
         totalLeads, totalAbordados, totalAgendados, taxaAbordagem,
@@ -227,8 +250,42 @@ function computeMetrics(leads, instances) {
         statusCounts: sc,
         funnelSpin, temperatureData, abTestData,
         nicheResponseData, spinPassagem,
+        geoData, engagementRate // <-- Novas chaves injetadas no retorno
     }
 }
+
+// ── 11. Performance Geográfica (Baseado na nossa soldadura de UF) ──
+const geoPerformance = {}
+leads.forEach(l => {
+    if (!l.estado) return
+    if (!geoPerformance[l.estado]) geoPerformance[l.estado] = { total: 0, agendados: 0 }
+    geoPerformance[l.estado].total++
+    if (l.status === 'booked') geoPerformance[l.estado].agendados++
+})
+
+const geoData = Object.entries(geoPerformance)
+    .map(([uf, stats]) => ({
+        uf,
+        total: stats.total,
+        taxa: Math.round((stats.agendados / stats.total) * 100) || 0
+    }))
+    .sort((a, b) => b.total - a.total)
+    .slice(0, 5)
+
+
+// ── 12. Métrica de Engajamento Real ──
+let visualizados = 0
+let responderamAposVer = 0
+
+leads.forEach(l => {
+    if (l.last_seen_at) {
+        visualizados++
+        // Se viu e o estágio é > 0, significa que interagiu
+        if (l.current_stage > 0) responderamAposVer++
+    }
+})
+
+const engagementRate = visualizados > 0 ? Math.round((responderamAposVer / visualizados) * 100) : 0
 
 // ─── TOOLTIP ──────────────────────────────────────────────────────────────────
 const NeonTooltip = ({ active, payload, label, prefix = '', suffix = '' }) => {
@@ -330,7 +387,7 @@ export default function VisualAnalytics() {
     if (loading && !metrics) {
         return (
             <div style={{ background: '#020617', minHeight: '100vh', padding: '28px', fontFamily: "'DM Sans', system-ui, sans-serif" }}>
-                <div style={{ display: 'grid', gridTemplateColumns: 'repeat(4,1fr)', gap: 16, marginBottom: 24 }}>
+                <div style={{ display: 'grid', gridTemplateColumns: 'repeat(5,1fr)', gap: 16, marginBottom: 24 }}>
                     {[1,2,3,4].map(i => <Skeleton key={i} h={130} />)}
                 </div>
                 <div style={{ display: 'grid', gridTemplateColumns: '1fr 340px', gap: 16, marginBottom: 16 }}>
@@ -414,12 +471,19 @@ export default function VisualAnalytics() {
                     sub="status closed no CRM"
                     delta={null}           color={NEON.emerald}
                 />
+                {/* 👇 NOVO CARD DE ENGAJAMENTO (MÉTRICA DE VÁCUO) 👇 */}
                 <KpiCard
     icon={Activity} label="Conversão Total"
     value={(totalLeads > 0 ? Math.round(totalAgendados / totalLeads * 100) : 0) + '%'}
     sub="agendados / capturados"
     delta={null} color={NEON.emerald}
                    />
+                   <KpiCard
+                    icon={Flame} label="Engajamento Real"
+                    value={engagementRate + '%'}
+                    sub="responderam após ver"
+                    delta={null} color={NEON.rose}
+                />
             </div>
 
             {/* ── ROW 2: Evolução Mensal + Funil ── */}
@@ -709,11 +773,64 @@ export default function VisualAnalytics() {
         )}
     </ChartCard>
 </div>
+
+{/* ── ROW 5: PERFORMANCE GEOGRÁFICA (A MÁGICA DA RECEITA FEDERAL) ── */}
+            <div style={{ display: 'grid', gridTemplateColumns: '1fr', gap: 16, marginTop: 16 }}>
+                <ChartCard>
+                    <SectionTitle accent={NEON.emerald}>
+                        <MapPin size={12} color={NEON.emerald} style={{ display: 'inline', marginRight: 6 }} />
+                        Performance de Conversão por Estado (Concessionária)
+                    </SectionTitle>
+                    
+                    {geoData && geoData.length > 0 ? (
+                        <ResponsiveContainer width="100%" height={220}>
+                            <BarChart data={geoData} margin={{ top: 10, right: 10, bottom: 0, left: -20 }}>
+                                <CartesianGrid stroke={NEON.grid} vertical={false} />
+                                <XAxis dataKey="uf" tick={{ fill: NEON.muted, fontSize: 12, fontWeight: 900 }} axisLine={false} tickLine={false} />
+                                <YAxis tick={{ fill: NEON.muted, fontSize: 10, fontWeight: 700 }} axisLine={false} tickLine={false} />
+                                <Tooltip content={<NeonTooltip suffix="%" prefix="Taxa de Agendamento: " />} cursor={{ fill: 'rgba(255,255,255,0.03)' }} />
+                                
+                                <Bar dataKey="taxa" name="Taxa de Conversão" radius={[6, 6, 0, 0]}>
+                                    {geoData.map((d, i) => (
+                                        <Cell 
+                                            key={i} 
+                                            fill={d.taxa >= 10 ? NEON.emerald : d.taxa >= 5 ? NEON.amber : NEON.rose} 
+                                            style={{ filter: `drop-shadow(0 0 8px ${d.taxa >= 10 ? NEON.emerald : d.taxa >= 5 ? NEON.amber : NEON.rose}80)` }}
+                                        />
+                                    ))}
+                                </Bar>
+                            </BarChart>
+                        </ResponsiveContainer>
+                    ) : (
+                        <div style={{ height: 220, display: 'flex', alignItems: 'center', justifyContent: 'center', color: 'rgba(255,255,255,0.2)', fontSize: 11, fontWeight: 700 }}>
+                            Aguardando validações de estado do motor...
+                        </div>
+                    )}
+                    
+                    {/* Legenda Dinâmica de Performance */}
+                    <div style={{ display: 'flex', gap: 14, marginTop: 14, justifyContent: 'center' }}>
+                        {[
+                            { c: NEON.emerald, l: 'Excelente (≥10%)' }, 
+                            { c: NEON.amber, l: 'Média (≥5%)' }, 
+                            { c: NEON.rose, l: 'Baixa (<5%)' }
+                        ].map(({ c, l }) => (
+                            <div key={l} style={{ display: 'flex', alignItems: 'center', gap: 5 }}>
+                                <div style={{ width: 8, height: 8, borderRadius: 2, background: c, boxShadow: `0 0 5px ${c}` }} />
+                                <span style={{ fontSize: 10, fontWeight: 700, color: 'rgba(255,255,255,0.4)' }}>{l}</span>
+                            </div>
+                        ))}
+                    </div>
+                </ChartCard>
+            </div>
+
+
+
             <style>{`
                 @keyframes pulse   { 0%,100%{opacity:1}  50%{opacity:.4} }
                 @keyframes spin    { from{transform:rotate(0deg)} to{transform:rotate(360deg)} }
                 @keyframes shimmer { 0%,100%{opacity:.4} 50%{opacity:.8} }
-            `}</style>
+            `}
+            </style>
         </div>
     )
 }

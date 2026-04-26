@@ -160,6 +160,7 @@ async function enriquecerLeadIndividual(lead) {
             enrichment.atividade_principal = dadosFiscais.cnae_fiscal_descricao;
             enrichment.bairro            = titleCase(dadosFiscais.bairro) || lead.bairro;
             enrichment.cep               = dadosFiscais.cep;
+            
             enrichment.endereco_fiscal   = [
                 titleCase(dadosFiscais.logradouro),
                 dadosFiscais.numero || 'S/N',
@@ -167,7 +168,9 @@ async function enriquecerLeadIndividual(lead) {
                 dadosFiscais.cep,
                 dadosFiscais.uf
             ].filter(Boolean).join(', ');
+            enrichment.estado            = dadosFiscais.uf; // 🎯 GARANTIA DUPLA! Pega da Receita Federal.
             enrichment.enriched          = true;
+
 
             // Sócio
             if (dadosFiscais.qsa?.length > 0) {
