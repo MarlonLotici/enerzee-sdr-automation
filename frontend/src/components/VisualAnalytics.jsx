@@ -315,18 +315,17 @@ const Skeleton = ({ h = 200 }) => (
     <div style={{ height: h, borderRadius: '1.5rem', background: 'rgba(255,255,255,0.04)', animation: 'shimmer 1.5s infinite' }} />
 )
 
-// ─── COMPONENTE PRINCIPAL ─────────────────────────────────────────────────────
+// ─── COMPONENTE PRINCIPAL ──────────────
 export default function VisualAnalytics() {
-    const [leads,     setLeads]     = useState([])
-    const [instances, setInstances] = useState([])
-    const [loading,   setLoading]   = useState(true)
-    const [lastSync,  setLastSync]  = useState(null)
+    const [leads,           setLeads]           = useState([])
+    const [instances,       setInstances]       = useState([])
+    const [loading,         setLoading]         = useState(true)
+    const [lastSync,        setLastSync]        = useState(null)
+    const [realTotalLeads,  setRealTotalLeads]  = useState(0)   // ← MOVIDO PRA FORA
 
     const fetchData = async () => {
         setLoading(true)
         try {
-
-            const [realTotalLeads, setRealTotalLeads] = useState(0)
             // Busca leads, instâncias e a CONTAGEM TOTAL em paralelo
             const [leadsRes, instRes, countRes] = await Promise.all([
                 supabase
@@ -343,7 +342,9 @@ export default function VisualAnalytics() {
             ])
             if (!leadsRes.error && leadsRes.data)     setLeads(leadsRes.data)
             if (!instRes.error  && instRes.data)      setInstances(instRes.data)
-            if (countRes.count !== null)              setRealTotalLeads(countRes.count)
+           
+             setLastSync(new Date())
+
         } finally {
             setLoading(false)
         }

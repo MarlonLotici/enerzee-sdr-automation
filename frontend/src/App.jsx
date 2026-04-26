@@ -226,23 +226,7 @@ const [botLogs, setBotLogs] = useState([]);
     const getLeadsByStatus = (status) => filteredLeads.filter(l => l.status === status);
 
 
-   // --- LÓGICA: RECOLHIMENTO DE ALTA PERFORMANCE (TOP COLLISION) ---
-   useEffect(() => {
-    const handleScroll = (e) => {
-        const target = e.target;
-        if (!target || target.scrollTop === undefined) return;
-        if (target.scrollHeight <= target.clientHeight) return;
-        const currentScrollY = target.scrollTop;
-        if (currentScrollY > 20) {
-            setHeaderVisible(false);
-        }
-        else if (currentScrollY === 0) {
-            setHeaderVisible(true);
-        }
-    };
-    window.addEventListener('scroll', handleScroll, true);
-    return () => window.removeEventListener('scroll', handleScroll, true);
-}, []);
+   
     // --- LÓGICA: SCROLL LATERAL POR MOUSE (EDGE SCROLLING) ---
     useEffect(() => {
     let animationFrame = null;
@@ -729,27 +713,8 @@ return (
 </div>
 
                         <div ref={kanbanRef} className="flex-1 flex gap-6 overflow-x-auto p-8 custom-scrollbar bg-[#0A0A0A]/40 items-stretch" style={{ scrollBehavior: 'auto' }}>
-{/* NOVA COLUNA: ERROS DE REGISTRO */}
-<KanbanColumn 
-    title="Erros de Registro" 
-    count={getLeadsByStatus('error').length} 
-    color="from-red-900 to-black" 
-    icon={<ShieldAlert className="h-6 w-6 text-red-500 animate-pulse"/>}
->
-    {getLeadsByStatus('error').map(l => (
-        <LeadCard 
-            key={l.id} 
-            lead={l} 
-            isSelected={selectedLeadIds.has(l.id)} 
-            onSelect={() => toggleSelectLead(l.id)} 
-            onView={() => setViewingLeadDetail(l)} 
-            onEdit={() => setEditingLead(l)} 
-            onDelete={() => handleDeleteLead(l.id)} 
-        />
-    ))}
-</KanbanColumn>
-                            <KanbanColumn title="Agendamentos" count={getLeadsByStatus('booked').length} color="from-emerald-700 to-green-900" icon={<CheckSquare className="h-6 w-6 text-emerald-300"/>}>
-    {getLeadsByStatus('booked').map(l => (
+    <KanbanColumn title="Novos Leads" count={getLeadsByStatus('new').length} color="from-slate-700 to-slate-900" icon={<Users className="h-6 w-6 text-slate-300"/>}>
+    {getLeadsByStatus('new').map(l => (
         <LeadCard key={l.id} lead={l} isSelected={selectedLeadIds.has(l.id)} onSelect={() => toggleSelectLead(l.id)} onView={() => setViewingLeadDetail(l)} onEdit={() => setEditingLead(l)} onDelete={() => handleDeleteLead(l.id)} />
     ))}
 </KanbanColumn>
