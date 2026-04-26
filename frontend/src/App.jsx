@@ -223,8 +223,21 @@ const [botLogs, setBotLogs] = useState([]);
         );
     }, [leads, filterText]);
 
-const getLeadsByStatus = (status) => filteredLeads.filter(l => l.status === status);
+// 🎯 Roteador Inteligente do Kanban (Sincronizado com o Analytics V13)
+const getLeadsByStatus = (coluna) => {
+    return filteredLeads.filter(l => {
+        // A mesma regra de ouro do Analytics:
+        const isAgendado = l.status === 'booked' || l.calendly_booked === true || (l.current_stage || 0) >= 4;
 
+        if (coluna === 'booked') return isAgendado;
+        if (coluna === 'waiting_analysis') return l.status === 'waiting_analysis' && !isAgendado;
+        if (coluna === 'contact') return l.status === 'contact' && !isAgendado;
+        if (coluna === 'new') return l.status === 'new' && !isAgendado;
+        if (coluna === 'error') return l.status === 'error';
+        
+        return false;
+    });
+};
 // 🔥 Hot Leads: temperatura quente, independente de status (exceto finalizados)
 const getHotLeads = () => filteredLeads.filter(l => 
     l.lead_temperature === 'hot' && 
