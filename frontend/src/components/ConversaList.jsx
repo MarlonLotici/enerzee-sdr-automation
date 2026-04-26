@@ -312,7 +312,7 @@ export default function ConversaList({ onSelect, activeId, socket, instances = [
     .select('id, name, whatsapp_id, status, is_paused, manual_pause, last_contact_at, instance_id, dono, niche, bairro, phone, cnpj, capital_social_numeric, porte, current_stage, lead_temperature, internal_notes')
     .in('status', ['contact', 'waiting_analysis'])
     .order('last_contact_at', { ascending: false })
-    .limit(80)
+    .limit(300)
 
             if (error || !leads?.length) {
                 setConversas([])
