@@ -33,7 +33,7 @@ const MES_LABEL     = ['Jan','Fev','Mar','Abr','Mai','Jun','Jul','Ago','Set','Ou
 const DIA_LABEL     = ['Dom','Seg','Ter','Qua','Qui','Sex','Sáb']
 
 // ─── COMPUTAÇÃO ───────────────────────────────────────────────────────────────
-function computeMetrics(leads, instances) {
+function computeMetrics(leads, instances, realTotalLeads) {
     if (!leads?.length) return null
 
     const now    = new Date()
@@ -234,7 +234,7 @@ function computeMetrics(leads, instances) {
     const engagementRate = visualizados > 0 ? Math.round((responderamAposVer / visualizados) * 100) : 0
 
     // ── KPIs ──
-    const totalLeads     = leads.length
+    const totalLeads     = realTotalLeads || leads.length
     const totalAbordados = leads.filter(l => l.last_contact_at).length
     const totalAgendados = sc.booked // <-- Alterado de sc.closed para sc.booked (Correção da Falha)
     const taxaAbordagem  = totalLeads > 0 ? Math.round(totalAbordados / totalLeads * 100) : 0
@@ -254,38 +254,6 @@ function computeMetrics(leads, instances) {
     }
 }
 
-// ── 11. Performance Geográfica (Baseado na nossa soldadura de UF) ──
-const geoPerformance = {}
-leads.forEach(l => {
-    if (!l.estado) return
-    if (!geoPerformance[l.estado]) geoPerformance[l.estado] = { total: 0, agendados: 0 }
-    geoPerformance[l.estado].total++
-    if (l.status === 'booked') geoPerformance[l.estado].agendados++
-})
-
-const geoData = Object.entries(geoPerformance)
-    .map(([uf, stats]) => ({
-        uf,
-        total: stats.total,
-        taxa: Math.round((stats.agendados / stats.total) * 100) || 0
-    }))
-    .sort((a, b) => b.total - a.total)
-    .slice(0, 5)
-
-
-// ── 12. Métrica de Engajamento Real ──
-let visualizados = 0
-let responderamAposVer = 0
-
-leads.forEach(l => {
-    if (l.last_seen_at) {
-        visualizados++
-        // Se viu e o estágio é > 0, significa que interagiu
-        if (l.current_stage > 0) responderamAposVer++
-    }
-})
-
-const engagementRate = visualizados > 0 ? Math.round((responderamAposVer / visualizados) * 100) : 0
 
 // ─── TOOLTIP ──────────────────────────────────────────────────────────────────
 const NeonTooltip = ({ active, payload, label, prefix = '', suffix = '' }) => {
@@ -357,19 +325,25 @@ export default function VisualAnalytics() {
     const fetchData = async () => {
         setLoading(true)
         try {
-            // Busca leads e instâncias em paralelo
-            const [leadsRes, instRes] = await Promise.all([
+
+            const [realTotalLeads, setRealTotalLeads] = useState(0)
+            // Busca leads, instâncias e a CONTAGEM TOTAL em paralelo
+            const [leadsRes, instRes, countRes] = await Promise.all([
                 supabase
                     .from('leads')
                     .select('id, status, niche, created_at, last_contact_at, instance_id, capital_social_numeric, current_stage, lead_temperature, opening_template')
-                    .order('created_at', { ascending: false }),
+                    .order('created_at', { ascending: false })
+                    .limit(10000),
                 supabase
                     .from('instances')
                     .select('id, name, whatsapp_status'),
+                supabase
+                    .from('leads')
+                    .select('*', { count: 'exact', head: true }) // 🎯 Conta o total real
             ])
             if (!leadsRes.error && leadsRes.data)     setLeads(leadsRes.data)
             if (!instRes.error  && instRes.data)      setInstances(instRes.data)
-            setLastSync(new Date())
+            if (countRes.count !== null)              setRealTotalLeads(countRes.count)
         } finally {
             setLoading(false)
         }
@@ -381,8 +355,7 @@ export default function VisualAnalytics() {
         return () => clearInterval(id)
     }, [])
 
-    const metrics = useMemo(() => computeMetrics(leads, instances), [leads, instances])
-
+        const metrics = useMemo(() => computeMetrics(leads, instances, realTotalLeads), [leads, instances, realTotalLeads])
     // ── LOADING ───────────────────────────────────────────────────────────────
     if (loading && !metrics) {
         return (

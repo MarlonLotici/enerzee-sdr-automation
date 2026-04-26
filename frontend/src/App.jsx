@@ -352,6 +352,7 @@ if (session?.user?.id) checkBriefing()
         socket.on('new_lead', (l) => { 
             setLeads(prev => [l, ...prev]); 
             setSessionLeadsCount(c => c + 1);
+            setRealTotalLeads(c => c + 1); // 🎯 Atualiza o contador visual na hora
             playNotificationSound();
         });
 
@@ -380,15 +381,20 @@ if (session?.user?.id) checkBriefing()
 
 
 
-    
+    const [realTotalLeads, setRealTotalLeads] = useState(0);
 
     const fetchLeadsFromDB = async () => {
+        // 1. Baixa os leads recentes para os cartões (limite de segurança)
         const { data } = await supabase.from('leads')
         .select('id, name, phone, status, niche, dono, cnpj, bairro, cep, porte, capital_social_numeric, whatsapp_id, instance_id, lat, lng, created_at, last_contact_at, is_paused, manual_pause, current_stage, lead_temperature, followup_count, opening_template')
         .order('created_at', { ascending: false })
-        .limit(10000); // 🎯 Destrava o teto para 10 mil leads na memória viva
+        .limit(10000); 
         
         if (data) setLeads(data);
+
+        // 2. 🎯 BUSCA O NÚMERO TOTAL REAL (Rápido e leve)
+        const { count } = await supabase.from('leads').select('*', { count: 'exact', head: true });
+        if (count !== null) setRealTotalLeads(count);
     };
 
     // --- LÓGICA DE BUSCA DAS MENSAGENS REAIS ---
@@ -580,7 +586,7 @@ return (
     <AppSidebar
         activeTab={activeTab}
         setActiveTab={setActiveTab}
-        leadsCount={leads.length}
+        leadsCount={realTotalLeads}
         onLogout={() => supabase.auth.signOut()}
     />
 
@@ -648,7 +654,7 @@ return (
         {/* Leads counter */}
         <div className="flex items-center gap-2 px-3 py-1.5 rounded-lg bg-amber-500/5 border border-amber-500/15">
             <Zap className="h-3 w-3 text-amber-500" />
-            <span className="text-sm font-black text-white">{leads.length}</span>
+            <span className="text-sm font-black text-white">{realTotalLeads}</span>
             <span className="text-[8px] text-amber-400/60 font-black uppercase">leads</span>
         </div>
 
