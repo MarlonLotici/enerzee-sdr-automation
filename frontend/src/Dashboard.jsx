@@ -317,7 +317,8 @@ const carregarDados = useCallback(async () => {
             const spinFunil = spinLabels.map((nome, i) => ({
                 nome,
                 // 🎯 CORREÇÃO: Só conta no funil se já tiver saído do status 'new'
-                valor: leads?.filter(l => l.status !== 'new' && (l.current_stage || 0) === i).length || 0,
+                // 🎯 Ignora virgens e também ignora mortos, robôs, erros e bloqueados
+valor: leads?.filter(l => !['new', 'invalid', 'blacklisted', 'error', 'dead'].includes(l.status) && (l.current_stage || 0) === i).length || 0,
                 cor: spinCores[i],
             }))
             setDados({
