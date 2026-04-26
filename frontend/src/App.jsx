@@ -76,7 +76,7 @@ function MapClickHandler({ setCenter, setLocationName, setSearchMode }) {
         // ── Sidebar Navigation ──
 const NAV_ITEMS = [
     { key: 'search', icon: Radio, label: 'Radar', color: '#F59E0B' },
-    { key: 'crm', icon: LayoutDashboard, label: 'CRM', color: '#F59E0B' },
+    { key: 'crm', icon: LayoutDashboard, label: 'Pipeline', color: '#F59E0B' },
     { key: 'connections', icon: MessageSquare, label: 'WhatsApp', color: '#F59E0B' },
     { key: 'dashboard', icon: BarChart2, label: 'Analytics', color: '#F59E0B' },
     { key: 'briefing', icon: FileText, label: 'Briefing', color: '#F59E0B' },
@@ -385,7 +385,9 @@ if (session?.user?.id) checkBriefing()
     const fetchLeadsFromDB = async () => {
         const { data } = await supabase.from('leads')
         .select('id, name, phone, status, niche, dono, cnpj, bairro, cep, porte, capital_social_numeric, whatsapp_id, instance_id, lat, lng, created_at, last_contact_at, is_paused, manual_pause, current_stage, lead_temperature, followup_count, opening_template')
-        .order('created_at', { ascending: false });
+        .order('created_at', { ascending: false })
+        .limit(10000); // 🎯 Destrava o teto para 10 mil leads na memória viva
+        
         if (data) setLeads(data);
     };
 
@@ -599,7 +601,7 @@ return (
             <div>
                 <h2 className="text-sm font-black text-white uppercase tracking-wider leading-none">
     {activeTab === 'search' ? 'Radar Neural' :
-     activeTab === 'crm' ? 'CRM War Room' :
+     activeTab === 'Pipeline' ? 'Pipeline' :
      activeTab === 'connections' ? 'Central WhatsApp' :
      'Analytics'}
 </h2>
@@ -740,11 +742,11 @@ return (
         />
     ))}
 </KanbanColumn>
-                            <KanbanColumn title="Novos Capturados" count={getLeadsByStatus('new').length} color="from-slate-800 to-slate-950" icon={<Zap className="h-6 w-6 text-slate-400"/>}>
-                                {getLeadsByStatus('new').map(l => (
-                                    <LeadCard key={l.id} lead={l} isSelected={selectedLeadIds.has(l.id)} onSelect={() => toggleSelectLead(l.id)} onView={() => setViewingLeadDetail(l)} onEdit={() => setEditingLead(l)} onDelete={() => handleDeleteLead(l.id)} />
-                                ))}
-                            </KanbanColumn>
+                            <KanbanColumn title="Agendamentos" count={getLeadsByStatus('booked').length} color="from-emerald-700 to-green-900" icon={<CheckSquare className="h-6 w-6 text-emerald-300"/>}>
+    {getLeadsByStatus('booked').map(l => (
+        <LeadCard key={l.id} lead={l} isSelected={selectedLeadIds.has(l.id)} onSelect={() => toggleSelectLead(l.id)} onView={() => setViewingLeadDetail(l)} onEdit={() => setEditingLead(l)} onDelete={() => handleDeleteLead(l.id)} />
+    ))}
+</KanbanColumn>
                             <KanbanColumn title="Em Atendimento IA" count={getLeadsByStatus('contact').length} color="from-blue-700 to-blue-950" icon={<BrainCircuit className="h-6 w-6 text-blue-300"/>} isActive={true}>
                                 {getLeadsByStatus('contact').map(l => (
                                     <LeadCard key={l.id} lead={l} isSelected={selectedLeadIds.has(l.id)} onSelect={() => toggleSelectLead(l.id)} onView={() => setViewingLeadDetail(l)} onEdit={() => setEditingLead(l)} onDelete={() => handleDeleteLead(l.id)} />
@@ -1378,7 +1380,7 @@ className="glass-panel border-white/20 text-white max-w-5xl w-[95vw] max-h-[95vh
                     <DialogHeader className="mb-8 text-center"><DialogTitle className="text-4xl font-black text-amber-400 neon-text tracking-tighter uppercase italic">Ajustar Lead</DialogTitle></DialogHeader>
                     <div className="space-y-8">
                         <div className="space-y-3"><Label className="text-[11px] font-black text-amber-300 uppercase tracking-[0.3em]">Nome Comercial</Label><Input value={editingLead?.name || ""} onChange={e => setEditingLead({ ...editingLead, name: e.target.value })} className="glass-card h-16 rounded-2xl bg-slate-950 border-white/10 text-xl font-black tracking-tighter px-6" /></div>
-                        <div className="space-y-3"><Label className="text-[11px] font-black text-amber-300 uppercase tracking-[0.3em]">Fase do Funil Neural</Label><select value={editingLead?.status || "new"} onChange={e => setEditingLead({ ...editingLead, status: e.target.value })} className="w-full glass-card h-16 bg-slate-950 border-white/10 rounded-2xl px-6 text-lg font-black text-white uppercase appearance-none cursor-pointer"><option value="new" className="bg-slate-950 text-white">Novos Leads</option><option value="contact" className="bg-slate-950 text-white">Em Atendimento</option><option value="waiting_analysis" className="bg-slate-950 text-white">Auditoria</option><option value="closed" className="bg-slate-950 text-white">Agendado</option></select></div>
+                        <div className="space-y-3"><Label className="text-[11px] font-black text-amber-300 uppercase tracking-[0.3em]">Fase do Funil Neural</Label><select value={editingLead?.status || "new"} onChange={e => setEditingLead({ ...editingLead, status: e.target.value })} className="w-full glass-card h-16 bg-slate-950 border-white/10 rounded-2xl px-6 text-lg font-black text-white uppercase appearance-none cursor-pointer"><option value="new" className="bg-slate-950 text-white">Novos Leads</option><option value="contact" className="bg-slate-950 text-white">Em Atendimento</option><option value="waiting_analysis" className="bg-slate-950 text-white">Auditoria</option><option value="booked" className="bg-slate-950 text-white">Agendado</option></select></div>
                     </div>
                     <DialogFooter className="flex justify-between gap-6 pt-10 mt-6 border-t border-white/10"><Button variant="ghost" onClick={() => handleDeleteLead(editingLead.id)} className="text-red-500 font-black h-16 rounded-2xl px-10 text-xs uppercase tracking-widest glass-card border-transparent hover:bg-red-500/10">EXCLUIR</Button><Button onClick={handleSaveEdit} className="bg-amber-600 hover:bg-amber-500 text-black font-black h-16 rounded-2xl px-12 text-sm uppercase italic" style={{boxShadow:'0 0 16px rgba(245,158,11,0.2)'}}>SALVAR DADOS</Button></DialogFooter>
                 </DialogContent>

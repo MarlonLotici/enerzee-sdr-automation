@@ -1620,11 +1620,7 @@ const mensagensSplit = [balaoUnico]; // ← BALÃO ÚNICO (era [balao1, balao2])
         motoresEmExecucao.delete(instanceId);
     }
 }
-// ============================================================================
-// 🔄 LOOP TRIPLO DE RECUPERAÇÃO E FOLLOW-UP (OTIMIZADO)
-// ============================================================================
-// 🔒 TRAVA DE SEGURANÇA GLOBAL: Coloque esta linha fora da função, no topo do arquivo
-let vigiaEmExecucao = false; 
+
 
 // ============================================================================
 // 🔄 LOOP TRIPLO DE RECUPERAÇÃO E FOLLOW-UP (OTIMIZADO)
