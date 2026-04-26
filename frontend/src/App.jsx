@@ -223,8 +223,20 @@ const [botLogs, setBotLogs] = useState([]);
         );
     }, [leads, filterText]);
 
-    const getLeadsByStatus = (status) => filteredLeads.filter(l => l.status === status);
+const getLeadsByStatus = (status) => filteredLeads.filter(l => l.status === status);
 
+// 🔥 Hot Leads: temperatura quente, independente de status (exceto finalizados)
+const getHotLeads = () => filteredLeads.filter(l => 
+    l.lead_temperature === 'hot' && 
+    !['booked', 'dead', 'invalid', 'blacklisted'].includes(l.status)
+);
+
+// 📭 Aguardando Resposta: status=contact mas sem nenhuma resposta do lead ainda
+// Detecta pelo current_stage: se IA mandou saudação mas lead não engajou, current_stage continua 0
+const getAwaitingReply = () => filteredLeads.filter(l => 
+    l.status === 'contact' && 
+    (!l.current_stage || l.current_stage === 0)
+);
 
    
     // --- LÓGICA: SCROLL LATERAL POR MOUSE (EDGE SCROLLING) ---
@@ -713,7 +725,9 @@ return (
 </div>
 
                         <div ref={kanbanRef} className="flex-1 flex gap-6 overflow-x-auto p-8 custom-scrollbar bg-[#0A0A0A]/40 items-stretch" style={{ scrollBehavior: 'auto' }}>
-    <KanbanColumn title="Novos Leads" count={getLeadsByStatus('new').length} color="from-slate-700 to-slate-900" icon={<Users className="h-6 w-6 text-slate-300"/>}>
+    
+
+            <KanbanColumn title="Novos Leads" count={getLeadsByStatus('new').length} color="from-slate-700 to-slate-900" icon={<Users className="h-6 w-6 text-slate-300"/>}>
     {getLeadsByStatus('new').map(l => (
         <LeadCard key={l.id} lead={l} isSelected={selectedLeadIds.has(l.id)} onSelect={() => toggleSelectLead(l.id)} onView={() => setViewingLeadDetail(l)} onEdit={() => setEditingLead(l)} onDelete={() => handleDeleteLead(l.id)} />
     ))}
@@ -723,8 +737,13 @@ return (
                                     <LeadCard key={l.id} lead={l} isSelected={selectedLeadIds.has(l.id)} onSelect={() => toggleSelectLead(l.id)} onView={() => setViewingLeadDetail(l)} onEdit={() => setEditingLead(l)} onDelete={() => handleDeleteLead(l.id)} />
                                 ))}
                             </KanbanColumn>
-                            <KanbanColumn title="Auditoria de Fatura" count={getLeadsByStatus('waiting_analysis').length} color="from-amber-600 to-orange-800" icon={<Search className="h-6 w-6 text-amber-300"/>}>
-                                {getLeadsByStatus('waiting_analysis').map(l => (
+                            <KanbanColumn title="Aguardando Resposta" count={getAwaitingReply().length} color="from-slate-600 to-slate-800" icon={<MessageSquare className="h-6 w-6 text-slate-300"/>}>
+                                {getAwaitingReply().map(l => (
+                                    <LeadCard key={l.id} lead={l} isSelected={selectedLeadIds.has(l.id)} onSelect={() => toggleSelectLead(l.id)} onView={() => setViewingLeadDetail(l)} onEdit={() => setEditingLead(l)} onDelete={() => handleDeleteLead(l.id)} />
+                                ))}
+                            </KanbanColumn>
+                            <KanbanColumn title="🔥 Hot Leads" count={getHotLeads().length} color="from-red-700 to-orange-900" icon={<Flame className="h-6 w-6 text-red-300 animate-pulse"/>} isActive={true}>
+                                {getHotLeads().map(l => (
                                     <LeadCard key={l.id} lead={l} isSelected={selectedLeadIds.has(l.id)} onSelect={() => toggleSelectLead(l.id)} onView={() => setViewingLeadDetail(l)} onEdit={() => setEditingLead(l)} onDelete={() => handleDeleteLead(l.id)} />
                                 ))}
                             </KanbanColumn>
@@ -734,6 +753,8 @@ return (
                                 ))}
                             </KanbanColumn>
                         </div>
+
+
                     </TabsContent>
 
                     {/* ABA RADAR (CORREÇÃO DE CONTRASTE NICHO) */}
