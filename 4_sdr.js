@@ -526,7 +526,7 @@ const concessionariaLocal = (MAPA_CONCESSIONARIAS[contextoLead.estado] || 'conce
         .replaceAll('${perfilEmocional}', perfilEmocional)
         .replaceAll('${economiaMensal}', economiaMensalFormatada)      // ← NOVO
         .replaceAll('${economiaAnual}', economiaAnualFormatada);       // ← NOVO
-        ;
+        
          
 
     return promptFinal;
@@ -956,8 +956,17 @@ async function filtrarEEnviarResposta(sock, remoteJid, resposta, historico, lead
 
     // ── 2. ATUALIZAÇÃO DE STATUS NO BANCO ──
     let updates = {};
-    if (matchEstagio) updates.current_stage = parseInt(matchEstagio[1]);
-    if (matchClima) updates.sentiment = matchClima[1].toLowerCase();
+if (matchEstagio) {
+    const estagioParsed = parseInt(matchEstagio[1]);
+    // 🛡️ Range válido: 0 a 5. Se a LLM alucinar 6, 7, 9, força no 5.
+    if (estagioParsed >= 0 && estagioParsed <= 5) {
+        updates.current_stage = estagioParsed;
+    } else {
+        console.warn(`⚠️ [VALIDAÇÃO] LLM alucinou estágio ${estagioParsed} para ${lead.name}. Mantendo no 5.`);
+        updates.current_stage = 5;
+    }
+}
+if (matchClima) updates.sentiment = matchClima[1].toLowerCase();
     if (matchManual) {
         updates.calendly_booked = true;
         updates.status = 'booked';
@@ -1004,7 +1013,8 @@ async function filtrarEEnviarResposta(sock, remoteJid, resposta, historico, lead
 }
 
 
-async function processarMensagem(sock, msg, instanceId, textoConsolidado = null) {    const remoteJid = msg.key.remoteJid;
+async function processarMensagem(sock, msg, instanceId, textoConsolidado = null) {    
+    const remoteJid = msg.key.remoteJid;
     if (remoteJid.includes('@g.us')) return; 
 
     const fromMe = msg.key.fromMe; 
@@ -1686,6 +1696,12 @@ async function loopRecuperacaoConversas() {
                             const instancia = sessions.get(l.instance_id);
                             if (instancia && instancia.ready) {
                                 await processarMensagemManual(instancia.sock, l);
+
+
+                                 // 🛡️ ANTI-BAN: Jitter humano entre recuperações
+                        const jitterRecuperacao = Math.floor(Math.random() * 30000) + 30000;
+                        console.log(`⏸️ [ANTI-BAN] Aguardando ${Math.round(jitterRecuperacao/1000)}s antes da próxima recuperação...`);
+                        await delay(jitterRecuperacao);
                             }
                         }
                     }
@@ -1699,14 +1715,14 @@ async function loopRecuperacaoConversas() {
         // 🚀 2. FOLLOW-UP ÚNICO (D1) + TOMBAMENTO POR SILÊNCIO (ANTES DO LINK)
         // ====================================================================
         const { data: leadsFollowUp } = await supabase
-            .from('leads')
-            .select('id, name, whatsapp_id, instance_id, dono, followup_count, last_contact_at, backup_phone, backup_whatsapp_id, backup_tried')
-            .eq('status', 'contact')
-            .eq('calendly_booked', false)
-            .is('link_sent_at', null) // 🛡️ SÓ PEGA QUEM AINDA NÃO RECEBEU O LINK
-            .lt('followup_count', 2) 
-            .order('last_contact_at', { ascending: true })
-            .limit(15);
+    .from('leads')
+    .select('id, name, whatsapp_id, instance_id, dono, followup_count, last_contact_at, backup_phone, backup_whatsapp_id, backup_tried')
+    .eq('status', 'contact')
+    .eq('calendly_booked', false)
+    .is('link_sent_at', null)
+    .lt('followup_count', 2) 
+    .order('last_contact_at', { ascending: true })
+    .limit(5); // 🛡️ Reduzido de 15 → 5: distribui follow-ups ao longo do dia em vez de explosão
 
         if (leadsFollowUp) {
             for (const lf of leadsFollowUp) {
@@ -1730,13 +1746,22 @@ async function loopRecuperacaoConversas() {
                         const msgFollowUp = `${primeiroNome}, conseguiu dar uma olhada na mensagem acima? Como a gente tem poucas vagas com isenção pra região, queria confirmar se faz sentido pra ${nomeEmpresa} antes de liberar o espaço.`;
 
                         console.log(`🔔 [FOLLOW-UP D1] Disparando para ${lf.name}`);
-                        await instancia.sock.sendPresenceUpdate('composing', lf.whatsapp_id);
-                        await delay(5000);
-                        await enviarMensagemIA(instancia.sock, lf.whatsapp_id, { text: msgFollowUp });
-                        await db.saveMessage(lf.whatsapp_id, 'assistant', msgFollowUp, lf.instance_id);
+await instancia.sock.sendPresenceUpdate('composing', lf.whatsapp_id);
 
-                        await supabase.from('leads').update({ followup_count: 1, last_contact_at: dataAgoraDate.toISOString() }).eq('id', lf.id);
-                        await delay(8000);
+// ⏳ Tempo de "digitação" proporcional ao tamanho da mensagem (humanização)
+const tempoDigitacao = Math.min(Math.max(msgFollowUp.length * 80, 4000), 9000);
+await delay(tempoDigitacao);
+
+await enviarMensagemIA(instancia.sock, lf.whatsapp_id, { text: msgFollowUp });
+await db.saveMessage(lf.whatsapp_id, 'assistant', msgFollowUp, lf.instance_id);
+
+await supabase.from('leads').update({ followup_count: 1, last_contact_at: dataAgoraDate.toISOString() }).eq('id', lf.id);
+
+// 🛡️ ANTI-BAN: Jitter de 60-120 segundos entre follow-ups do mesmo chip
+// (antes era só 8s — ban iminente)
+const jitterAntiBan = Math.floor(Math.random() * 60000) + 60000;
+console.log(`⏸️ [ANTI-BAN] Aguardando ${Math.round(jitterAntiBan/1000)}s antes do próximo follow-up...`);
+await delay(jitterAntiBan);
                     } 
                     else if (followupAtual === 1) {
                         if (!lf.backup_tried && lf.backup_whatsapp_id) {
@@ -1771,8 +1796,7 @@ async function loopRecuperacaoConversas() {
             .not('link_sent_at', 'is', null) // O link foi enviado
             .lt('link_sent_at', quatroHorasAtrasISO) // Faz mais de 4 horas
             .is('last_followup_type', null) // Ainda não foi cobrado pelo link
-            .limit(10);
-
+            .limit(3);   // 🛡️ Reduzido de 10 → 3
         if (leadsLink) {
             for (const ll of leadsLink) {
                 try {
@@ -1786,14 +1810,21 @@ async function loopRecuperacaoConversas() {
                     const msgFollowUpLink = `${primeiroNome}, meu sistema de agenda deu uma travada hoje. Vc conseguiu travar o seu horário lá no link ou deu erro aí também?`;
 
                     console.log(`🔔 [FOLLOW-UP LINK] Recuperando abandono de ${ll.name}`);
-                    await instancia.sock.sendPresenceUpdate('composing', ll.whatsapp_id);
-                    await delay(4000);
-                    await enviarMensagemIA(instancia.sock, ll.whatsapp_id, { text: msgFollowUpLink });
-                    await db.saveMessage(ll.whatsapp_id, 'assistant', msgFollowUpLink, ll.instance_id);
-                    
-                    // Marca que já mandou esse follow-up para não repetir
-                    await supabase.from('leads').update({ last_followup_type: 'link_abandoned' }).eq('id', ll.id);
-                    await delay(5000);
+await instancia.sock.sendPresenceUpdate('composing', ll.whatsapp_id);
+
+const tempoDigitacaoLink = Math.min(Math.max(msgFollowUpLink.length * 80, 4000), 9000);
+await delay(tempoDigitacaoLink);
+
+await enviarMensagemIA(instancia.sock, ll.whatsapp_id, { text: msgFollowUpLink });
+await db.saveMessage(ll.whatsapp_id, 'assistant', msgFollowUpLink, ll.instance_id);
+
+await supabase.from('leads').update({ last_followup_type: 'link_abandoned' }).eq('id', ll.id);
+
+// 🛡️ ANTI-BAN: Jitter de 60-120s
+const jitterAntiBan = Math.floor(Math.random() * 60000) + 60000;
+console.log(`⏸️ [ANTI-BAN] Aguardando ${Math.round(jitterAntiBan/1000)}s antes do próximo follow-up...`);
+await delay(jitterAntiBan);
+
                 } catch (errLink) { console.error(`❌ Erro Follow-up Link ${ll.name}:`, errLink.message); }
             }
         }
@@ -1823,6 +1854,11 @@ async function loopRecuperacaoConversas() {
                     const instancia = sessions.get(lp.instance_id);
                     if (instancia && instancia.ready) {
                         await processarMensagemManual(instancia.sock, lp);
+
+                         // 🛡️ ANTI-BAN: Jitter humano entre retomadas
+        const jitterRetomada = Math.floor(Math.random() * 45000) + 45000;
+        console.log(`⏸️ [ANTI-BAN] Aguardando ${Math.round(jitterRetomada/1000)}s antes da próxima retomada...`);
+        await delay(jitterRetomada);
                     }
                 }
             }
@@ -1889,12 +1925,18 @@ async function loopAuditor() {
 }
 
 async function processarMensagemManual(sock, lead) {
+    // 🛡️ BLINDAGEM ANTI-BAN: Não responde proativamente em domingos / fora do expediente
+    if (!dentroDoExpediente()) {
+        console.log(`💤 [RECUPERAÇÃO] Fora do expediente. Lead ${lead.name} aguardará dia útil.`);
+        return;
+    }
+
     const remoteJid = lead.whatsapp_id;
     const instanceId = lead.instance_id;
 
     // 1. BUSCA O HISTÓRICO REAL
     const histRaw = await db.getHistory(remoteJid, instanceId);
-    if (!histRaw || histRaw.length === 0) return;
+if (!histRaw || histRaw.length === 0) return;
 
     const ultimaMsg = histRaw[histRaw.length - 1];
     if (ultimaMsg.role !== 'user') {

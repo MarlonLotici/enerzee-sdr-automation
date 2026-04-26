@@ -36,6 +36,13 @@ const DIA_LABEL     = ['Dom','Seg','Ter','Qua','Qui','Sex','Sáb']
 function computeMetrics(leads, instances, realTotalLeads) {
     if (!leads?.length) return null
 
+    // 🛡️ FILTRO BLINDADO: leads válidos = exclui inválidos, blacklisted e erros
+    // Esses 3 status pertencem a leads que NUNCA foram realmente abordados,
+    // então não devem contaminar nenhuma taxa de conversão.
+    const leadsValidos = leads.filter(l => 
+        !['invalid', 'blacklisted', 'error'].includes(l.status)
+    )
+
     const now    = new Date()
     const cutoff = new Date(now)
     cutoff.setMonth(cutoff.getMonth() - 5)
@@ -51,7 +58,7 @@ function computeMetrics(leads, instances, realTotalLeads) {
         monthBuckets[key] = { mes: MES_LABEL[d.getMonth()], criados: 0, abordados: 0 }
     }
 
-    leads.forEach(lead => {
+    leadsValidos.forEach(lead => {
         const created = new Date(lead.created_at)
         if (created >= cutoff) {
             const key = `${created.getFullYear()}-${String(created.getMonth() + 1).padStart(2, '0')}`
@@ -67,20 +74,20 @@ function computeMetrics(leads, instances, realTotalLeads) {
     })
     const monthly = Object.values(monthBuckets)
 
-    // ── 2. Funil por status (CORRIGIDO PARA V13: closed -> booked) ──
+    // ── 2. Funil por status ──
     const sc = { new: 0, contact: 0, waiting_analysis: 0, booked: 0, error: 0, invalid: 0, blacklisted: 0, dead: 0 }
-    leads.forEach(l => { if (sc[l.status] !== undefined) sc[l.status]++ })
+    leadsValidos.forEach(l => { if (sc[l.status] !== undefined) sc[l.status]++ })
 
     const funnel = [
-        { etapa: 'Capturados',  qtd: leads.length,                                     fill: NEON.blue },
-        { etapa: 'Abordados',   qtd: sc.contact + sc.waiting_analysis + sc.booked,        fill: NEON.cyan },
-        { etapa: 'Em análise',  qtd: sc.waiting_analysis + sc.booked,                      fill: NEON.violet },
-        { etapa: 'Agendados',   qtd: sc.booked,                                            fill: NEON.emerald },
+        { etapa: 'Capturados',  qtd: leadsValidos.length,                              fill: NEON.blue },
+        { etapa: 'Abordados',   qtd: sc.contact + sc.waiting_analysis + sc.booked,     fill: NEON.cyan },
+        { etapa: 'Em análise',  qtd: sc.waiting_analysis + sc.booked,                  fill: NEON.violet },
+        { etapa: 'Agendados',   qtd: sc.booked,                                        fill: NEON.emerald },
     ]
 
     // ── 3. Nichos (top 6) ──
     const nicheCount = {}
-    leads.forEach(l => {
+    leadsValidos.forEach(l => {
         if (!l.niche) return
         const n = String(l.niche).trim()
         nicheCount[n] = (nicheCount[n] || 0) + 1
@@ -90,14 +97,14 @@ function computeMetrics(leads, instances, realTotalLeads) {
         .slice(0, 6)
         .map(([name, count], i) => ({
             name: name.length > 14 ? name.slice(0, 14) + '…' : name,
-            value: Math.round(count / leads.length * 100),
+            value: leadsValidos.length > 0 ? Math.round(count / leadsValidos.length * 100) : 0,
             abs: count,
             fill: NICHE_COLORS[i % NICHE_COLORS.length],
         }))
 
     // ── 4. Disparos por chip (instance_id) ──
     const chipCount = {}
-    leads.forEach(l => {
+    leadsValidos.forEach(l => {
         if (!l.last_contact_at || !l.instance_id) return
         chipCount[l.instance_id] = (chipCount[l.instance_id] || 0) + 1
     })
@@ -115,7 +122,7 @@ function computeMetrics(leads, instances, realTotalLeads) {
 
     // ── 5. Leads capturados por dia da semana ──
     const diaCriados = [0, 0, 0, 0, 0, 0, 0]
-    leads.forEach(l => {
+    leadsValidos.forEach(l => {
         if (!l.created_at) return
         diaCriados[new Date(l.created_at).getDay()]++
     })
@@ -125,7 +132,7 @@ function computeMetrics(leads, instances, realTotalLeads) {
     const estagioLabels = ['Qualificação', 'Situação', 'Dor/Implicação', 'Solução', 'Agendamento', 'Fechamento']
     const estagioColors = ['#64748b', '#3B82F6', '#06B6D4', '#8B5CF6', '#F59E0B', '#10B981']
     const estagioCount = [0, 0, 0, 0, 0, 0]
-    leads.forEach(l => {
+    leadsValidos.forEach(l => {
         const stage = l.current_stage || 0
         if (stage >= 0 && stage <= 5) estagioCount[stage]++
     })
@@ -137,7 +144,7 @@ function computeMetrics(leads, instances, realTotalLeads) {
 
     // ── 7. Distribuição de temperatura ──
     const tempCount = { cold: 0, warm: 0, hot: 0, dead: 0 }
-    leads.forEach(l => {
+    leadsValidos.forEach(l => {
         const t = l.lead_temperature || 'cold'
         if (tempCount[t] !== undefined) tempCount[t]++
     })
@@ -148,9 +155,9 @@ function computeMetrics(leads, instances, realTotalLeads) {
         { name: 'Dead 💀',  value: tempCount.dead, fill: '#64748b' },
     ].filter(d => d.value > 0)
 
-    // ── 8. A/B Testing de aberturas (RECUPERADO) ──
+    // ── 8. A/B Testing de aberturas ──
     const templateStats = {}
-    leads.forEach(l => {
+    leadsValidos.forEach(l => {
         if (!l.opening_template) return
         if (!templateStats[l.opening_template]) {
             templateStats[l.opening_template] = { enviados: 0, responderam: 0 }
@@ -169,9 +176,9 @@ function computeMetrics(leads, instances, realTotalLeads) {
         }))
         .sort((a, b) => b.taxa - a.taxa)
 
-    // ── 9. Taxa de resposta por nicho (RECUPERADO) ──
+    // ── 9. Taxa de resposta por nicho ──
     const nicheResponse = {}
-    leads.forEach(l => {
+    leadsValidos.forEach(l => {
         if (!l.niche) return
         const n = String(l.niche).trim()
         if (!nicheResponse[n]) nicheResponse[n] = { total: 0, responderam: 0 }
@@ -189,26 +196,28 @@ function computeMetrics(leads, instances, realTotalLeads) {
         .sort((a, b) => b.taxa - a.taxa)
         .slice(0, 8)
 
-    // ── 10. Taxa de passagem entre estágios SPIN (RECUPERADO) ──
+    // ── 10. Taxa de passagem entre estágios SPIN — COM CLAMP ANTI-200% ──
     const spinPassagem = []
     for (let i = 0; i < 5; i++) {
         const atual = estagioCount[i]
         const proximo = estagioCount[i + 1]
-        const taxa = atual > 0 ? Math.round(proximo / atual * 100) : 0
+        // 🛡️ Blindagem matemática: taxa nunca passa de 100%, perdidos nunca fica negativo
+        const taxa = atual > 0 ? Math.min(Math.round(proximo / atual * 100), 100) : 0
+        const perdidos = Math.max(atual - proximo, 0)
         spinPassagem.push({
             de: estagioLabels[i],
             para: estagioLabels[i + 1],
             taxa,
-            saem: atual - proximo,
+            saem: perdidos,
             passam: proximo,
         })
     }
 
-    // ── 11. Performance Geográfica (NOVO) ──
+    // ── 11. Performance Geográfica ──
     const geoPerformance = {}
-    leads.forEach(l => {
-        if (!l.estado) return
-        const uf = l.estado.toUpperCase()
+    leadsValidos.forEach(l => {
+        if (!l.estado || l.estado.trim() === '') return
+        const uf = l.estado.toUpperCase().trim()
         if (!geoPerformance[uf]) geoPerformance[uf] = { total: 0, agendados: 0 }
         geoPerformance[uf].total++
         if (l.status === 'booked') geoPerformance[uf].agendados++
@@ -222,10 +231,10 @@ function computeMetrics(leads, instances, realTotalLeads) {
         .sort((a, b) => b.total - a.total)
         .slice(0, 5)
 
-    // ── 12. Métrica de Engajamento Real (NOVO) ──
+    // ── 12. Métrica de Engajamento Real ──
     let visualizados = 0
     let responderamAposVer = 0
-    leads.forEach(l => {
+    leadsValidos.forEach(l => {
         if (l.last_seen_at) {
             visualizados++
             if (l.current_stage > 0) responderamAposVer++
@@ -234,9 +243,9 @@ function computeMetrics(leads, instances, realTotalLeads) {
     const engagementRate = visualizados > 0 ? Math.round((responderamAposVer / visualizados) * 100) : 0
 
     // ── KPIs ──
-    const totalLeads     = realTotalLeads || leads.length
-    const totalAbordados = leads.filter(l => l.last_contact_at).length
-    const totalAgendados = sc.booked // <-- Alterado de sc.closed para sc.booked (Correção da Falha)
+    const totalLeads = realTotalLeads || leadsValidos.length
+    const totalAbordados = leadsValidos.filter(l => l.last_contact_at).length
+    const totalAgendados = sc.booked
     const taxaAbordagem  = totalLeads > 0 ? Math.round(totalAbordados / totalLeads * 100) : 0
 
     const last2 = monthly.slice(-2)
@@ -250,7 +259,7 @@ function computeMetrics(leads, instances, realTotalLeads) {
         statusCounts: sc,
         funnelSpin, temperatureData, abTestData,
         nicheResponseData, spinPassagem,
-        geoData, engagementRate // <-- Novas chaves injetadas no retorno
+        geoData, engagementRate
     }
 }
 
