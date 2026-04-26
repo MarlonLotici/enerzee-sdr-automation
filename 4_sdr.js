@@ -141,6 +141,8 @@ const redisConnection = new Redis(process.env.REDIS_URL || 'redis://127.0.0.1:63
 const filaMensagensIA = new Queue('FilaIA', { connection: redisConnection });
 // === FIM CONFIG REDIS & BULLMQ ===
 
+
+
 // --- TRAVA DE SEGURANÇA (MEMÓRIA VIVA) ---
 const leadsEmProcessamento = new Set();
 const mensagensEnviadasPelaIA = new Set(); // 🛡️ PASSO 1: A Memória Anti-Eco do Robô
@@ -149,6 +151,129 @@ const mapaRastreioLID = new Map();
 const gavetaDeMensagens = new Map(); // 🧠 OUVIDO PACIENTE: Gaveta temporária de mensagens
 const cacheRegrasInstancia = new Map(); // 🧠 Memória de curto prazo para regras
 let sdrEventsGlobal = null; // 🛡️ Adicione esta linha aqui no topo
+
+// ============================================================================
+// 🚦 SEMÁFORO DE CHIPS — Sistema de prioridade tática anti-ban
+// Garante que apenas 1 disparo por chip aconteça a cada COOLDOWN_MS
+// E que disparos de SAUDAÇÃO tenham prioridade sobre FOLLOW-UPs
+// ============================================================================
+const semaforoChips = new Map(); // chipId → { ocupado: boolean, ultimoDisparo: timestamp, prioridadeAtual: 'SAUDACAO'|'RECUPERACAO'|'FOLLOWUP' }
+const COOLDOWN_ENTRE_DISPAROS_MS = 90000; // Mínimo 90s entre QUALQUER mensagem do mesmo chip
+
+// Mapa de prioridades (menor número = mais importante)
+const PRIORIDADE = {
+    SAUDACAO: 1,        // 🟢 Saudação inicial — onde acontece a venda
+    RECUPERACAO: 2,     // 🟡 Resposta atrasada a lead esperando
+    FOLLOWUP: 3,        // 🟠 Follow-up D1 — risco de ban
+    FOLLOWUP_LINK: 4    // 🟠 Follow-up de link abandonado — risco de ban
+};
+
+/**
+ * 🚦 Tenta adquirir o semáforo do chip. Retorna true se conseguiu, false se outro disparo de prioridade igual ou maior está em andamento.
+ * 
+ * Regras:
+ * - Se o chip está livre → adquire e retorna true
+ * - Se o chip está ocupado com prioridade MENOR (número MAIOR) → expulsa o atual e adquire
+ * - Se o chip está ocupado com prioridade IGUAL ou MAIOR → retorna false (espera ou aborta)
+ * - Se ainda não passou o cooldown → retorna false
+ */
+async function adquirirSemaforoChip(chipId, tipoDisparo) {
+    const agora = Date.now();
+    const estado = semaforoChips.get(chipId);
+    const minhaPrioridade = PRIORIDADE[tipoDisparo];
+    
+    // 1. Verifica cooldown global
+    if (estado?.ultimoDisparo && (agora - estado.ultimoDisparo) < COOLDOWN_ENTRE_DISPAROS_MS) {
+        const tempoRestante = Math.round((COOLDOWN_ENTRE_DISPAROS_MS - (agora - estado.ultimoDisparo)) / 1000);
+        console.log(`⏸️ [SEMÁFORO] Chip ${chipId.substring(0, 8)} em cooldown. ${tempoRestante}s restantes (tipo: ${tipoDisparo}).`);
+        return false;
+    }
+    
+    // 2. Se está ocupado, verifica prioridade
+    if (estado?.ocupado) {
+        const prioridadeAtual = PRIORIDADE[estado.prioridadeAtual] || 99;
+        
+        if (minhaPrioridade < prioridadeAtual) {
+            console.log(`🟢 [SEMÁFORO] ${tipoDisparo} (P${minhaPrioridade}) tomando vaga de ${estado.prioridadeAtual} (P${prioridadeAtual}) no chip ${chipId.substring(0, 8)}.`);
+            // Saudação chegou? Toma a vaga!
+        } else {
+            console.log(`🔒 [SEMÁFORO] Chip ${chipId.substring(0, 8)} ocupado com ${estado.prioridadeAtual}. ${tipoDisparo} aguarda.`);
+            return false;
+        }
+    }
+    
+    // 3. Adquire o semáforo
+    semaforoChips.set(chipId, {
+        ocupado: true,
+        ultimoDisparo: estado?.ultimoDisparo || 0, // Mantém o último até o disparo concluir
+        prioridadeAtual: tipoDisparo
+    });
+    return true;
+}
+
+/**
+ * 🚦 Libera o semáforo do chip e marca o timestamp do disparo.
+ */
+function liberarSemaforoChip(chipId) {
+    semaforoChips.set(chipId, {
+        ocupado: false,
+        ultimoDisparo: Date.now(),
+        prioridadeAtual: null
+    });
+}
+
+// ============================================================================
+// 🎚️ MODO OPERACIONAL DINÂMICO — 80% SAUDAÇÃO / 20% FOLLOW-UP
+// ============================================================================
+// Janelas dedicadas pra cada tipo de disparo. Se base zerar, vira FOLLOWUP.
+// ============================================================================
+
+let baseEstaVazia = false; // Flag: ativada quando motor de ataque encontra fila vazia
+let timestampUltimaCheckBase = 0; // Quando foi a última verificação real
+
+/**
+ * 🎚️ Retorna o modo operacional atual do sistema baseado em hora + estado da base
+ * Returns: 'SAUDACAO' | 'FOLLOWUP' | 'DESCANSO'
+ */
+function getModoOperacional() {
+    const agora = getHoraBrasil();
+    
+    // 🛑 Domingo: descanso total
+    if (agora.diaSemana === 0) return 'DESCANSO';
+    
+    // 🛑 Sábado: só até 14h, e só saudação (sem follow-up no fim de semana)
+    if (agora.diaSemana === 6) {
+        const t = agora.horas * 60 + agora.minutos;
+        if (t >= 480 && t <= 840) return 'SAUDACAO';
+        return 'DESCANSO';
+    }
+    
+    // 🔄 FALLBACK INTELIGENTE: se a base está vazia, vira FOLLOWUP independente da janela
+    if (baseEstaVazia) {
+        const t = agora.horas * 60 + agora.minutos;
+        // Mas respeita o expediente (8h-18h)
+        if (t >= 480 && t <= 1080) {
+            return 'FOLLOWUP';
+        }
+        return 'DESCANSO';
+    }
+    
+    // 📅 JANELAS PADRÃO (segunda a sexta) — 80% SAUDAÇÃO / 20% FOLLOW-UP
+    const t = agora.horas * 60 + agora.minutos;
+    
+    // Antes de 08:00 ou depois de 18:00 → DESCANSO
+    if (t < 480 || t > 1080) return 'DESCANSO';
+    
+    // 10:00-11:00 → FOLLOW-UP (janela 1)
+    if (t >= 600 && t < 660) return 'FOLLOWUP';
+    
+    // 17:00-18:00 → FOLLOW-UP (janela 2)
+    if (t >= 1020 && t <= 1080) return 'FOLLOWUP';
+    
+    // Resto do tempo → SAUDAÇÃO
+    return 'SAUDACAO';
+}
+
 async function salvarDecisor(numeroRaw, leadOrigem, instanceId) {
     const phonePuro = numeroRaw.replace(/\D/g, '');
     if (phonePuro.length < 10 || phonePuro.length > 13) return null;
@@ -246,24 +371,22 @@ function dentroDoExpediente() {
 
 
 function dentroDaJanelaDeDisparo() {
-    const agora = getHoraBrasil();
+    // 🎚️ Agora delega ao modo operacional dinâmico
+    const modo = getModoOperacional();
     
-    // 0 = Domingo. Não disparar no domingo.
-    if (agora.diaSemana === 0) return false; 
-
-    const t = agora.horas * 60 + agora.minutos;
-
-    // 480 = 08:00 AM | 1080 = 18:00 PM
-    const inicio = 480; 
-    const fim = 1080;
-
-    const estaNaJanela = t >= inicio && t <= fim;
+    if (modo === 'SAUDACAO') return true;
     
-    if (!estaNaJanela) {
-        console.log(`💤 [HORÁRIO] Agora são ${agora.horas}:${agora.minutos < 10 ? '0'+agora.minutos : agora.minutos}. Janela: 08:00 às 18:00.`);
+    // Se está em FOLLOWUP ou DESCANSO, motor de ataque NÃO dispara saudação
+    if (modo === 'FOLLOWUP') {
+        const agora = getHoraBrasil();
+        console.log(`📨 [MODO] ${agora.horas}:${String(agora.minutos).padStart(2,'0')} → Janela de FOLLOW-UP. Motor de ataque pausado.`);
+        return false;
     }
-
-    return estaNaJanela;
+    
+    // DESCANSO
+    const agora = getHoraBrasil();
+    console.log(`💤 [HORÁRIO] ${agora.horas}:${String(agora.minutos).padStart(2,'0')} fora do expediente.`);
+    return false;
 }
 
 
@@ -1400,8 +1523,15 @@ async function processarFilaDeAtaque(instanceId) {
     let falhasConsecutivas = 0; 
 
     try {
-        while (true) {
+       while (true) {
             let currentLeadId = null; 
+            
+            // 🎚️ Se chegou aqui dentro do loop, significa que existe lead. Desativa flag de base vazia.
+            if (baseEstaVazia) {
+                baseEstaVazia = false;
+                console.log(`✨ [FALLBACK] Base voltou a ter leads. Modo SAUDAÇÃO retomado.`);
+            }
+            
             // --- 🛡️ TRAVA DE FADIGA (TURNO DE TRABALHO) ---
             const agoraFadiga = Date.now();
             if (!controleFadiga.has(instanceId)) {
@@ -1454,6 +1584,12 @@ if (error) {
 
 if (!leadReservado || leadReservado.length === 0) {
     console.log(`🌕 [MOTOR HÍBRIDO] Fila limpa para ${config.nome}. Repouso absoluto (0 Egress).`);
+    
+    // 🎚️ MARCA A BASE COMO VAZIA: Vigia de follow-up vai assumir o turno
+    baseEstaVazia = true;
+    timestampUltimaCheckBase = Date.now();
+    console.log(`📨 [FALLBACK] Base de leads novos vazia. Sistema vai migrar pra FOLLOW-UP automaticamente.`);
+    
     break;
 }
 
@@ -1547,6 +1683,17 @@ console.log(`🔒 [RESERVA] Lead ${lead.name} travado atomicamente para chip ${c
                 }
 
               // 8. MONTAGEM DA SAUDAÇÃO — BALÃO ÚNICO (FIX #1 + #2 + #10)
+              
+              // 🚦 SEMÁFORO: Saudação tem PRIORIDADE 1 — toma vaga de qualquer follow-up rodando
+              const semaforoOk = await adquirirSemaforoChip(instanceId, 'SAUDACAO');
+              if (!semaforoOk) {
+                  console.log(`⏸️ [SAUDACAO] Chip ${config.nome} ocupado/cooldown. Devolvendo ${lead.name} pra fila e aguardando 30s...`);
+                  await supabase.from('leads').update({ status: 'new' }).eq('id', lead.id);
+                  leadsEmProcessamento.delete(lead.id);
+                  await delay(30000);
+                  continue;
+              }
+
 console.log(`🚀 [DISPARANDO] ${config.nome} enviando saudação para ${lead.name}...`);
 await instancia.sock.sendPresenceUpdate('composing', cleanJid);
 await delay(Math.random() * 4000 + 4000);
@@ -1617,13 +1764,15 @@ const mensagensSplit = [balaoUnico]; // ← BALÃO ÚNICO (era [balao1, balao2])
                 await supabase.from('leads').update({ status: 'contact', last_contact_at: new Date().toISOString(), opening_template: templateName }).eq('id', lead.id);
                 console.log(`✅ [SUCESSO REAL] Entregue por ${config.nome} para ${lead.name}!`);
                 leadsEmProcessamento.delete(lead.id);
+                liberarSemaforoChip(instanceId); // 🚦 Libera vaga e marca cooldown
                 falhasConsecutivas = 0;
-
+                
             } catch (errInner) {
                 // SEU CATCH ORIGINAL DE FALHAS CONSECUTIVAS
                 console.error(`❌ Erro no motor do chip ${instanceId}:`, errInner.message);
                 if (currentLeadId) {
                     leadsEmProcessamento.delete(currentLeadId);
+                      liberarSemaforoChip(instanceId);
                     await supabase.from('leads').update({ status: 'new' }).eq('id', currentLeadId).eq('status', 'reservado');
                 }
                 if (errInner.message?.includes('Connection') || errInner.message?.includes('Socket')) {
@@ -1659,8 +1808,12 @@ async function loopRecuperacaoConversas() {
             return; 
         }
 
-        console.log("🕵️ [VIGIA DE CONVERSAS] Escaneando falhas, follow-ups e abandonos de link...");
-        
+        // 🎚️ MODO OPERACIONAL: Sub-loops do vigia se comportam diferente em SAUDAÇÃO vs FOLLOW-UP
+        const modoAtual = getModoOperacional();
+        const podeFazerFollowup = (modoAtual === 'FOLLOWUP');
+
+        console.log(`🕵️ [VIGIA] Modo atual: ${modoAtual}. Follow-ups ${podeFazerFollowup ? 'ATIVOS ✅' : 'BLOQUEADOS ⏸️'}`);
+    
         const agora = Date.now();
         const UM_DIA = 24 * 60 * 60 * 1000;
         const QUATRO_HORAS = 4 * 60 * 60 * 1000;
@@ -1692,17 +1845,25 @@ async function loopRecuperacaoConversas() {
                         if (ultimaMsg.role === 'user' && !ultimaMsg.content?.startsWith('[AUTORESPOSTA]')) {
                             if (iaRespondendo.has(l.whatsapp_id)) continue; 
                             
-                            console.log(`⚠️ [SALVAMENTO] Lead ${l.name} aguardando resposta. Reativando IA...`);
+                           console.log(`⚠️ [SALVAMENTO] Lead ${l.name} aguardando resposta. Reativando IA...`);
                             const instancia = sessions.get(l.instance_id);
                             if (instancia && instancia.ready) {
+                                // 🚦 SEMÁFORO: Recuperação tem prioridade 2 (cede pra saudação)
+                                const semaforoOk = await adquirirSemaforoChip(l.instance_id, 'RECUPERACAO');
+                                if (!semaforoOk) {
+                                    console.log(`⏸️ [RECUPERACAO] Chip ocupado. Pulando ${l.name} desta rodada.`);
+                                    continue;
+                                }
+                                
                                 await processarMensagemManual(instancia.sock, l);
+                                liberarSemaforoChip(l.instance_id); // 🚦 Libera vaga
 
-
-                                 // 🛡️ ANTI-BAN: Jitter humano entre recuperações
-                        const jitterRecuperacao = Math.floor(Math.random() * 30000) + 30000;
-                        console.log(`⏸️ [ANTI-BAN] Aguardando ${Math.round(jitterRecuperacao/1000)}s antes da próxima recuperação...`);
-                        await delay(jitterRecuperacao);
+                                // 🛡️ ANTI-BAN: Jitter humano entre recuperações
+                                const jitterRecuperacao = Math.floor(Math.random() * 30000) + 30000;
+                                console.log(`⏸️ [ANTI-BAN] Aguardando ${Math.round(jitterRecuperacao/1000)}s antes da próxima recuperação...`);
+                                await delay(jitterRecuperacao);
                             }
+
                         }
                     }
                 } catch (errLeadAtivo) {
@@ -1714,15 +1875,17 @@ async function loopRecuperacaoConversas() {
         // ====================================================================
         // 🚀 2. FOLLOW-UP ÚNICO (D1) + TOMBAMENTO POR SILÊNCIO (ANTES DO LINK)
         // ====================================================================
-        const { data: leadsFollowUp } = await supabase
+        // 🎚️ Só roda follow-up D1 nas janelas de FOLLOWUP (10h-11h, 17h-18h) ou se base vazia
+        const { data: leadsFollowUp } = podeFazerFollowup ? await supabase
     .from('leads')
     .select('id, name, whatsapp_id, instance_id, dono, followup_count, last_contact_at, backup_phone, backup_whatsapp_id, backup_tried')
     .eq('status', 'contact')
     .eq('calendly_booked', false)
     .is('link_sent_at', null)
     .lt('followup_count', 2) 
-    .order('last_contact_at', { ascending: true })
-    .limit(5); // 🛡️ Reduzido de 15 → 5: distribui follow-ups ao longo do dia em vez de explosão
+        .order('last_contact_at', { ascending: true })
+    .limit(5) // 🛡️ Reduzido de 15 → 5: distribui follow-ups ao longo do dia em vez de explosão
+    : { data: null };
 
         if (leadsFollowUp) {
             for (const lf of leadsFollowUp) {
@@ -1745,6 +1908,13 @@ async function loopRecuperacaoConversas() {
 
                         const msgFollowUp = `${primeiroNome}, conseguiu dar uma olhada na mensagem acima? Como a gente tem poucas vagas com isenção pra região, queria confirmar se faz sentido pra ${nomeEmpresa} antes de liberar o espaço.`;
 
+                        // 🚦 SEMÁFORO: Follow-up D1 tem prioridade 3 (cede pra saudação E recuperação)
+                        const semaforoOk = await adquirirSemaforoChip(lf.instance_id, 'FOLLOWUP');
+                        if (!semaforoOk) {
+                            console.log(`⏸️ [FOLLOWUP-D1] Chip ocupado por prioridade maior. Pulando ${lf.name} desta rodada.`);
+                            continue;
+                        }
+                        
                         console.log(`🔔 [FOLLOW-UP D1] Disparando para ${lf.name}`);
 await instancia.sock.sendPresenceUpdate('composing', lf.whatsapp_id);
 
@@ -1756,13 +1926,14 @@ await enviarMensagemIA(instancia.sock, lf.whatsapp_id, { text: msgFollowUp });
 await db.saveMessage(lf.whatsapp_id, 'assistant', msgFollowUp, lf.instance_id);
 
 await supabase.from('leads').update({ followup_count: 1, last_contact_at: dataAgoraDate.toISOString() }).eq('id', lf.id);
+liberarSemaforoChip(lf.instance_id); // 🚦 Libera vaga
 
 // 🛡️ ANTI-BAN: Jitter de 60-120 segundos entre follow-ups do mesmo chip
 // (antes era só 8s — ban iminente)
 const jitterAntiBan = Math.floor(Math.random() * 60000) + 60000;
 console.log(`⏸️ [ANTI-BAN] Aguardando ${Math.round(jitterAntiBan/1000)}s antes do próximo follow-up...`);
 await delay(jitterAntiBan);
-                    } 
+                    }
                     else if (followupAtual === 1) {
                         if (!lf.backup_tried && lf.backup_whatsapp_id) {
                             console.log(`🔄 [SILÊNCIO TOTAL] Lead ${lf.name} ignorou o D1. Tombando para backup...`);
@@ -1787,16 +1958,19 @@ await delay(jitterAntiBan);
         // ====================================================================
         const quatroHorasAtrasISO = new Date(agora - QUATRO_HORAS).toISOString();
         
-        const { data: leadsLink } = await supabase
+        // 🎚️ Só roda nas janelas de FOLLOWUP ou se base vazia
+        const { data: leadsLink } = podeFazerFollowup ? await supabase
             .from('leads')
             .select('id, name, whatsapp_id, instance_id, dono')
             .eq('status', 'contact')
             .eq('is_paused', false)
-            .eq('calendly_booked', false) // Sistema acha que ele não agendou
-            .not('link_sent_at', 'is', null) // O link foi enviado
-            .lt('link_sent_at', quatroHorasAtrasISO) // Faz mais de 4 horas
-            .is('last_followup_type', null) // Ainda não foi cobrado pelo link
-            .limit(3);   // 🛡️ Reduzido de 10 → 3
+            .eq('calendly_booked', false)
+            .not('link_sent_at', 'is', null)
+            .lt('link_sent_at', quatroHorasAtrasISO)
+            .is('last_followup_type', null)
+            .limit(3)
+            : { data: null };
+
         if (leadsLink) {
             for (const ll of leadsLink) {
                 try {
@@ -1809,6 +1983,13 @@ await delay(jitterAntiBan);
                     
                     const msgFollowUpLink = `${primeiroNome}, meu sistema de agenda deu uma travada hoje. Vc conseguiu travar o seu horário lá no link ou deu erro aí também?`;
 
+                 // 🚦 SEMÁFORO: Follow-up Link tem prioridade 4 (a mais baixa, cede pra todos)
+                    const semaforoOk = await adquirirSemaforoChip(ll.instance_id, 'FOLLOWUP_LINK');
+                    if (!semaforoOk) {
+                        console.log(`⏸️ [FOLLOWUP-LINK] Chip ocupado por prioridade maior. Pulando ${ll.name} desta rodada.`);
+                        continue;
+                    }
+                    
                     console.log(`🔔 [FOLLOW-UP LINK] Recuperando abandono de ${ll.name}`);
 await instancia.sock.sendPresenceUpdate('composing', ll.whatsapp_id);
 
@@ -1819,6 +2000,7 @@ await enviarMensagemIA(instancia.sock, ll.whatsapp_id, { text: msgFollowUpLink }
 await db.saveMessage(ll.whatsapp_id, 'assistant', msgFollowUpLink, ll.instance_id);
 
 await supabase.from('leads').update({ last_followup_type: 'link_abandoned' }).eq('id', ll.id);
+liberarSemaforoChip(ll.instance_id); // 🚦 Libera vaga
 
 // 🛡️ ANTI-BAN: Jitter de 60-120s
 const jitterAntiBan = Math.floor(Math.random() * 60000) + 60000;
@@ -1853,12 +2035,20 @@ await delay(jitterAntiBan);
 
                     const instancia = sessions.get(lp.instance_id);
                     if (instancia && instancia.ready) {
+                        // 🚦 SEMÁFORO: Retomada tem prioridade 2 (mesma que recuperação)
+                        const semaforoOk = await adquirirSemaforoChip(lp.instance_id, 'RECUPERACAO');
+                        if (!semaforoOk) {
+                            console.log(`⏸️ [RETOMADA] Chip ocupado. Pulando ${lp.name} desta rodada.`);
+                            continue;
+                        }
+                        
                         await processarMensagemManual(instancia.sock, lp);
+                        liberarSemaforoChip(lp.instance_id); // 🚦 Libera vaga
 
                          // 🛡️ ANTI-BAN: Jitter humano entre retomadas
-        const jitterRetomada = Math.floor(Math.random() * 45000) + 45000;
-        console.log(`⏸️ [ANTI-BAN] Aguardando ${Math.round(jitterRetomada/1000)}s antes da próxima retomada...`);
-        await delay(jitterRetomada);
+                        const jitterRetomada = Math.floor(Math.random() * 45000) + 45000;
+                        console.log(`⏸️ [ANTI-BAN] Aguardando ${Math.round(jitterRetomada/1000)}s antes da próxima retomada...`);
+                        await delay(jitterRetomada);
                     }
                 }
             }
