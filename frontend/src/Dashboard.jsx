@@ -320,7 +320,7 @@ const carregarDados = useCallback(async () => {
                 // 🎯 Ignora virgens e também ignora mortos, robôs, erros e bloqueados
 valor: leads?.filter(l => !['new', 'invalid', 'blacklisted', 'error', 'dead'].includes(l.status) && (l.current_stage || 0) === i).length || 0,
                 cor: spinCores[i],
-            }))
+            }))//mudança para deploy 
             setDados({
                 kpis: { 
                     totalDisparados, 
