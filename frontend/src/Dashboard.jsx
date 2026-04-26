@@ -145,8 +145,9 @@ const carregarDados = useCallback(async () => {
                 supabase
                     .from('messages')
                     .select('role, content, created_at, whatsapp_id')
-                    .gte('created_at', trintaDiasAtras)  // 🛡️ Só mensagens dos últimos 30 dias
-                    .limit(50000),                        // 🛡️ Limite explícito alto
+                    .gte('created_at', trintaDiasAtras)
+                    .order('created_at', { ascending: false }) // 🎯 FALTAVA ISSO: Garante que as mensagens recentes venham primeiro
+                    .limit(50000),
                 supabase.from('instances').select('id, name, whatsapp_status'),
             ])
 
@@ -310,15 +311,15 @@ const carregarDados = useCallback(async () => {
                 if (tempCounts[t] !== undefined) tempCounts[t]++
             })
 
-            // === FUNIL SPIN (0-5) ===
+           // === FUNIL SPIN (0-5) ===
             const spinLabels = ['Qualificação', 'Situação', 'Dor', 'Solução', 'Agendamento', 'Fechamento']
             const spinCores  = [CORES.slate, CORES.azul, CORES.ciano, CORES.roxo, CORES.amarelo, CORES.verde]
             const spinFunil = spinLabels.map((nome, i) => ({
                 nome,
-                valor: leads?.filter(l => (l.current_stage || 0) === i).length || 0,
+                // 🎯 CORREÇÃO: Só conta no funil se já tiver saído do status 'new'
+                valor: leads?.filter(l => l.status !== 'new' && (l.current_stage || 0) === i).length || 0,
                 cor: spinCores[i],
             }))
-
             setDados({
                 kpis: { 
                     totalDisparados, 

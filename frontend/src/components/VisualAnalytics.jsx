@@ -139,6 +139,7 @@ function computeMetrics(leads, instances, realTotalLeads) {
     const estagioColors = ['#64748b', '#3B82F6', '#06B6D4', '#8B5CF6', '#F59E0B', '#10B981']
     const estagioCount = [0, 0, 0, 0, 0, 0]
     leadsValidos.forEach(l => {
+        if (l.status === 'new') return
         const stage = l.current_stage || 0
         if (stage >= 0 && stage <= 5) estagioCount[stage]++
     })
@@ -349,10 +350,11 @@ export default function VisualAnalytics() {
         setLoading(true)
         try {
             // Busca leads, instâncias e a CONTAGEM TOTAL em paralelo
-            const [leadsRes, instRes, countRes] = await Promise.all([
+           const [leadsRes, instRes, countRes] = await Promise.all([
                 supabase
                     .from('leads')
-                    .select('id, status, niche, created_at, last_contact_at, instance_id, capital_social_numeric, current_stage, lead_temperature, opening_template')
+                    // 🎯 Adicionado: last_seen_at (para Engajamento) e calendly_booked (para Conversão)
+                    .select('id, status, niche, created_at, last_contact_at, instance_id, capital_social_numeric, current_stage, lead_temperature, opening_template, last_seen_at, calendly_booked')
                     .order('created_at', { ascending: false })
                     .limit(10000),
                 supabase
