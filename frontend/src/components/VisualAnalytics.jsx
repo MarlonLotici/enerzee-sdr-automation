@@ -241,13 +241,16 @@ function computeMetrics(leads, instances, realTotalLeads) {
         .sort((a, b) => b.total - a.total)
         .slice(0, 5)
 
-    // ── 12. Métrica de Engajamento Real ──
+   // ── 12. Métrica de Engajamento Real ──
     let visualizados = 0
     let responderamAposVer = 0
     leadsValidos.forEach(l => {
         if (l.last_seen_at) {
             visualizados++
-            if (l.current_stage > 0) responderamAposVer++
+            // 🎯 Se passou do estágio 0 OU se a temperatura esquentou, ele engajou
+            if ((l.current_stage || 0) > 0 || l.lead_temperature === 'warm' || l.lead_temperature === 'hot') {
+                responderamAposVer++
+            }
         }
     })
     const engagementRate = visualizados > 0 ? Math.round((responderamAposVer / visualizados) * 100) : 0
@@ -466,12 +469,13 @@ export default function VisualAnalytics() {
                     delta={null}           color={NEON.emerald}
                 />
                 {/* 👇 NOVO CARD DE ENGAJAMENTO (MÉTRICA DE VÁCUO) 👇 */}
-                <KpiCard
-    icon={Activity} label="Conversão Total"
-    value={(totalLeads > 0 ? Math.round(totalAgendados / totalLeads * 100) : 0) + '%'}
-    sub="agendados / capturados"
-    delta={null} color={NEON.emerald}
-                   />
+               <KpiCard
+                    icon={Activity} label="Conversão Total"
+                    // 🎯 Usando Abordados e .toFixed(1) para não zerar números menores que 1%
+                    value={(totalAbordados > 0 ? (totalAgendados / totalAbordados * 100).toFixed(1) : 0).toString().replace('.', ',') + '%'}
+                    sub="agendados / abordados" 
+                    delta={null} color={NEON.emerald}
+                />
                    <KpiCard
                     icon={Flame} label="Engajamento Real"
                     value={engagementRate + '%'}
