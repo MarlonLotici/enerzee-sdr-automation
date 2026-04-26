@@ -976,36 +976,90 @@ return (
         {/* COLUNA 2 — Chat */}
         <div className="flex-1 flex flex-col overflow-hidden min-h-0 bg-black/20">
             {activeChat ? (
-                <>
-                    <div className="shrink-0 p-3 border-b border-white/5 flex items-center justify-between backdrop-blur-md bg-slate-900/40">
-                        <div className="flex items-center gap-3">
-                             <div className="h-8 w-8 bg-amber-600/20 rounded-lg border border-amber-500/30 flex items-center justify-center font-black text-amber-400 text-xs">
-                                {activeChat.name?.[0]}
-                            </div>
-                            <div>
-                                <h2 className="text-base font-black text-white tracking-tighter uppercase">{activeChat.name}</h2>
-                                {activeChat.instance_id && (
-                                    <span className="text-[8px] text-slate-500 font-bold uppercase tracking-widest">
-                                        via {instances.find(i => i.id === activeChat.instance_id)?.name || 'chip desconhecido'}
-                                    </span>
-                                )}
-                            </div>
-                        </div>
-                                <div className="flex items-center gap-2">
-    <Badge className="bg-emerald-500/10 text-emerald-400 border-emerald-500/20 text-[8px] font-black">AUDITORIA ATIVA</Badge>
-    <button
-        onClick={() => setActiveChat(null)}
-        className="h-7 w-7 rounded-lg bg-white/5 border border-white/10 flex items-center justify-center hover:bg-white/10 transition-all"
-        title="Fechar conversa e ver chips"
-    >
-        <X className="h-3.5 w-3.5 text-slate-400" />
-    </button>
-</div>
-                    </div>
+    <>
+        <div className="shrink-0 p-3 border-b border-white/5 flex items-center justify-between backdrop-blur-md bg-slate-900/40">
+            <div className="flex items-center gap-3">
+                 <div className="h-8 w-8 bg-amber-600/20 rounded-lg border border-amber-500/30 flex items-center justify-center font-black text-amber-400 text-xs">
+                    {activeChat.name?.[0]}
+                </div>
+                <div>
+                    <h2 className="text-base font-black text-white tracking-tighter uppercase">{activeChat.name}</h2>
+                    {activeChat.instance_id && (
+                        <span className="text-[8px] text-slate-500 font-bold uppercase tracking-widest">
+                            via {instances.find(i => i.id === activeChat.instance_id)?.name || 'chip desconhecido'}
+                        </span>
+                    )}
+                </div>
+            </div>
+            <div className="flex items-center gap-2">
+                {/* Badge dinâmico de status da IA */}
+                {activeChat.is_paused || activeChat.manual_pause ? (
+                    <Badge className="bg-amber-500/10 text-amber-400 border-amber-500/20 text-[8px] font-black">
+                        ⏸️ IA PAUSADA
+                    </Badge>
+                ) : (
+                    <Badge className="bg-emerald-500/10 text-emerald-400 border-emerald-500/20 text-[8px] font-black">
+                        🟢 IA ATIVA
+                    </Badge>
+                )}
+                <button
+                    onClick={() => setActiveChat(null)}
+                    className="h-7 w-7 rounded-lg bg-white/5 border border-white/10 flex items-center justify-center hover:bg-white/10 transition-all"
+                    title="Fechar conversa e ver chips"
+                >
+                    <X className="h-3.5 w-3.5 text-slate-400" />
+                </button>
+            </div>
+        </div>
 
-                    {/* Mensagens */}
-                    <div className="flex-1 overflow-y-auto p-4 custom-scrollbar flex flex-col gap-3 h-0">
-                        {chatMessages.length === 0 ? (
+        {/* 🟡 BANNER DE IA PAUSADA — só aparece se a IA estiver realmente pausada */}
+        {(activeChat.is_paused || activeChat.manual_pause) && (
+            <div className="shrink-0 px-4 py-3 bg-gradient-to-r from-amber-900/20 to-amber-700/10 border-b border-amber-500/20">
+                <div className="flex items-start gap-3">
+                    <div className="h-8 w-8 rounded-lg bg-amber-500/15 border border-amber-500/30 flex items-center justify-center shrink-0">
+                        <span className="text-base">⏸️</span>
+                    </div>
+                    <div className="flex-1 min-w-0">
+                        <p className="text-[10px] font-black text-amber-300 uppercase tracking-widest mb-1">
+                            IA Pausada — Não vai responder automaticamente
+                        </p>
+                        <p className="text-[10px] text-amber-200/70 font-medium leading-relaxed mb-2">
+                            <span className="text-amber-400 font-black">Motivo: </span>
+                            {activeChat.internal_notes || 
+                                (activeChat.manual_pause ? 'Pausada manualmente via comando /pausar' : 
+                                 'Pausa automática (intervenção humana ou conversa encerrada pela IA)')}
+                        </p>
+                        <Button
+                            onClick={async () => {
+                                if (!confirm('Reativar a IA para esta conversa? Ela voltará a responder mensagens automaticamente.')) return;
+                                
+                                const { error } = await supabase.from('leads').update({
+                                    is_paused: false,
+                                    manual_pause: false,
+                                    last_human_interaction: null,
+                                    internal_notes: `IA reativada manualmente via dashboard em ${new Date().toLocaleString('pt-BR')}`
+                                }).eq('id', activeChat.id);
+
+                                if (!error) {
+                                    setActiveChat({...activeChat, is_paused: false, manual_pause: false});
+                                    fetchLeadsFromDB();
+                                    alert('✅ IA reativada com sucesso!');
+                                } else {
+                                    alert('❌ Erro ao reativar IA: ' + error.message);
+                                }
+                            }}
+                            className="h-7 px-3 text-[9px] font-black uppercase bg-amber-600 hover:bg-amber-500 text-black rounded-lg tracking-wider"
+                        >
+                            ▶️ Reativar IA Agora
+                        </Button>
+                    </div>
+                </div>
+            </div>
+        )}
+
+        {/* Mensagens */}
+        <div className="flex-1 overflow-y-auto p-4 custom-scrollbar flex flex-col gap-3 h-0">
+                                    {chatMessages.length === 0 ? (
                             <div className="flex-1 flex items-center justify-center">
                                 <p className="text-xs text-slate-500 uppercase tracking-widest font-black">Nenhuma mensagem registrada</p>
                             </div>

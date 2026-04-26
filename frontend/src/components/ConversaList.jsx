@@ -48,16 +48,44 @@ function resolveEstado(lead, ultimaMsg) {
 }
 
 // ─── CARD DE CONVERSA ─────────────────────────────────────────────────────────
-function ConversaCard({ lead, ultimaMsg, isActive, onClick }) {
+function ConversaCard({ lead, ultimaMsg, isActive, onClick, onUpdate }) {
     const estado   = resolveEstado(lead, ultimaMsg)
     const isUser   = ultimaMsg?.role === 'user'
     const preview  = limparPreview(ultimaMsg?.content)
     const tempo    = timeAgo(ultimaMsg?.created_at || lead.last_contact_at)
     const inicial  = (lead.name || '?')[0].toUpperCase()
 
+    // 🔥 Marca como Hot manualmente
+    const marcarComoHot = async (e) => {
+        e.stopPropagation()
+        if (lead.lead_temperature === 'hot') {
+            // Toggle: se já é hot, volta pra warm
+            const { error } = await supabase.from('leads').update({ lead_temperature: 'warm' }).eq('id', lead.id)
+            if (!error && onUpdate) onUpdate()
+        } else {
+            const { error } = await supabase.from('leads').update({ lead_temperature: 'hot' }).eq('id', lead.id)
+            if (!error && onUpdate) onUpdate()
+        }
+    }
+
+    // 💀 Marca como Dead (descarta o lead)
+    const marcarComoDead = async (e) => {
+        e.stopPropagation()
+        if (!confirm(`Descartar "${lead.name}" como lead morto? Ele sairá do War Room e não receberá mais follow-ups.`)) return
+        
+        const { error } = await supabase.from('leads').update({ 
+            status: 'dead', 
+            lead_temperature: 'dead',
+            is_paused: true,
+            internal_notes: `Marcado como morto manualmente via War Room em ${new Date().toLocaleString('pt-BR')}`
+        }).eq('id', lead.id)
+        
+        if (!error && onUpdate) onUpdate()
+    }
     return (
         <div
             onClick={onClick}
+            data-conversa-card
             style={{
                 display:       'flex',
                 alignItems:    'center',
@@ -187,15 +215,68 @@ function ConversaCard({ lead, ultimaMsg, isActive, onClick }) {
             </div>
 
             {/* Indicador de não-lida: última msg é do lead e IA ainda não respondeu */}
-            {isUser && !lead.is_paused && !lead.manual_pause && (
-                <div style={{
-                    position: 'absolute', top: 10, right: 10,
-                    width: 7, height: 7, borderRadius: '50%',
-                    background: '#F59E0B',
-                    boxShadow: '0 0 6px #F59E0B',
-                    animation: 'pulse 1.5s infinite',
-                }} />
-            )}
+{isUser && !lead.is_paused && !lead.manual_pause && (
+    <div style={{
+        position: 'absolute', top: 10, right: 10,
+        width: 7, height: 7, borderRadius: '50%',
+        background: '#F59E0B',
+        boxShadow: '0 0 6px #F59E0B',
+        animation: 'pulse 1.5s infinite',
+    }} className="quick-action-indicator" />
+)}
+
+{/* 🎯 Quick Actions — aparecem no hover */}
+<div 
+    className="quick-actions"
+    style={{
+        position: 'absolute',
+        bottom: 6, right: 6,
+        display: 'flex',
+        gap: 4,
+        opacity: 0,
+        transition: 'opacity 0.15s',
+        pointerEvents: 'none',
+    }}
+>
+    <button
+        onClick={marcarComoHot}
+        title={lead.lead_temperature === 'hot' ? 'Remover Hot' : 'Marcar como Hot 🔥'}
+        style={{
+            width: 22, height: 22,
+            borderRadius: 6,
+            background: lead.lead_temperature === 'hot' ? '#ef444425' : 'rgba(0,0,0,0.6)',
+            border: `1px solid ${lead.lead_temperature === 'hot' ? '#ef444460' : 'rgba(255,255,255,0.1)'}`,
+            cursor: 'pointer',
+            display: 'flex', alignItems: 'center', justifyContent: 'center',
+            fontSize: 11,
+            backdropFilter: 'blur(8px)',
+            transition: 'all .15s',
+        }}
+        onMouseEnter={e => e.currentTarget.style.background = '#ef444440'}
+        onMouseLeave={e => e.currentTarget.style.background = lead.lead_temperature === 'hot' ? '#ef444425' : 'rgba(0,0,0,0.6)'}
+    >
+        🔥
+    </button>
+    <button
+        onClick={marcarComoDead}
+        title="Marcar como Dead 💀"
+        style={{
+            width: 22, height: 22,
+            borderRadius: 6,
+            background: 'rgba(0,0,0,0.6)',
+            border: '1px solid rgba(255,255,255,0.1)',
+            cursor: 'pointer',
+            display: 'flex', alignItems: 'center', justifyContent: 'center',
+            fontSize: 11,
+            backdropFilter: 'blur(8px)',
+            transition: 'all .15s',
+        }}
+        onMouseEnter={e => e.currentTarget.style.background = '#64748b40'}
+        onMouseLeave={e => e.currentTarget.style.background = 'rgba(0,0,0,0.6)'}
+    >
+        💀
+    </button>
+</div>
         </div>
     )
 }
@@ -226,12 +307,12 @@ export default function ConversaList({ onSelect, activeId, socket, instances = [
     const fetchConversas = useCallback(async () => {
         setLoading(true)
         try {
-            const { data: leads, error } = await supabase
-                .from('leads')
-                .select('id, name, whatsapp_id, status, is_paused, manual_pause, last_contact_at, instance_id, dono, niche, bairro, phone, cnpj, capital_social_numeric, porte, current_stage, lead_temperature')
-                .in('status', ['contact', 'waiting_analysis'])
-                .order('last_contact_at', { ascending: false })
-                .limit(80)
+           const { data: leads, error } = await supabase
+    .from('leads')
+    .select('id, name, whatsapp_id, status, is_paused, manual_pause, last_contact_at, instance_id, dono, niche, bairro, phone, cnpj, capital_social_numeric, porte, current_stage, lead_temperature, internal_notes')
+    .in('status', ['contact', 'waiting_analysis'])
+    .order('last_contact_at', { ascending: false })
+    .limit(80)
 
             if (error || !leads?.length) {
                 setConversas([])
@@ -277,45 +358,90 @@ export default function ConversaList({ onSelect, activeId, socket, instances = [
     }, [socket, fetchConversas])
 
     // === FILTROS ===
-    const conversasFiltradas = conversas.filter(({ lead, ultimaMsg }) => {
-        // Filtro por busca textual
-        if (busca) {
-            const q = busca.toLowerCase()
-            const match = lead.name?.toLowerCase().includes(q) || lead.dono?.toLowerCase().includes(q) || lead.phone?.includes(q)
-            if (!match) return false
-        }
-        // Filtro por chip
-        if (chipFiltro !== 'todos' && lead.instance_id !== chipFiltro) return false
-        // Filtro por estado/tipo
-        switch (filtro) {
-            case 'a_responder':
-                return !lead.is_paused && !lead.manual_pause && ultimaMsg?.role === 'user'
-            case 'ia_ativa':
-                return !lead.is_paused && !lead.manual_pause && ultimaMsg?.role === 'assistant'
-            case 'pausadas':
-                return lead.is_paused || lead.manual_pause
-            case 'hot':
-                return lead.lead_temperature === 'hot'
-            case 'warm':
-                return lead.lead_temperature === 'warm'
-            case 'estagio_dor':
-                return (lead.current_stage || 0) === 2
-            case 'estagio_solucao':
-                return (lead.current_stage || 0) === 3
-            case 'estagio_agenda':
-                return (lead.current_stage || 0) >= 4
-            default:
-                return true
-        }
-    })
+const conversasFiltradas = conversas.filter(({ lead, ultimaMsg }) => {
+    // Filtro por busca textual
+    if (busca) {
+        const q = busca.toLowerCase()
+        const match = lead.name?.toLowerCase().includes(q) || lead.dono?.toLowerCase().includes(q) || lead.phone?.includes(q)
+        if (!match) return false
+    }
+    // Filtro por chip
+    if (chipFiltro !== 'todos' && lead.instance_id !== chipFiltro) return false
+    // Filtro por estado/tipo
+    switch (filtro) {
+        case 'a_responder':
+            return !lead.is_paused && !lead.manual_pause && ultimaMsg?.role === 'user'
+        case 'ia_ativa':
+            return !lead.is_paused && !lead.manual_pause && ultimaMsg?.role === 'assistant'
+        case 'pausadas':
+            return lead.is_paused || lead.manual_pause
+        case 'hot':
+            return lead.lead_temperature === 'hot'
+        case 'warm':
+            return lead.lead_temperature === 'warm'
+        case 'estagio_dor':
+            return (lead.current_stage || 0) === 2
+        case 'estagio_solucao':
+            return (lead.current_stage || 0) === 3
+        case 'estagio_agenda':
+            return (lead.current_stage || 0) >= 4
+        default:
+            return true
+    }
+})
 
-    // Agrupa por chip para separação visual
-    const chipGroups = {}
-    conversasFiltradas.forEach(item => {
-        const chipId = item.lead.instance_id || 'sem_chip'
-        if (!chipGroups[chipId]) chipGroups[chipId] = []
-        chipGroups[chipId].push(item)
-    })
+// 🎯 SORT TÁTICO: ordena por prioridade comercial, não cronológica
+// Quanto MENOR o número de prioridade, mais alto na lista
+function calcularPrioridade({ lead, ultimaMsg }) {
+    const aguardandoResposta = !lead.is_paused && !lead.manual_pause && ultimaMsg?.role === 'user'
+    const pausado = lead.is_paused || lead.manual_pause
+    
+    // 1. Hot lead aguardando resposta — DINHEIRO ESCORRENDO, atenção total
+    if (lead.lead_temperature === 'hot' && aguardandoResposta) return 1
+    
+    // 2. Lead em Estágio 4+ (Agenda) aguardando — quase fechando
+    if ((lead.current_stage || 0) >= 4 && aguardandoResposta) return 2
+    
+    // 3. Hot lead (mesmo se IA já respondeu) — manter no radar
+    if (lead.lead_temperature === 'hot') return 3
+    
+    // 4. Estágio 4+ em geral — agenda em andamento
+    if ((lead.current_stage || 0) >= 4) return 4
+    
+    // 5. Aguardando resposta (qualquer estágio) — vácuo da IA
+    if (aguardandoResposta) return 5
+    
+    // 6. Warm leads — em construção
+    if (lead.lead_temperature === 'warm') return 6
+    
+    // 7. IA ativa em conversa normal
+    if (!pausado) return 7
+    
+    // 8. Pausados (no fim da lista)
+    return 8
+}
+
+const conversasOrdenadas = [...conversasFiltradas].sort((a, b) => {
+    const prioA = calcularPrioridade(a)
+    const prioB = calcularPrioridade(b)
+    
+    // Se prioridade igual, desempata pelo last_contact_at mais recente
+    if (prioA === prioB) {
+        const tA = new Date(a.lead.last_contact_at || 0).getTime()
+        const tB = new Date(b.lead.last_contact_at || 0).getTime()
+        return tB - tA
+    }
+    
+    return prioA - prioB
+})
+
+// Agrupa por chip para separação visual
+const chipGroups = {}
+conversasOrdenadas.forEach(item => {     // 👈 USA conversasOrdenadas, NÃO conversasFiltradas
+    const chipId = item.lead.instance_id || 'sem_chip'
+    if (!chipGroups[chipId]) chipGroups[chipId] = []
+    chipGroups[chipId].push(item)
+})
 
     // Contadores para os badges dos filtros
     const contadores = {
@@ -360,7 +486,7 @@ export default function ConversaList({ onSelect, activeId, socket, instances = [
                                 borderRadius: '999px', padding: '1px 7px',
                            fontSize: 9, fontWeight: 900, color: '#FBBF24',
 }}>
-                                {conversasFiltradas.length}{filtro !== 'todos' ? `/${conversas.length}` : ''}
+                                {conversasOrdenadas.length}{filtro !== 'todos' ? `/${conversas.length}` : ''}
                             </div>
                         )}
                     </div>
@@ -438,7 +564,7 @@ export default function ConversaList({ onSelect, activeId, socket, instances = [
                     <div style={{ padding: '30px 0', textAlign: 'center', color: 'rgba(255,255,255,0.2)', fontSize: 10, fontWeight: 700, textTransform: 'uppercase', letterSpacing: '0.15em' }}>
                         Carregando…
                     </div>
-                ) : conversasFiltradas.length === 0 ? (
+                ) : conversasOrdenadas.length === 0 ? (
                     <div style={{ padding: '40px 0', textAlign: 'center' }}>
                         <BrainCircuit size={24} color='rgba(255,255,255,0.1)' style={{ margin: '0 auto 10px' }} />
                         <p style={{ color: 'rgba(255,255,255,0.15)', fontSize: 10, fontWeight: 700, textTransform: 'uppercase', letterSpacing: '0.15em' }}>
@@ -466,15 +592,16 @@ export default function ConversaList({ onSelect, activeId, socket, instances = [
                                         </span>
                                     </div>
                                 )}
-                                {items.map(({ lead, ultimaMsg }) => (
-                                    <ConversaCard
-                                        key={lead.id}
-                                        lead={lead}
-                                        ultimaMsg={ultimaMsg}
-                                        isActive={lead.id === activeId}
-                                        onClick={() => onSelect?.(lead)}
-                                    />
-                                ))}
+                               {items.map(({ lead, ultimaMsg }) => (
+    <ConversaCard
+        key={lead.id}
+        lead={lead}
+        ultimaMsg={ultimaMsg}
+        isActive={lead.id === activeId}
+        onClick={() => onSelect?.(lead)}
+        onUpdate={fetchConversas}
+    />
+))}
                             </div>
                         )
                     })
@@ -482,12 +609,21 @@ export default function ConversaList({ onSelect, activeId, socket, instances = [
             </div>
 
             <style>{`
-                @keyframes pulse { 0%,100%{opacity:1} 50%{opacity:.4} }
-                @keyframes spin  { from{transform:rotate(0deg)} to{transform:rotate(360deg)} }
-                ::-webkit-scrollbar { width: 4px; }
-                ::-webkit-scrollbar-track { background: transparent; }
-                ::-webkit-scrollbar-thumb { background: rgba(255,255,255,0.08); border-radius: 2px; }
-            `}</style>
+    @keyframes pulse { 0%,100%{opacity:1} 50%{opacity:.4} }
+    @keyframes spin  { from{transform:rotate(0deg)} to{transform:rotate(360deg)} }
+    ::-webkit-scrollbar { width: 4px; }
+    ::-webkit-scrollbar-track { background: transparent; }
+    ::-webkit-scrollbar-thumb { background: rgba(255,255,255,0.08); border-radius: 2px; }
+    
+    /* 🎯 Quick Actions: aparecem no hover do card */
+    [data-conversa-card]:hover .quick-actions {
+        opacity: 1 !important;
+        pointer-events: auto !important;
+    }
+    [data-conversa-card]:hover .quick-action-indicator {
+        opacity: 0.3;
+    }
+`}</style>
         </div>
     )
 }

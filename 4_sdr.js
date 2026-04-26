@@ -225,15 +225,25 @@ function getHoraBrasil() {
 
     return { horas, minutos, diaSemana };
 }
-
 function dentroDoExpediente() {
     const agora = getHoraBrasil();
+    
+    // 🛡️ BLINDAGEM ANTI-BAN: Domingo é dia de descanso. Sem follow-ups, sem recuperação, NADA.
+    if (agora.diaSemana === 0) return false;
+    
+    // 🛡️ BLINDAGEM EXTRA: Sábado só até 14h (manhã comercial). Depois disso, encerrado.
+    if (agora.diaSemana === 6) {
+        const t = agora.horas * 60 + agora.minutos;
+        return t >= 480 && t <= 840; // 08:00 às 14:00
+    }
+    
     // Cálculo matemático direto sobre os números recebidos
     const t = agora.horas * 60 + agora.minutos;
     
     // 330 = 05:30 AM | 1365 = 22:45 PM
     return t >= 330 && t <= 1365;
 }
+
 
 function dentroDaJanelaDeDisparo() {
     const agora = getHoraBrasil();
@@ -2156,11 +2166,17 @@ module.exports = {
                     processarFilaDeAtaque(chipIdDestino);
                 });
 
-                sdrEvents.on('AGENDAMENTO_CONFIRMADO', async ({ lead, dataEvento, instanceId }) => {
-                    console.log(`🎊 [WEBHOOK] Agendamento confirmado para ${lead.name}. Preparando feedback...`);
-                    
-                    const instancia = sessions.get(instanceId);
-                    if (instancia && instancia.ready) {
+               sdrEvents.on('AGENDAMENTO_CONFIRMADO', async ({ lead, dataEvento, instanceId }) => {
+    console.log(`🎊 [WEBHOOK] Agendamento confirmado para ${lead.name}. Preparando feedback...`);
+    
+    // 🛡️ BLINDAGEM: Em domingos, só registra mas não dispara mensagem (lead recebe na segunda)
+    if (!dentroDoExpediente()) {
+        console.log(`💤 [WEBHOOK] Fora do expediente. Feedback será enviado no próximo dia útil.`);
+        return;
+    }
+    
+    const instancia = sessions.get(instanceId);
+    if (instancia && instancia.ready) {
                         const dataObjeto = new Date(dataEvento);
                         const dataFormatada = dataObjeto.toLocaleDateString('pt-BR', { day: '2-digit', month: '2-digit' });
                         const horaFormatada = dataObjeto.toLocaleTimeString('pt-BR', { hour: '2-digit', minute: '2-digit' });
