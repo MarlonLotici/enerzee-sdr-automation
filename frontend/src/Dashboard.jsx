@@ -125,17 +125,28 @@ export default function Dashboard() {
     const [ultimaAtualizacao, setUltimaAtualizacao] = useState(null)
     const [periodoGrafico, setPeriodoGrafico] = useState('7d') // '7d' | '30d'
 
-    const carregarDados = useCallback(async () => {
+const carregarDados = useCallback(async () => {
         setCarregando(true)
         try {
             // === BUSCA PARALELA DE DADOS ===
+            // 🛡️ FIX: limit explícito de 50000 para mensagens (default Supabase é 1000)
+            // E filtra mensagens dos últimos 30 dias pra não puxar histórico antigo inútil
+            const trintaDiasAtras = new Date(Date.now() - 30 * 86400000).toISOString()
+            
             const [
                 { data: leads },
                 { data: mensagens },
                 { data: instancias },
             ] = await Promise.all([
-                supabase.from('leads').select('id, status, created_at, instance_id, is_paused, manual_pause, last_contact_at, current_stage, lead_temperature, followup_count'),
-                supabase.from('messages').select('role, content, created_at, whatsapp_id'),
+                supabase
+                    .from('leads')
+                    .select('id, status, created_at, instance_id, is_paused, manual_pause, last_contact_at, current_stage, lead_temperature, followup_count, calendly_booked, whatsapp_id')
+                    .limit(50000),
+                supabase
+                    .from('messages')
+                    .select('role, content, created_at, whatsapp_id')
+                    .gte('created_at', trintaDiasAtras)  // 🛡️ Só mensagens dos últimos 30 dias
+                    .limit(50000),                        // 🛡️ Limite explícito alto
                 supabase.from('instances').select('id, name, whatsapp_status'),
             ])
 
@@ -143,28 +154,65 @@ export default function Dashboard() {
             const hoje = new Date(agora.getFullYear(), agora.getMonth(), agora.getDate())
             const diasAtras = (n) => new Date(hoje.getTime() - n * 86400000)
 
+            // 🎯 MAPA DE LEAD: lead.id → lead.whatsapp_id (pra cruzar com mensagens corretamente)
+            const mapaLeadJid = {}
+            leads?.forEach(l => { 
+                if (l.whatsapp_id) mapaLeadJid[l.id] = l.whatsapp_id 
+            })
+
+            // === AGENDAMENTOS REAIS — Regra blindada ===
+            // 🎯 BÔNUS: detecta agendamentos verbais procurando padrões na última mensagem da IA
+            // Ex: "amanhã às 14h", "quinta às 10h", "pode ser segunda às 15h"
+            const padroesAgendamentoVerbal = /(amanh[ãa]|segunda|ter[çc]a|quarta|quinta|sexta|s[áa]bado|domingo|hoje)\s*(?:às|as|de)?\s*\d{1,2}\s*(?:h|:|hr|horas)/i
+            
+            const ultimaMsgAssistantPorLead = {}
+            mensagens?.forEach(m => {
+                if (m.role !== 'assistant') return
+                if (!ultimaMsgAssistantPorLead[m.whatsapp_id] || 
+                    new Date(m.created_at) > new Date(ultimaMsgAssistantPorLead[m.whatsapp_id].created_at)) {
+                    ultimaMsgAssistantPorLead[m.whatsapp_id] = m
+                }
+            })
+
+            const agendamentosReais = leads?.filter(l => {
+                // Regra 1: status booked
+                if (l.status === 'booked') return true
+                // Regra 2: Calendly confirmou
+                if (l.calendly_booked === true) return true
+                // Regra 3: chegou no estágio 4 ou 5 do funil
+                if ((l.current_stage || 0) >= 4) return true
+                // Regra 4 (BÔNUS): última mensagem da IA pro lead menciona dia/horário
+                const ultimaMsg = ultimaMsgAssistantPorLead[l.whatsapp_id]
+                if (ultimaMsg && padroesAgendamentoVerbal.test(ultimaMsg.content || '')) return true
+                
+                return false
+            }) || []
+            const agendados = agendamentosReais.length
+
             // === KPIs PRINCIPAIS ===
-            const totalDisparados = leads?.filter(l => l.status !== 'new').length || 0
-            const emAtendimento   = leads?.filter(l => l.status === 'contact').length || 0
-            const agendados       = leads?.filter(l => l.status === 'closed').length || 0
-            const aguardandoHumano = leads?.filter(l => {
-                // leads com última mensagem sendo [AUTORESPOSTA]
-                return l.is_paused && !l.manual_pause
-            }).length || 0
-            const pausadoManual   = leads?.filter(l => l.manual_pause).length || 0
+            const totalDisparados  = leads?.filter(l => l.status !== 'new').length || 0
+            const emAtendimento    = leads?.filter(l => l.status === 'contact').length || 0
+            const aguardandoHumano = leads?.filter(l => l.is_paused && !l.manual_pause).length || 0
+            const pausadoManual    = leads?.filter(l => l.manual_pause).length || 0
 
-            // Taxa de resposta: leads que responderam / total disparado
-            const mensagensDoCliente = mensagens?.filter(m => m.role === 'user' && !m.content?.startsWith('[AUTORESPOSTA]')) || []
+            // 🛡️ Mensagens REAIS do cliente (exclui autoresposta)
+            const mensagensDoCliente = mensagens?.filter(m => 
+                m.role === 'user' && !m.content?.startsWith('[AUTORESPOSTA]')
+            ) || []
+            
+            // Leads únicos que responderam (não conta mensagens totais)
             const leadsQueResponderam = new Set(mensagensDoCliente.map(m => m.whatsapp_id)).size
-            const taxaResposta = totalDisparados > 0 ? Math.round((leadsQueResponderam / totalDisparados) * 100) : 0
+            const taxaResposta = totalDisparados > 0 
+                ? Math.round((leadsQueResponderam / totalDisparados) * 100) 
+                : 0
 
-            // === FUNIL DE CONVERSÃO ===
+            // === FUNIL DE CONVERSÃO (corrigido) ===
             const funil = [
-                { nome: 'Disparados',    valor: totalDisparados,                              cor: CORES.slate  },
-                { nome: 'Responderam',   valor: leadsQueResponderam,                          cor: CORES.azul   },
-                { nome: 'Em Conversa',   valor: emAtendimento,                                cor: CORES.ciano  },
-                { nome: 'Fatura Enviada',valor: leads?.filter(l => l.status === 'waiting_analysis').length || 0, cor: CORES.amarelo },
-                { nome: 'Agendados',     valor: agendados,                                    cor: CORES.verde  },
+                { nome: 'Disparados',     valor: totalDisparados,                                                       cor: CORES.slate    },
+                { nome: 'Responderam',    valor: leadsQueResponderam,                                                   cor: CORES.azul     },
+                { nome: 'Em Conversa',    valor: emAtendimento,                                                         cor: CORES.ciano    },
+                { nome: 'Fatura Enviada', valor: leads?.filter(l => l.status === 'waiting_analysis').length || 0,       cor: CORES.amarelo  },
+                { nome: 'Agendados',      valor: agendados,                                                             cor: CORES.verde    },
             ]
 
             // === ROBÔS E KNOCK-OUTS ===
@@ -172,19 +220,31 @@ export default function Dashboard() {
             const leadsRobo      = new Set(mensagens?.filter(m => m.content?.startsWith('[AUTORESPOSTA]')).map(m => m.whatsapp_id)).size
             const leadsInvalidos = leads?.filter(l => l.status === 'invalid' || l.status === 'blacklisted').length || 0
 
-            // === DISPAROS POR DIA (últimos 7 ou 30 dias) ===
+            // === DISPAROS POR DIA — corrigido pra contar leads únicos por dia ===
             const diasPeriodo = periodoGrafico === '7d' ? 7 : 30
             const disparosPorDia = Array.from({ length: diasPeriodo }, (_, i) => {
                 const dia = diasAtras(diasPeriodo - 1 - i)
+                const fimDia = new Date(dia.getTime() + 86400000)
                 const diaStr = dia.toLocaleDateString('pt-BR', { day: '2-digit', month: '2-digit' })
+                
+                // Disparos: leads contactados nesse dia
                 const count = leads?.filter(l => {
-                    const d = new Date(l.last_contact_at || l.created_at)
-                    return d >= dia && d < new Date(dia.getTime() + 86400000) && l.status !== 'new'
+                    if (l.status === 'new' || !l.last_contact_at) return false
+                    const d = new Date(l.last_contact_at)
+                    return d >= dia && d < fimDia
                 }).length || 0
-                const respostas = mensagensDoCliente.filter(m => {
-                    const d = new Date(m.created_at)
-                    return d >= dia && d < new Date(dia.getTime() + 86400000)
-                }).length || 0
+                
+                // 🛡️ Respostas: LEADS ÚNICOS que mandaram mensagem nesse dia (não contagem de mensagens)
+                const jidsQueResponderamHoje = new Set(
+                    mensagensDoCliente
+                        .filter(m => {
+                            const d = new Date(m.created_at)
+                            return d >= dia && d < fimDia
+                        })
+                        .map(m => m.whatsapp_id)
+                )
+                const respostas = jidsQueResponderamHoje.size
+                
                 return { dia: diaStr, Disparos: count, Respostas: respostas }
             })
 
@@ -196,11 +256,11 @@ export default function Dashboard() {
 
             // === DISTRIBUIÇÃO POR STATUS ===
             const statusDist = [
-                { nome: 'Em Atendimento',  valor: emAtendimento,                                                  cor: CORES.azul    },
-                { nome: 'Agendados',       valor: agendados,                                                      cor: CORES.verde   },
-                { nome: 'Fatura',          valor: leads?.filter(l => l.status === 'waiting_analysis').length || 0, cor: CORES.amarelo },
-                { nome: 'Robô/Inválido',   valor: leadsRobo + leadsInvalidos,                                     cor: CORES.vermelho},
-                { nome: 'Pausa Manual',    valor: pausadoManual,                                                   cor: CORES.roxo    },
+                { nome: 'Em Atendimento',  valor: emAtendimento,                                                         cor: CORES.azul    },
+                { nome: 'Agendados',       valor: agendados,                                                             cor: CORES.verde   },
+                { nome: 'Fatura',          valor: leads?.filter(l => l.status === 'waiting_analysis').length || 0,       cor: CORES.amarelo },
+                { nome: 'Robô/Inválido',   valor: leadsRobo + leadsInvalidos,                                            cor: CORES.vermelho},
+                { nome: 'Pausa Manual',    valor: pausadoManual,                                                          cor: CORES.roxo    },
             ].filter(s => s.valor > 0)
 
             // === SAÚDE DOS CHIPS ===
@@ -211,6 +271,7 @@ export default function Dashboard() {
             const chipsSaude = (instancias || []).map(inst => {
                 const disparosHoje = leads?.filter(l => {
                     if (l.instance_id !== inst.id) return false
+                    if (!l.last_contact_at) return false
                     const d = new Date(l.last_contact_at)
                     return d >= hoje
                 }).length || 0
@@ -221,20 +282,27 @@ export default function Dashboard() {
                 }
             })
 
-            // === TEMPO MÉDIO DE RESPOSTA ===
+            // === TEMPO MÉDIO DE RESPOSTA — CORRIGIDO ===
+            // 🛡️ Bug antes: filtrava por lead.id quando messages tem whatsapp_id (JID)
             let somaTempos = 0, contTempos = 0
-            const leadsComResposta = leads?.filter(l => l.last_contact_at) || []
+            const leadsComResposta = leads?.filter(l => l.last_contact_at && l.whatsapp_id) || []
             for (const lead of leadsComResposta) {
                 const envio = new Date(lead.last_contact_at)
                 const primeiraResposta = mensagensDoCliente
-                    .filter(m => m.whatsapp_id === lead.id)
+                    .filter(m => m.whatsapp_id === lead.whatsapp_id)  // ← CORRIGIDO
+                    .filter(m => new Date(m.created_at) > envio)       // só respostas APÓS o disparo
                     .sort((a, b) => new Date(a.created_at) - new Date(b.created_at))[0]
+                
                 if (primeiraResposta) {
-                    const diff = (new Date(primeiraResposta.created_at) - envio) / 60000
-                    if (diff > 0 && diff < 1440) { somaTempos += diff; contTempos++ }
+                    const diff = (new Date(primeiraResposta.created_at) - envio) / 60000 // minutos
+                    if (diff > 0 && diff < 1440) {  // ignora respostas após 24h (provável outro contexto)
+                        somaTempos += diff
+                        contTempos++
+                    }
                 }
             }
             const tempoMedioResposta = contTempos > 0 ? Math.round(somaTempos / contTempos) : null
+
             // === TEMPERATURA DOS LEADS ===
             const tempCounts = { hot: 0, warm: 0, cold: 0, dead: 0 }
             leads?.forEach(l => {
@@ -250,8 +318,19 @@ export default function Dashboard() {
                 valor: leads?.filter(l => (l.current_stage || 0) === i).length || 0,
                 cor: spinCores[i],
             }))
+
             setDados({
-                kpis: { totalDisparados, taxaResposta, agendados, leadsQueResponderam, aguardandoHumano, pausadoManual, leadsRobo, tempoMedioResposta, tempCounts },
+                kpis: { 
+                    totalDisparados, 
+                    taxaResposta, 
+                    agendados, 
+                    leadsQueResponderam, 
+                    aguardandoHumano, 
+                    pausadoManual, 
+                    leadsRobo, 
+                    tempoMedioResposta, 
+                    tempCounts 
+                },
                 funil,
                 spinFunil,
                 disparosPorDia,

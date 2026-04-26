@@ -78,13 +78,19 @@ function computeMetrics(leads, instances, realTotalLeads) {
     const sc = { new: 0, contact: 0, waiting_analysis: 0, booked: 0, error: 0, invalid: 0, blacklisted: 0, dead: 0 }
     leadsValidos.forEach(l => { if (sc[l.status] !== undefined) sc[l.status]++ })
 
+    // 🎯 AGENDAMENTOS REAIS: status booked OU current_stage >= 4 OU calendly_booked = true
+    const totalAgendamentosReais = leadsValidos.filter(l => 
+        l.status === 'booked' || 
+        l.calendly_booked === true ||
+        (l.current_stage || 0) >= 4
+    ).length
+
     const funnel = [
         { etapa: 'Capturados',  qtd: leadsValidos.length,                              fill: NEON.blue },
         { etapa: 'Abordados',   qtd: sc.contact + sc.waiting_analysis + sc.booked,     fill: NEON.cyan },
         { etapa: 'Em análise',  qtd: sc.waiting_analysis + sc.booked,                  fill: NEON.violet },
-        { etapa: 'Agendados',   qtd: sc.booked,                                        fill: NEON.emerald },
+        { etapa: 'Agendados',   qtd: totalAgendamentosReais,                           fill: NEON.emerald },
     ]
-
     // ── 3. Nichos (top 6) ──
     const nicheCount = {}
     leadsValidos.forEach(l => {
@@ -213,15 +219,19 @@ function computeMetrics(leads, instances, realTotalLeads) {
         })
     }
 
-    // ── 11. Performance Geográfica ──
+   // ── 11. Performance Geográfica ──
     const geoPerformance = {}
     leadsValidos.forEach(l => {
         if (!l.estado || l.estado.trim() === '') return
         const uf = l.estado.toUpperCase().trim()
         if (!geoPerformance[uf]) geoPerformance[uf] = { total: 0, agendados: 0 }
         geoPerformance[uf].total++
-        if (l.status === 'booked') geoPerformance[uf].agendados++
+        // 🎯 Mesma regra blindada: status booked, calendly_booked, ou estágio 4+
+        if (l.status === 'booked' || l.calendly_booked === true || (l.current_stage || 0) >= 4) {
+            geoPerformance[uf].agendados++
+        }
     })
+
     const geoData = Object.entries(geoPerformance)
         .map(([uf, stats]) => ({
             uf,
@@ -245,7 +255,7 @@ function computeMetrics(leads, instances, realTotalLeads) {
     // ── KPIs ──
     const totalLeads = realTotalLeads || leadsValidos.length
     const totalAbordados = leadsValidos.filter(l => l.last_contact_at).length
-    const totalAgendados = sc.booked
+    const totalAgendados = totalAgendamentosReais  // 🎯 Agora usa a regra blindada
     const taxaAbordagem  = totalLeads > 0 ? Math.round(totalAbordados / totalLeads * 100) : 0
 
     const last2 = monthly.slice(-2)
