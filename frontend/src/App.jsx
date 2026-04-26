@@ -897,34 +897,22 @@ return (
       {/* COLUNA 1 — Chips + War Room (40% mínimo pro War Room) */}
 <div className="w-[400px] shrink-0 border-r border-white/5 bg-[#0d0d0d]/60 flex flex-col h-full overflow-hidden">
 
-    {/* === CHIP SELECTOR — compacto mas legível === */}
-    <div className="shrink-0 p-3 border-b border-white/5">
-        {/* Select + Ações */}
-        <div className="flex gap-2 items-center mb-2">
-            <select
-                value={selectedInstanceId || ''}
-                onChange={(e) => setSelectedInstanceId(e.target.value)}
-                className="flex-1 h-9 bg-black/40 border border-white/10 rounded-lg text-[11px] text-white font-bold px-3 outline-none focus:border-amber-500 transition-all"
-            >
-                <option value="">Selecione um chip...</option>
-                {instances.map(inst => (
-                    <option key={inst.id} value={inst.id}>
-                        {inst.whatsapp_status === 'CONNECTED' ? '🟢' : '🔴'} {inst.name}
-                    </option>
-                ))}
-            </select>
+    {/* === CHIP SELECTOR — limpo e direto === */}
+<div className="shrink-0 p-3 border-b border-white/5 space-y-2">
+    {/* Botões de gerenciamento */}
+    <div className="flex gap-2">
+        <Button
+            onClick={() => {
+                const nome = prompt("Nome da nova unidade (Ex: Chip Claro 02):");
+                if (nome) socket.emit('create_instance', { name: nome });
+            }}
+            className="flex-1 h-8 text-[9px] uppercase font-black bg-amber-600/15 text-amber-400 border border-amber-500/25 hover:bg-amber-600/30 rounded-lg"
+        >
+            + Adicionar Chip
+        </Button>
+        {selectedInstanceId && (
             <Button
                 onClick={() => {
-                    const nome = prompt("Nome da nova unidade (Ex: Chip Claro 02):");
-                    if (nome) socket.emit('create_instance', { name: nome });
-                }}
-                className="h-9 px-3 text-[8px] uppercase font-black bg-amber-600/20 text-amber-400 border border-amber-500/30 hover:bg-amber-600/40 rounded-lg"
-            >
-                + Novo
-            </Button>
-            <Button
-                onClick={() => {
-                    if (!selectedInstanceId) return alert("Selecione um chip primeiro.");
                     const inst = instances.find(i => i.id === selectedInstanceId);
                     if (!confirm(`Remover o chip "${inst?.name}"? Isso desconecta o WhatsApp vinculado.`)) return;
                     socket.emit('remove_instance', selectedInstanceId);
@@ -932,47 +920,57 @@ return (
                     setSelectedInstanceId(null);
                     setInstances(prev => prev.filter(i => i.id !== selectedInstanceId));
                 }}
-                className="h-9 px-3 text-[8px] uppercase font-black bg-red-600/20 text-red-400 border border-red-500/30 hover:bg-red-600/40 rounded-lg"
+                className="h-8 px-3 text-[9px] uppercase font-black bg-red-600/15 text-red-400 border border-red-500/25 hover:bg-red-600/30 rounded-lg"
             >
                 Remover
             </Button>
-        </div>
-
-        {/* Chip pills */}
-        <div className="flex gap-1.5 flex-wrap">
-            {instances.map(inst => {
-                const conectado = inst.whatsapp_status === 'CONNECTED'
-                return (
-                    <div
-                        key={inst.id}
-                        onClick={() => setSelectedInstanceId(inst.id)}
-                        className={`flex items-center gap-1.5 px-2.5 py-1 rounded-lg cursor-pointer transition-all text-[9px] font-black uppercase tracking-wider border ${
-                            selectedInstanceId === inst.id
-                                ? 'bg-amber-600/15 border-amber-500/30 text-amber-300'
-                                : 'bg-white/[0.02] border-white/5 text-slate-500 hover:border-white/10'
-                        }`}
-                    >
-                        <div className={`h-2 w-2 rounded-full ${
-                            conectado ? 'bg-emerald-400 shadow-[0_0_4px_#10b981]' : 'bg-red-400'
-                        }`} />
-                        {inst.name}
-                        <span className="text-[7px] text-slate-600 ml-0.5">
-                            {inst.agent_name || ''}
-                        </span>
-                    </div>
-                )
-            })}
-        </div>
+        )}
     </div>
 
+    {/* Pills clicáveis — agora são o ÚNICO ponto de seleção */}
+    <div className="flex gap-1.5 flex-wrap">
+        <div
+            onClick={() => setSelectedInstanceId(null)}
+            className={`flex items-center gap-1.5 px-2.5 py-1 rounded-lg cursor-pointer transition-all text-[9px] font-black uppercase tracking-wider border ${
+                !selectedInstanceId
+                    ? 'bg-blue-600/15 border-blue-500/30 text-blue-300'
+                    : 'bg-white/[0.02] border-white/5 text-slate-500 hover:border-white/10'
+            }`}
+        >
+            <Cpu className="h-2.5 w-2.5" />
+            Todos
+        </div>
+        {instances.map(inst => {
+            const conectado = inst.whatsapp_status === 'CONNECTED'
+            const ativo = selectedInstanceId === inst.id
+            return (
+                <div
+                    key={inst.id}
+                    onClick={() => setSelectedInstanceId(inst.id)}
+                    className={`flex items-center gap-1.5 px-2.5 py-1 rounded-lg cursor-pointer transition-all text-[9px] font-black uppercase tracking-wider border ${
+                        ativo
+                            ? 'bg-amber-600/15 border-amber-500/30 text-amber-300'
+                            : 'bg-white/[0.02] border-white/5 text-slate-500 hover:border-white/10'
+                    }`}
+                >
+                    <div className={`h-2 w-2 rounded-full ${
+                        conectado ? 'bg-emerald-400 shadow-[0_0_4px_#10b981]' : 'bg-red-400'
+                    }`} />
+                    {inst.name}
+                </div>
+            )
+        })}
+    </div>
+</div>
     {/* === WAR ROOM — flex:1 = todo o espaço restante === */}
     <div className="flex-1 flex flex-col overflow-hidden min-h-0">
-        <ConversaList
-            onSelect={setActiveChat}
-            activeId={activeChat?.id}
-            socket={socket}
-            instances={instances}
-        />
+<ConversaList
+    onSelect={setActiveChat}
+    activeId={activeChat?.id}
+    socket={socket}
+    instances={instances}
+    selectedInstanceId={selectedInstanceId}
+/>
     </div>
 </div>
         {/* COLUNA 2 — Chat */}

@@ -151,6 +151,39 @@ function ConversaCard({ lead, ultimaMsg, isActive, onClick }) {
                         </span>
                     </div>
                 )}
+
+                {/* 🎯 Badge de estágio SPIN — só aparece se passou da qualificação */}
+{lead.current_stage > 0 && (
+    <div style={{
+        display: 'inline-flex', alignItems: 'center', gap: 3,
+        background: lead.current_stage >= 4 ? '#10b98118' :
+                   lead.current_stage === 3 ? '#8b5cf618' :
+                   lead.current_stage === 2 ? '#06b6d418' :
+                   '#3b82f618',
+        border: `1px solid ${
+            lead.current_stage >= 4 ? '#10b98130' :
+            lead.current_stage === 3 ? '#8b5cf630' :
+            lead.current_stage === 2 ? '#06b6d430' :
+            '#3b82f630'
+        }`,
+        borderRadius: '999px', padding: '2px 6px',
+        marginLeft: 4,
+    }}>
+        <span style={{
+            fontSize: 8, fontWeight: 900, textTransform: 'uppercase', letterSpacing: '0.1em',
+            color: lead.current_stage >= 4 ? '#10b981' :
+                   lead.current_stage === 3 ? '#8b5cf6' :
+                   lead.current_stage === 2 ? '#06b6d4' :
+                   '#3b82f6'
+        }}>
+            {lead.current_stage === 1 ? '💬 Situação' :
+             lead.current_stage === 2 ? '⚡ Dor' :
+             lead.current_stage === 3 ? '💡 Solução' :
+             lead.current_stage === 4 ? '📅 Agenda' :
+             lead.current_stage === 5 ? '✅ Fechado' : ''}
+        </span>
+    </div>
+)}
             </div>
 
             {/* Indicador de não-lida: última msg é do lead e IA ainda não respondeu */}
@@ -174,12 +207,21 @@ function ConversaCard({ lead, ultimaMsg, isActive, onClick }) {
  *   activeId  string          — id do lead ativo para highlight
  *   socket    — instância socket.io para ouvir new_lead e atualizações em tempo real
  */
-export default function ConversaList({ onSelect, activeId, socket, instances = [] }) {
+export default function ConversaList({ onSelect, activeId, socket, instances = [], selectedInstanceId = null }) {
     const [conversas, setConversas] = useState([])
     const [busca,     setBusca]     = useState('')
     const [loading,   setLoading]   = useState(true)
-    const [filtro,    setFiltro]    = useState('todos') // todos | a_responder | ia_ativa | pausadas | hot | warm | estagio_dor | estagio_solucao | estagio_agenda
-    const [chipFiltro, setChipFiltro] = useState('todos') // 'todos' | instance_id
+    const [filtro,    setFiltro]    = useState('todos')
+    const [chipFiltro, setChipFiltro] = useState('todos')
+
+    // 🔗 Sincroniza com o chip selecionado no App principal
+    useEffect(() => {
+        if (selectedInstanceId) {
+            setChipFiltro(selectedInstanceId)
+        } else {
+            setChipFiltro('todos')
+        }
+    }, [selectedInstanceId])
 
     const fetchConversas = useCallback(async () => {
         setLoading(true)
@@ -386,43 +428,7 @@ export default function ConversaList({ onSelect, activeId, socket, instances = [
                     })}
                 </div>
 
-                {/* === FILTRO POR CHIP === */}
-                {instances.length > 1 && (
-                    <div style={{ display: 'flex', gap: 4, flexWrap: 'wrap' }}>
-                        <button
-                            onClick={() => setChipFiltro('todos')}
-                            style={{
-                                fontSize: 7, fontWeight: 900, textTransform: 'uppercase', letterSpacing: '0.1em',
-                                padding: '2px 6px', borderRadius: '999px', cursor: 'pointer',
-                                background: chipFiltro === 'todos' ? 'rgba(59,130,246,0.15)' : 'transparent',
-                                border: `1px solid ${chipFiltro === 'todos' ? 'rgba(59,130,246,0.4)' : 'rgba(255,255,255,0.06)'}`,
-                                color: chipFiltro === 'todos' ? '#93C5FD' : 'rgba(255,255,255,0.25)',
-                            }}
-                        >
-                            Todos chips
-                        </button>
-                        {instances.map(inst => (
-                            <button
-                                key={inst.id}
-                                onClick={() => setChipFiltro(inst.id)}
-                                style={{
-                                    display: 'flex', alignItems: 'center', gap: 3,
-                                    fontSize: 7, fontWeight: 900, textTransform: 'uppercase', letterSpacing: '0.1em',
-                                    padding: '2px 6px', borderRadius: '999px', cursor: 'pointer',
-                                    background: chipFiltro === inst.id ? 'rgba(59,130,246,0.15)' : 'transparent',
-                                    border: `1px solid ${chipFiltro === inst.id ? 'rgba(59,130,246,0.4)' : 'rgba(255,255,255,0.06)'}`,
-                                    color: chipFiltro === inst.id ? '#93C5FD' : 'rgba(255,255,255,0.25)',
-                                }}
-                            >
-                                <div style={{
-                                    width: 5, height: 5, borderRadius: '50%',
-                                    background: inst.whatsapp_status === 'CONNECTED' ? '#10B981' : '#F43F5E',
-                                }} />
-                                {inst.name}
-                            </button>
-                        ))}
-                    </div>
-                )}
+               
             </div>
 
             {/* ── Lista agrupada por chip ── */}

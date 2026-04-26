@@ -389,6 +389,7 @@ export default function VisualAnalytics() {
     deltaCriados, deltaAbordados,
     funnelSpin, temperatureData, abTestData,
     nicheResponseData, spinPassagem,
+    geoData, engagementRate,
 } = metrics
 
     return (

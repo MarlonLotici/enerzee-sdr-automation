@@ -210,8 +210,8 @@ export default function ChipStatus({ instances = [], socket }) {
         if (!instances.length) { setLoading(false); return }
         setLoading(true)
         try {
-            const hoje = new Date().toISOString().split('T')[0] // YYYY-MM-DD
 
+            const hoje = new Date(Date.now() - 3 * 60 * 60 * 1000).toISOString().split('T')[0] // YYYY-MM-DD em BRT
             // Uma query só com group-by não existe no client Supabase,
             // então fazemos uma query por chip em paralelo (máx ~10 chips)
             const results = await Promise.all(
