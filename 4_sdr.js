@@ -23,6 +23,7 @@ const auditorAgent = require('./agents/auditorAgent'); // faz auditoria das conv
 const handoffAgent = require('./agents/handoffAgent');
 const motoresEmExecucao = new Set(); // 🛡️ Impede que o mesmo chip ligue dois loops infinitos
 const { useRedisAuthState } = require('./auth_redis_adapter');
+const { enviarAlerta } = require('./notifier');
 const MAPA_CONCESSIONARIAS = {
     'MT': 'Energisa', 'MS': 'Energisa', 'SC': 'Celesc', 'PR': 'Copel',
     'RS': 'RGE/Ceee', 'BA': 'Coelba', 'PE': 'Neoenergia', 'MG': 'Cemig',
@@ -872,6 +873,10 @@ process.on('unhandledRejection', (reason) => {
     sessions.set(instanceId, { sock, ready: false });
     instanciasLigando.delete(instanceId);
     const reason = (lastDisconnect?.error)?.output?.statusCode;
+    // Avisa no Discord, exceto se foi você que clicou em deslogar manualmente
+    if (reason !== DisconnectReason.loggedOut) {
+        enviarAlerta("🔴 CHIP OFF-LINE", `O chip ${instanceName} caiu. Código do erro: ${reason}`, 15158332);
+    }
 
     // 🔴 Sessão corrompida (Bad Session) → limpa chaves e força novo QR
     if (reason === DisconnectReason.badSession) {
@@ -1415,7 +1420,7 @@ if (fromMe) {
             if (analise && analise.consumo_kwh > 0) {
                 const economia = calcularEconomiaRegional(analise);
                 const estudo = `📊 *ESTUDO PRELIMINAR* ⚡\nUnidade: ${lead.name}\nRedução Estimada: R$ ${economia.descontoReais}/mês\n\nConsegue falar agora rapidinho?`;
-
+                enviarAlerta("⚡ FATURA ANALISADA", `Lead: ${lead.name}\nEconomia: R$ ${economia.descontoReais}/mês`, 3066993);
                 await supabase.from('leads').update({ 
                     status: 'waiting_analysis',
                     last_analysis_data: analise 
@@ -1654,6 +1659,7 @@ console.log(`🔒 [RESERVA] Lead ${lead.name} travado atomicamente para chip ${c
                 const enviosHoje = await db.getDailyContactCount(instanceId);
                 if (enviosHoje >= config.limite) {
                     console.log(`🌙 [METAS] ${config.nome} atingiu o limite de ${config.limite}. Dormindo.`);
+                    enviarAlerta("🌙 LIMITE DIÁRIO", `O chip ${config.nome} bateu a meta de ${config.limite} disparos hoje.`, 3447003);
                     leadsEmProcessamento.delete(lead.id);
                     break; // 🛑 HÍBRIDO: Bateu a meta, desliga a máquina.
                 }
@@ -2143,6 +2149,7 @@ async function loopAuditor() {
                     }).eq('id', lead.id);
 
                     console.log(`✅ [QA AUDITOR] Relatório gerado para ${lead.name}.`);
+                    enviarAlerta("📋 AUDITORIA SALVA", `Relatório de "${lead.name}" finalizado no banco de dados.`, 15844367);
                 } else {
                     // Sem conversa suficiente, apenas marca como auditado para sair da fila
                     await supabase.from('leads').update({ is_audited: true, audit_report: "Sem interação suficiente." }).eq('id', lead.id);
@@ -2365,6 +2372,7 @@ if (!resposta) {
 
     } catch (error) {
         console.error(`❌ [WORKER-ERRO] Falha ao processar job ${job.id}:`, error.message);
+        enviarAlerta("⚠️ ERRO NA IA (WORKER)", `Falha ao responder o lead.\nErro: ${error.message}`, 15158332);
         throw error; // Força o BullMQ a tentar de novo (Retry)
     } finally {
         // 5. Destranca o cérebro deste lead para que ele possa receber novas mensagens
@@ -2444,7 +2452,7 @@ module.exports = {
 
                sdrEvents.on('AGENDAMENTO_CONFIRMADO', async ({ lead, dataEvento, instanceId }) => {
     console.log(`🎊 [WEBHOOK] Agendamento confirmado para ${lead.name}. Preparando feedback...`);
-    
+enviarAlerta("🎊 REUNIÃO AGENDADA!", `Lead: ${lead.name}\nData: ${new Date(dataEvento).toLocaleString('pt-BR')}`, 3066993);
     // 🛡️ BLINDAGEM: Em domingos, só registra mas não dispara mensagem (lead recebe na segunda)
     if (!dentroDoExpediente()) {
         console.log(`💤 [WEBHOOK] Fora do expediente. Feedback será enviado no próximo dia útil.`);
