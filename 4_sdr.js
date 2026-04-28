@@ -22,6 +22,7 @@ const objectionAgent = require('./agents/objectionAgent'); // esse agente assume
 const auditorAgent = require('./agents/auditorAgent'); // faz auditoria das conversas como um 'juiz'
 const handoffAgent = require('./agents/handoffAgent');
 const motoresEmExecucao = new Set(); // 🛡️ Impede que o mesmo chip ligue dois loops infinitos
+const { useRedisAuthState } = require('./auth_redis_adapter');
 const MAPA_CONCESSIONARIAS = {
     'MT': 'Energisa', 'MS': 'Energisa', 'SC': 'Celesc', 'PR': 'Copel',
     'RS': 'RGE/Ceee', 'BA': 'Coelba', 'PE': 'Neoenergia', 'MG': 'Cemig',
@@ -88,6 +89,33 @@ function extrairNomeHumano(pushName) {
 
     // 4. Retorna o nome com a primeira letra maiúscula (Ex: "joão" -> "João")
     return primeiroNome.charAt(0).toUpperCase() + primeiroNome.slice(1);
+}
+
+// ✂️ LÂMINA DE CORTE: Transforma "Merci Delicatessen Restaurante e Pizzaria LTDA" em "Merci Delicatessen"
+function limparNomeEmpresa(nomeOriginal) {
+    if (!nomeOriginal) return "sua empresa";
+    
+    // 1. Remove lixo jurídico imediatamente
+    let nomeLimpo = nomeOriginal.replace(/\b(LTDA|ME|EPP|EIRELI|S\.A|SA|S\/A|LIMITED|MEI|- ME|- EPP)\b/gi, '').trim();
+    
+    // 2. Quebra em palavras
+    const palavras = nomeLimpo.split(/\s+/);
+    
+    // 3. Se for um nome gigante, corta na segunda ou terceira palavra
+    if (palavras.length > 2) {
+        // Ignora conectivos comuns ao contar o tamanho
+        const stopWords = ['e', 'do', 'da', 'de', 'dos', 'das', 'em', 'no', 'na'];
+        let limite = 2;
+        
+        // Se a segunda palavra for um conectivo (ex: "Pizzaria do João"), pegamos 3 palavras
+        if (stopWords.includes(palavras[1].toLowerCase())) {
+            limite = 3;
+        }
+        
+        return palavras.slice(0, limite).join(' ');
+    }
+    
+    return nomeLimpo;
 }
 
 // 🎯 NOVA FUNÇÃO: Chute de conta baseado em Capital Social e Nicho
@@ -353,20 +381,21 @@ function getHoraBrasil() {
 function dentroDoExpediente() {
     const agora = getHoraBrasil();
     
-    // 🛡️ BLINDAGEM ANTI-BAN: Domingo é dia de descanso. Sem follow-ups, sem recuperação, NADA.
+    // 🛡️ Domingo é dia de descanso. Sem respostas, sem follow-ups.
     if (agora.diaSemana === 0) return false;
     
-    // 🛡️ BLINDAGEM EXTRA: Sábado só até 14h (manhã comercial). Depois disso, encerrado.
+    // 🛡️ Sábado: Respondendo apenas de manhã (06:00 às 14:00)
+    // Se quiser que responda até as 23:30 no sábado também, basta apagar este bloco IF inteiro.
     if (agora.diaSemana === 6) {
         const t = agora.horas * 60 + agora.minutos;
-        return t >= 480 && t <= 840; // 08:00 às 14:00
+        return t >= 360 && t <= 840; // 360 = 06:00 | 840 = 14:00
     }
     
-    // Cálculo matemático direto sobre os números recebidos
+    // 🎯 SEGUNDA A SEXTA: Janela de Resposta (06:00 às 23:30)
     const t = agora.horas * 60 + agora.minutos;
     
-    // 330 = 05:30 AM | 1365 = 22:45 PM
-    return t >= 330 && t <= 1365;
+    // 360 = 06:00 AM | 1410 = 23:30 PM
+    return t >= 360 && t <= 1410;
 }
 
 
@@ -561,9 +590,7 @@ async function resolverPromptCompleto(promptBase, contextoLead, instanceData, hi
         ? contextoLead.dono.split(' ')[0]
         : (contextoLead.name || "Gestor");
 
-    const nomeEmpresa = (contextoLead.name || "sua empresa")
-        .replace(/\s(LTDA|ME|EIRELI|S\.A|LIMITED)\b/gi, '')
-        .trim();
+    const nomeEmpresa = limparNomeEmpresa(contextoLead.name);
 
     const bairroLead = contextoLead.bairro || "sua região";
     // 🎯 LIMPEZA ESTÉTICA: Corta nomes compostos (ex: "Enel/CPFL" vira apenas "Enel")
@@ -804,7 +831,7 @@ async function startInstance(instanceId, instanceName) {
     console.log(`[MANAGER] 🚀 Ligando SDR: ${instanceName}`);
     //const { state, saveCreds } = await useMultiFileAuthState(`wpp_sessions/${instanceId}`);
     // Agora as chaves do WhatsApp vivem no Supabase, protegidas contra restarts
-    const { state, saveCreds } = await useSupabaseAuthState(instanceId);
+    const { state, saveCreds } = await useRedisAuthState(redisConnection, instanceId);
     const { version } = await fetchLatestBaileysVersion();
 
     const sock = makeWASocket({
@@ -1454,6 +1481,24 @@ if (fromMe) {
     const mensagemParaIA = (messageType === 'audioMessage') ? `O cliente enviou um áudio dizendo: "${textoTranscrevido}"` : texto;
     if (!mensagemParaIA) return;
 
+
+    // 👇 INÍCIO DA TRAVA DE HORÁRIO DE RESPOSTA 👇
+    if (!dentroDoExpediente()) {
+        console.log(`🌙 [HORÁRIO] Lead ${lead.name} mandou mensagem às ${new Date().getHours()}h. A IA está dormindo e responderá amanhã às 06h.`);
+        
+        // Salva a mensagem no banco para não perder o contexto
+        if (messageType !== 'audioMessage') {
+            await db.saveMessage(lead.whatsapp_id, 'user', texto, instanceId);
+        }
+        
+        // 🛡️ Se for um lead "new", muda para "contact" para garantir que o Vigia ache ele amanhã de manhã
+        if (lead.status === 'new') {
+            await supabase.from('leads').update({ status: 'contact' }).eq('id', lead.id);
+        }
+        
+        return; // Mata a execução aqui. NÃO joga pra fila do Redis.
+    }
+
     // 👇 INÍCIO DA TRAVA DE RACIOCÍNIO 👇
     if (iaRespondendo.has(lead.whatsapp_id)) {
         console.log(`🛑 [TRAVA DE RACIOCÍNIO] A IA já está formulando uma resposta para ${lead.name}. Guardando a nova mensagem e ignorando disparo duplo.`);
@@ -1708,9 +1753,8 @@ if (lead.dono && lead.dono.trim().length > 2) {
 const ufLead = lead.estado || null;
 // 🎯 LIMPEZA ESTÉTICA PARA ABERTURA: Corta nomes compostos para soar natural
 const concessionariaLocal = (MAPA_CONCESSIONARIAS[ufLead] || 'concessionária de energia').split('/')[0];
-const nomeEmpresa = lead.name
-    ? lead.name.replace(/\s(LTDA|ME|EIRELI|S\.A|LIMITED)\b/gi, '').trim()
-    : 'sua empresa';
+
+const nomeEmpresa = limparNomeEmpresa(lead.name);
 
 // ── BALÃO ÚNICO: curiosidade + qualificação casual numa só mensagem ──
 let variacoesAbertura;

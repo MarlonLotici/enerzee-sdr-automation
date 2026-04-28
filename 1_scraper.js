@@ -244,7 +244,8 @@ async function extrairLeadDaPagina(page, url, termo, cidade, gridPoint) {
                 }
             }
         }
-
+        const ufMatch = endereco.match(/-\s([A-Z]{2}),?\s\d{5}/);
+        const estadoExtraido = ufMatch ? ufMatch[1] : null;
         return {
             name: nome,
             niche: termoRef,
@@ -252,6 +253,7 @@ async function extrairLeadDaPagina(page, url, termo, cidade, gridPoint) {
             address: endereco,
             city: cidadeRef,
             bairro: bairro,
+            estado: estadoExtraido,
             link: urlLead,
             lat: coordMatch ? parseFloat(coordMatch[1]) : gridPt.lat,
             lng: coordMatch ? parseFloat(coordMatch[2]) : gridPt.lng,

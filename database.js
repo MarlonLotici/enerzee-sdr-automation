@@ -84,6 +84,21 @@ const db = {
         const phonePuro = String(lead.phone || lead.whatsapp_id).replace(/\D/g, '');
         const zapId = phonePuro.includes('@') ? phonePuro : `${phonePuro}@s.whatsapp.net`;
 
+
+        let estadoFinal = lead.estado;
+
+// 🕵️ Se o estado estiver vazio, descobre pelo DDD
+if (!estadoFinal && phonePuro) {
+    const ddd = phonePuro.substring(2, 4);
+    const mapaDDD = {
+        '47':'SC','48':'SC','49':'SC','41':'PR','42':'PR','43':'PR','44':'PR','45':'PR','46':'PR',
+        '11':'SP','12':'SP','13':'SP','14':'SP','15':'SP','16':'SP','17':'SP','18':'SP','19':'SP',
+        '31':'MG','32':'MG','33':'MG','34':'MG','35':'MG','37':'MG','38':'MG','21':'RJ','22':'RJ','24':'RJ',
+        '71':'BA','73':'BA','74':'BA','75':'BA','77':'BA','62':'GO','64':'GO'
+    };
+    estadoFinal = mapaDDD[ddd] || null;
+}
+
         const leadData = {
             user_id: userId, // 🔐 AQUI: Vincula o lead ao usuário logado
             whatsapp_id: zapId,
@@ -95,6 +110,7 @@ const db = {
             dono: lead.dono || null,
             endereco_fiscal: lead.endereco_fiscal || lead.address || null,
             bairro: lead.bairro || null,
+            estado: estadoFinal,
             cep: lead.cep || null,
             porte: lead.porte || null,
             capital_social_numeric: lead.capital_social_numeric || 0,
