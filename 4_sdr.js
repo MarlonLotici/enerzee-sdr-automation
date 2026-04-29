@@ -1589,10 +1589,9 @@ async function processarFilaDeAtaque(instanceId) {
                 console.log(`🛑 [MOTOR] Chip ${instanceId} removido da RAM. Encerrando motor de ataque definitivamente.`);
                 break; // Mata o while(true)
             }
-            // 👆 FIM DA TRAVAif (instanciasEncerrandoManualmente.has(instanceId)) {
 
-            let currentLeadId = null; 
-            // ... (O resto do seu código continua)
+        
+            
         let currentLeadId = null; 
             
             // 🎚️ Se chegou aqui dentro do loop, significa que existe lead. Desativa flag de base vazia.
