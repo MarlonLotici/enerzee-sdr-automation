@@ -882,9 +882,7 @@ process.on('unhandledRejection', (reason) => {
             sessions.set(instanceId, { sock, ready: false });
             instanciasLigando.delete(instanceId);
             const reason = (lastDisconnect?.error)?.output?.statusCode;
-        sessions.set(instanceId, { sock, ready: false });
-    instanciasLigando.delete(instanceId);
-    const reason = (lastDisconnect?.error)?.output?.statusCode;
+        
     // Avisa no Discord, exceto se foi você que clicou em deslogar manualmente
     if (reason !== DisconnectReason.loggedOut) {
         enviarAlerta("🔴 CHIP OFF-LINE", `O chip ${instanceName} caiu. Código do erro: ${reason}`, 15158332);
@@ -1591,7 +1589,7 @@ async function processarFilaDeAtaque(instanceId) {
                 console.log(`🛑 [MOTOR] Chip ${instanceId} removido da RAM. Encerrando motor de ataque definitivamente.`);
                 break; // Mata o while(true)
             }
-            // 👆 FIM DA TRAVA
+            // 👆 FIM DA TRAVAif (instanciasEncerrandoManualmente.has(instanceId)) {
 
             let currentLeadId = null; 
             // ... (O resto do seu código continua)
