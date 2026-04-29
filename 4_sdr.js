@@ -24,6 +24,7 @@ const handoffAgent = require('./agents/handoffAgent');
 const motoresEmExecucao = new Set(); // 🛡️ Impede que o mesmo chip ligue dois loops infinitos
 const { useRedisAuthState } = require('./auth_redis_adapter');
 const { enviarAlerta } = require('./notifier');
+const instanciasEncerrandoManualmente = new Set(); // 🛑 Flag para silenciar alertas no Discord ao remover chip
 const MAPA_CONCESSIONARIAS = {
     'MT': 'Energisa', 'MS': 'Energisa', 'SC': 'Celesc', 'PR': 'Copel',
     'RS': 'RGE/Ceee', 'BA': 'Coelba', 'PE': 'Neoenergia', 'MG': 'Cemig',
@@ -870,7 +871,18 @@ process.on('unhandledRejection', (reason) => {
         }
 
         if (connection === 'close') {
-    sessions.set(instanceId, { sock, ready: false });
+            // 👇 ENTRA AQUI: A barreira de silêncio
+            if (instanciasEncerrandoManualmente.has(instanceId)) {
+                console.log(`🔇 [SHUTDOWN SILENCIOSO] Chip ${instanceName} removido pelo painel. Alerta abortado.`);
+                instanciasEncerrandoManualmente.delete(instanceId); // Limpa a flag
+                return; // 🛑 Mata a execução aqui! Não manda pro Discord, não tenta religar.
+            }
+            // 👆 FIM DA BARREIRA
+
+            sessions.set(instanceId, { sock, ready: false });
+            instanciasLigando.delete(instanceId);
+            const reason = (lastDisconnect?.error)?.output?.statusCode;
+        sessions.set(instanceId, { sock, ready: false });
     instanciasLigando.delete(instanceId);
     const reason = (lastDisconnect?.error)?.output?.statusCode;
     // Avisa no Discord, exceto se foi você que clicou em deslogar manualmente
@@ -1573,8 +1585,17 @@ async function processarFilaDeAtaque(instanceId) {
     let falhasConsecutivas = 0; 
 
     try {
-       while (true) {
+        while (true) {
+            // 👇 ENTRA AQUI: Trava do Motor Zumbi
+            if (!sessions.has(instanceId)) {
+                console.log(`🛑 [MOTOR] Chip ${instanceId} removido da RAM. Encerrando motor de ataque definitivamente.`);
+                break; // Mata o while(true)
+            }
+            // 👆 FIM DA TRAVA
+
             let currentLeadId = null; 
+            // ... (O resto do seu código continua)
+        let currentLeadId = null; 
             
             // 🎚️ Se chegou aqui dentro do loop, significa que existe lead. Desativa flag de base vazia.
             if (baseEstaVazia) {
@@ -2526,13 +2547,20 @@ enviarAlerta("🎊 REUNIÃO AGENDADA!", `Lead: ${lead.name}\nData: ${new Date(da
     },
 
     encerrarInstancia: (instanceId) => {
+        // 1. Aciona o silenciador ANTES de fechar o socket
+        instanciasEncerrandoManualmente.add(instanceId); 
+
         const instancia = sessions.get(instanceId);
         if (instancia?.sock) {
             try { instancia.sock.end(); } catch(e) {}
         }
+        
+        // 2. Limpeza profunda da memória RAM
         sessions.delete(instanceId);
         instanciasLigando.delete(instanceId);
-        motoresEmExecucao.delete(instanceId); // 🔥 ISSO CONSERTA O SEU BOTÃO DO DASHBOARD
+        motoresEmExecucao.delete(instanceId);
+        cacheRegrasInstancia.delete(instanceId); // 🔥 Novo: Limpa o cache de regras para evitar zumbis
+
         if (fs.existsSync(`./wpp_sessions/${instanceId}`)) {
             fs.rmSync(`./wpp_sessions/${instanceId}`, { recursive: true, force: true });
         }
