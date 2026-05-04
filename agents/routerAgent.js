@@ -33,10 +33,11 @@ A sua ÚNICA função é ler a mensagem do cliente e devolver ESTRITAMENTE UMA d
 
 [REGRAS DE CLASSIFICAÇÃO]
 
-1. COMPRA 
-- O lead ESTÁ PRONTO PARA AGENDAR. 
-- Ele escolhe um horário ("pode ser às 14h", "amanhã de manhã"), pede o link ("manda o link"), ou aceita explicitamente a videochamada.
-- ⚠️ ALERTA: Dizer apenas "sim", "isso" ou "sou eu" NO INÍCIO da conversa NÃO É COMPRA, é CONTINUAR.
+1. COMPRA
+- O lead ESTÁ PRONTO PARA AGENDAR ou deu sinal claro de aceite.
+- Exemplos de aceite EXPLÍCITO: escolhe horário ("pode ser às 14h", "amanhã de manhã"), pede o link ("manda o link", "que link é esse?").
+- Exemplos de aceite SUAVE (também é COMPRA): "pode ser", "combinado", "bora", "vamos lá", "pode marcar", "pode agendar", "tô dentro", "ok amanhã", "qualquer hora serve", "me chama amanhã".
+- ⚠️ ALERTA: Dizer apenas "sim", "isso" ou "sou eu" NO INÍCIO da conversa NÃO É COMPRA, é CONTINUAR. Mas "sim" após uma proposta de horário específica É COMPRA.
 
 2. CONTINUAR
 - O lead confirmou uma informação ("sim", "sou eu", "correto", "exato", "👍").

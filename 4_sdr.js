@@ -700,8 +700,9 @@ const concessionariaLocal = (MAPA_CONCESSIONARIAS[contextoLead.estado] || 'conce
         .replaceAll('${ancoragemContexto}', ancoragemContexto)
         .replaceAll('${raioXDoLead}', raioXDoLead)
         .replaceAll('${perfilEmocional}', perfilEmocional)
-        .replaceAll('${economiaMensal}', economiaMensalFormatada)      // ← NOVO
-        .replaceAll('${economiaAnual}', economiaAnualFormatada);       // ← NOVO
+        .replaceAll('${economiaMensal}', economiaMensalFormatada)
+        .replaceAll('${economiaAnual}', economiaAnualFormatada)
+        .replaceAll('${calendlyLink}', instanceData?.calendly_link || 'https://calendly.com/marlonlotici6/30min');
         
          
 
@@ -993,7 +994,7 @@ process.on('unhandledRejection', (reason) => {
 
             const isFromMe = msg.key.fromMe;
             const messageType = Object.keys(msg.message).find(k => k !== 'messageContextInfo' && k !== 'senderKeyDistributionMessage');
-            const isMedia = ['audioMessage', 'imageMessage', 'documentMessage'].includes(messageType);
+            const isMedia = ['audioMessage', 'imageMessage', 'documentMessage', 'contactMessage', 'contactsArrayMessage'].includes(messageType);
 
             // ⚡ VIA RÁPIDA: Se for VOCÊ digitando ou se o cliente mandou ÁUDIO/CONTA DE LUZ, processa na hora!
             if (isFromMe || isMedia) {
@@ -1113,14 +1114,16 @@ async function filtrarEEnviarResposta(sock, remoteJid, resposta, historico, lead
     console.log(`📝 [FILTRO] Resposta RAW da LLM (${resposta.length} chars): "${resposta.substring(0, 200)}..."`);
 
     // ── 1. LIMPEZA TOTAL DE TAGS (À PROVA DE ALUCINAÇÃO) ──
-    const regexTags = /\[\s*(ESTAGIO|ESTÁGIO|CLIMA|RAIO-X|PERFIL|ROBO|CONTADOR|ENGANO|GATEKEEPER|AGENDAMENTO_MANUAL)[^\]]*\]/gi;
+    const regexTags = /\[\s*(ESTAGIO|ESTÁGIO|CLIMA|RAIO-X|PERFIL|ROBO|CONTADOR|ENGANO|GATEKEEPER|AGENDAMENTO_MANUAL|PAUSA\s*PARA\s*RESPOSTA)[^\]]*\]/gi;
     const matchEstagio = /\[?\s*EST[AÁ]GIO\s*:?\s*(\d)\s*\]?/gi.exec(resposta);
+    const matchEncerrado = /\[?\s*EST[AÁ]GIO\s*:?\s*ENCERRADO\s*\]?/gi.test(resposta);
     const matchClima = /\[?\s*CLIMA\s*:?\s*([a-zA-Z_]+)\s*\]?/gi.exec(resposta);
     const matchManual = /\[?\s*AGENDAMENTO_MANUAL\s*\]?/gi.exec(resposta);
 
     let textoLimpo = resposta
         .replace(regexTags, '')
         .replace(/\[?\s*est[aá]gio\s*:?\s*\d\s*\]?/gi, '') // Pega casos bizarros como [ estágio 0 ]
+        .replace(/\bROBO\b/gi, '')   // LLM às vezes emite ROBO sem colchetes — remove antes de enviar
         .trim();
 
     if (textoLimpo.length === 0) {
@@ -1165,28 +1168,52 @@ if (matchClima) updates.sentiment = matchClima[1].toLowerCase();
         console.log(`📊 [FILTRO] Lead atualizado:`, updates);
     }
 
+    // 🔕 ENCERRADO: pausa o lead após mensagem de encerramento ser enviada
+    if (matchEncerrado) {
+        await supabase.from('leads').update({
+            is_paused: true,
+            internal_notes: `Conversa encerrada pela IA em ${new Date().toLocaleString('pt-BR')}`
+        }).eq('id', lead.id);
+        console.log(`🔕 [ENCERRADO] Conversa finalizada para ${lead.name}. Lead pausado.`);
+    }
+
     // ── 3. ENVIO FATIADO ──
     const mensagensSplit = textoLimpo.split('[QUEBRA]').map(t => t.trim()).filter(t => t.length > 0);
     console.log(`📤 [FILTRO] Enviando ${mensagensSplit.length} balão(ões) para ${lead.name}...`);
 
- for (let i = 0; i < mensagensSplit.length; i++) {
+    // 🎙️ LÓGICA TTS: Decide se o último balão vai como áudio
+    const ultimaMsgUser = historico.filter(m => m.role === 'user').slice(-1)[0];
+    const leadEnviouAudio = ultimaMsgUser?.content?.startsWith('(Áudio)');
+    const audiosJaEnviados = historico.filter(m => m.content?.includes('[AUDIO_TTS]')).length;
+    const temCalendly = textoLimpo.includes('calendly.com');
+    // Dispara TTS se: lead mandou áudio OU chance aleatória de 25%, máx 2 por conversa, sem links
+    const usarTTS = audiosJaEnviados < 2 && !temCalendly && (leadEnviouAudio || Math.random() < 0.25);
+
+    for (let i = 0; i < mensagensSplit.length; i++) {
         const trecho = mensagensSplit[i];
+        const isUltimoBalao = i === mensagensSplit.length - 1;
         try {
+            // 🎙️ Último balão como áudio (quando aplicável)
+            if (usarTTS && isUltimoBalao) {
+                console.log(`🎙️ [TTS] Enviando último balão como áudio para ${lead.name}...`);
+                await enviarAudioTTS(sock, remoteJid, trecho, lead, instanceId);
+                continue;
+            }
+
             await sock.sendPresenceUpdate('composing', remoteJid);
-            
+
             // ⚡ CÁLCULO DE JITTER DINÂMICO: Simula tempo de leitura + raciocínio + digitação
-            // Se a IA gerou a tag de desconfiança/ocupado, ela "pensa" mais antes de digitar
             const isObjecao = resposta.includes('CLIMA:DESCONFIADO') || resposta.includes('CLIMA:OCUPADO');
-            const multiplicador = isObjecao ? 90 : 65; 
+            const multiplicador = isObjecao ? 90 : 65;
             const tempoBase = Math.min(trecho.length * multiplicador + 3000, 12000);
-            
+
             await delay(tempoBase);
             const enviado = await enviarMensagemIA(sock, remoteJid, { text: trecho });
-            
+
             if (enviado) {
                 console.log(`✅ [ENVIO ${i + 1}/${mensagensSplit.length}] Balão entregue: "${trecho.substring(0, 80)}..."`);
                 await db.saveMessage(lead.whatsapp_id, 'assistant', trecho, instanceId);
-                
+
                 // 🕒 MARCADOR DE LINK: Carimba o banco se o Calendly foi enviado
                 if (trecho.includes('calendly.com')) {
                     await supabase.from('leads').update({ link_sent_at: new Date().toISOString() }).eq('id', lead.id);
@@ -1289,10 +1316,16 @@ if (!lead && cleanJid.includes('@lid')) {
 
 
 // --- 📝 EXTRAÇÃO DE CONTEÚDO (ACEITANDO A GAVETA) ---
-    const textoOriginal = msg.message.conversation || 
-                          msg.message.extendedTextMessage?.text || 
-                          msg.message.imageMessage?.caption || 
-                          msg.message.videoMessage?.caption || "";
+    // Extração de contato vCard → texto sintético que o routerAgent classifica como REPASSE
+    const vcardRaw = msg.message.contactMessage?.vcard || msg.message.contactsArrayMessage?.contacts?.[0]?.vcard;
+    const nomeVcard = vcardRaw?.match(/FN:(.+)/i)?.[1]?.trim();
+    const textoContato = nomeVcard ? `Segue o contato: ${nomeVcard}` : (vcardRaw ? 'Te passo o contato' : '');
+
+    const textoOriginal = msg.message.conversation ||
+                          msg.message.extendedTextMessage?.text ||
+                          msg.message.imageMessage?.caption ||
+                          msg.message.videoMessage?.caption ||
+                          textoContato || "";
 
     // O Segredo: Se a gaveta mandou o texto juntado, usa ele. Se não, usa o original (para mídias)
     const texto = textoConsolidado || textoOriginal;
@@ -1478,7 +1511,22 @@ if (fromMe) {
                 return; 
             } else if (messageType !== 'audioMessage') {
                 if (!lead.is_paused) {
-                    await sock.sendMessage(remoteJid, { text: "Opa, essa foto parece ser de outra coisa rs. Consegue mandar uma nítida da fatura aberta? Pode ser print do PDF também." });
+                    // Guard: só avisa uma vez — evita flood de "essa foto" quando lead envia catálogo inteiro
+                    const { data: ultimaBot } = await supabase
+                        .from('messages')
+                        .select('content')
+                        .eq('whatsapp_id', lead.whatsapp_id)
+                        .eq('instance_id', instanceId)
+                        .eq('role', 'assistant')
+                        .order('created_at', { ascending: false })
+                        .limit(1)
+                        .maybeSingle();
+                    const jaAvisouFoto = ultimaBot?.content?.includes('essa foto parece ser de outra coisa');
+                    if (!jaAvisouFoto) {
+                        const msgFoto = "Opa, essa foto parece ser de outra coisa rs. Consegue mandar uma nítida da fatura aberta? Pode ser print do PDF também.";
+                        await sock.sendMessage(remoteJid, { text: msgFoto });
+                        await db.saveMessage(lead.whatsapp_id, 'assistant', msgFoto, instanceId);
+                    }
                 }
                 return;
             }
@@ -1760,8 +1808,16 @@ console.log(`🔒 [RESERVA] Lead ${lead.name} travado atomicamente para chip ${c
                 }
 
                 // 2. O número já foi contatado antes?
-                if (hist && hist.length > 0) {
-                    console.log(`⏩ [PULO RÁPIDO] Lead ${lead.name} já tem histórico. Retornando ao status contact.`);
+                // Verifica em TODOS os chips (ignora instance_id) — protege contra recontato após redistribuição
+                const { data: anyMsg } = await supabase
+                    .from('messages')
+                    .select('id')
+                    .eq('whatsapp_id', lead.whatsapp_id)
+                    .limit(1)
+                    .maybeSingle();
+
+                if (anyMsg || (hist && hist.length > 0)) {
+                    console.log(`⏩ [PULO RÁPIDO] Lead ${lead.name} já tem histórico (chip anterior ou atual). Retornando ao status contact.`);
                     await supabase.from('leads').update({ status: 'contact' }).eq('id', lead.id);
                     leadsEmProcessamento.delete(lead.id);
                     await delay(2000);
@@ -2393,13 +2449,13 @@ if (!promptResolvido) {
 } else if (intencao === 'COMPRA') {
     // ... resto do código igual
     console.log(`💰 [WORKER-IA] Sinal de COMPRA! Acionando Closer em modo fechamento para ${lead.name}...`);
-    resposta = await closerAgent.gerarRespostaCloser(historico, lead, promptResolvido, 'COMPRA');
+    resposta = await closerAgent.gerarRespostaCloser(historico, lead, promptResolvido, 'COMPRA', { calendlyLink: instanceData?.calendly_link });
 
 } else if (intencao === 'DUVIDA' || intencao === 'CONTINUAR') {
-    // 🎯 Aqui garantimos que o "Sim, sou eu" ou perguntas sobre o serviço 
+    // 🎯 Aqui garantimos que o "Sim, sou eu" ou perguntas sobre o serviço
     // acionem o modo de qualificação do CloserAgent.
     console.log(`🔍 [WORKER-IA] Fluxo de CONTINUIDADE/DÚVIDA. Acionando Closer para ${lead.name}...`);
-    resposta = await closerAgent.gerarRespostaCloser(historico, lead, promptResolvido, 'DUVIDA');
+    resposta = await closerAgent.gerarRespostaCloser(historico, lead, promptResolvido, 'DUVIDA', { calendlyLink: instanceData?.calendly_link });
 
 } else if (intencao === 'OBJECAO') {
     console.log(`🛡️ [WORKER-IA] OBJEÇÃO detectada! Acionando The Tank para ${lead.name}...`);
@@ -2409,7 +2465,7 @@ if (!promptResolvido) {
 } else {
     // LIXO — "oi", "opa", "ok", "sim" solto
     console.log(`🧹 [WORKER-IA] Mensagem LIXO. Closer seguirá estágio atual da Constituição...`);
-    resposta = await closerAgent.gerarRespostaCloser(historico, lead, promptResolvido, 'LIXO');
+    resposta = await closerAgent.gerarRespostaCloser(historico, lead, promptResolvido, 'LIXO', { calendlyLink: instanceData?.calendly_link });
 }
 
 // 🛡️ Blindagem final: se todos os agentes falharam, avisa o log

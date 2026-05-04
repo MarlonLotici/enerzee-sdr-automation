@@ -13,7 +13,8 @@ const MODELO_PESADO = "meta-llama/Llama-3.3-70B-Instruct-Turbo";
  * @param {string} promptPersonalidade - Constituição já resolvida (com variáveis substituídas)
  * @param {string} intencao - 'COMPRA' | 'DUVIDA' | 'LIXO' (vindo do Router)
  */
-async function gerarRespostaCloser(historico, lead, promptPersonalidade, intencao = 'DUVIDA') {
+async function gerarRespostaCloser(historico, lead, promptPersonalidade, intencao = 'DUVIDA', opcoes = {}) {
+    const calendlyLink = opcoes.calendlyLink || 'https://calendly.com/marlonlotici6/30min';
     // 🧠 Injeção tática por intenção — evita conflito de instruções
     // 🧠 Injeção tática por intenção — evita conflito de instruções
     let overrideTatico = '';
@@ -27,7 +28,7 @@ O lead demonstrou interesse claro em avançar (disse sim, aceitou horário, ou c
 
 AÇÃO OBRIGATÓRIA:
 - Confirme de forma curta e seca (máx 15 palavras).
-- Envie o link: https://calendly.com/marlonlotici6/30min
+- Envie o link: ${calendlyLink}
 - Peça para ele ter uma fatura de luz em mãos na hora da call.
 - Adicione [ESTAGIO:4] no final.
 - NÃO explique novamente o benefício. NÃO faça rapport. APENAS trave o horário.

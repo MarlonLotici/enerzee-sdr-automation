@@ -32,14 +32,15 @@ const db = {
             .from('instances')
             .select(`
                 id,
-                name, 
+                name,
                 owner_phone,
                 whatsapp_status,
                 regional_rules,
                 agent_name,
                 company_name,
                 system_prompt,
-                daily_limit
+                daily_limit,
+                calendly_link
             `)
             .eq('id', instanceId)
             .single();
