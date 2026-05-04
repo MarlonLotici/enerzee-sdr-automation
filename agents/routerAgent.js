@@ -11,11 +11,18 @@ async function classificarMensagem(ultimaMensagemLead) {
         return 'LIXO';
     }
 
-    // 🛡️ NÍVEL 2: Deteção de Repasse Direto (Regex)
-    // Se o cliente mandar apenas um número, não gastamos tokens para adivinhar.
+    // 🛡️ NÍVEL 2: Deteção de Repasse Direto (Regex — custo zero, latência zero)
+
+    // 2a. Número de telefone isolado
     const textoLimpo = ultimaMensagemLead.replace(/[\s\-\(\)\+]/g, '');
     if (textoLimpo.length >= 8 && textoLimpo.length <= 13 && /^\d+$/.test(textoLimpo)) {
         console.log("⚡ [ROTEADOR] Número isolado detetado. Bypass automático para REPASSE.");
+        return 'REPASSE';
+    }
+
+    // 2b. E-mail — lead passou contato por e-mail, é repasse direto
+    if (/\b[a-z0-9._%+\-]+@[a-z0-9.\-]+\.[a-z]{2,}\b/i.test(ultimaMensagemLead)) {
+        console.log("⚡ [ROTEADOR] E-mail detetado. Bypass automático para REPASSE.");
         return 'REPASSE';
     }
 
@@ -39,7 +46,10 @@ A sua ÚNICA função é ler a mensagem do cliente e devolver ESTRITAMENTE UMA d
 - Esta é a intenção padrão para manter a conversa a fluir no funil.
 
 3. REPASSE
-- O lead indica outra pessoa ou passa um contacto ("fala com o meu sócio", "chama a Maria no 9999-9999", "não cuido disso").
+- O lead indica outra pessoa ou passa um contacto (número, e-mail, ou nome).
+- Exemplos directos: "fala com o meu sócio", "chama a Maria no 9999-9999", "não cuido disso", "não sou eu que trato disso aqui".
+- Exemplos indirectos (SEM número/e-mail explícito): "vou te encaminhar o contato", "te passo o e-mail do responsável", "fala com o meu gerente", "a pessoa certa é o João", "manda pra quem cuida disso que não sou eu".
+- ⚠️ CRÍTICO: Se o lead disse que VAI passar um contato (futuro), isso também é REPASSE — não confunda com CONTINUAR.
 
 4. OBJECAO
 - O lead resiste ativamente à abordagem ("tá caro", "sem tempo", "é golpe?", "já tenho energia solar", "não quero", "manda por email e eu leio depois").

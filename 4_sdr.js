@@ -425,6 +425,30 @@ function dentroDaJanelaDeDisparo() {
 // 🧠 NÚCLEO IA: INTENÇÃO E RESPOSTA (SEU "CLOSER V11" INTEGRAL)
 // ============================================================================
 
+// 🧟 GUARD: Detecta loop zumbi — 4+ mensagens idênticas do lead em sequência
+// Protege contra autoresposta em flood que chega antes do is_paused propagar no banco
+async function verificarLoopZumbi(whatsappId, instanceId, textoAtual) {
+    try {
+        const { data: msgs } = await supabase
+            .from('messages')
+            .select('content')
+            .eq('whatsapp_id', whatsappId)
+            .eq('instance_id', instanceId)
+            .eq('role', 'user')
+            .order('created_at', { ascending: false })
+            .limit(4);
+
+        if (!msgs || msgs.length < 3) return false;
+
+        const normalizar = s => s.replace(/^\[AUTORESPOSTA\]\s*/i, '').trim().toLowerCase();
+        const textoNorm = normalizar(textoAtual);
+        const identicas = msgs.filter(m => normalizar(m.content) === textoNorm);
+        return identicas.length >= 3;
+    } catch {
+        return false;
+    }
+}
+
 // 🎯 FIX #7: Detector de robô por REGEX (custo zero, latência zero)
 // Substitui a chamada LLM que custava ~$0.002 por mensagem recebida
 function analisarIntencaoRegex(texto) {
@@ -1342,7 +1366,18 @@ if (fromMe) {
     // ========================================================================
     if (!fromMe && texto.length > 0) {
         console.log(`🔍 [ANÁLISE] Lendo mensagem de ${lead.name}: "${texto.substring(0, 50)}..."`);
-        
+
+        // 🧟 GUARD: flood de mensagens idênticas antes do is_paused propagar no banco
+        if (await verificarLoopZumbi(remoteJid, instanceId, texto)) {
+            console.log(`🧟 [LOOP ZUMBI] Flood detectado para ${lead.name}. Pausando e alertando.`);
+            await supabase.from('leads').update({
+                is_paused: true,
+                internal_notes: `Loop zumbi em ${new Date().toLocaleString('pt-BR')}: "${texto.substring(0, 80)}"`
+            }).eq('id', lead.id);
+            await enviarAlerta(`🧟 *Loop Zumbi* detectado\n*Lead:* ${lead.name}\n*Chip:* ${instanceId}\nLead pausado automaticamente.`);
+            return;
+        }
+
         if (lead.is_paused) {
             console.log(`⏸️ [TRAVA HUMANA] A IA ignorou ${lead.name} porque o lead está pausado no banco (is_paused = true).`);
         } else {
@@ -1768,11 +1803,9 @@ await instancia.sock.sendPresenceUpdate('composing', cleanJid);
 await delay(Math.random() * 4000 + 4000);
 await instancia.sock.sendPresenceUpdate('paused', cleanJid);
 
-let primeiroNomeDono = null;
-if (lead.dono && lead.dono.trim().length > 2) {
-    primeiroNomeDono = lead.dono.trim().split(' ')[0].toLowerCase();
-    primeiroNomeDono = primeiroNomeDono.charAt(0).toUpperCase() + primeiroNomeDono.slice(1);
-}
+// extrairNomeHumano filtra nomes de empresa, siglas jurídicas e palavras de blacklist
+// Se lead.dono for "Catatau Comércio LTDA", retorna null → saudação genérica
+const primeiroNomeDono = extrairNomeHumano(lead.dono);
 
 const ufLead = lead.estado || null;
 // 🎯 LIMPEZA ESTÉTICA PARA ABERTURA: Corta nomes compostos para soar natural
