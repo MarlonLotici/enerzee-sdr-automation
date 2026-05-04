@@ -366,7 +366,8 @@ export default function VisualAnalytics() {
             ])
             if (!leadsRes.error && leadsRes.data)     setLeads(leadsRes.data)
             if (!instRes.error  && instRes.data)      setInstances(instRes.data)
-           
+            if (!countRes.error && countRes.count != null) setRealTotalLeads(countRes.count)
+
              setLastSync(new Date())
 
         } finally {
