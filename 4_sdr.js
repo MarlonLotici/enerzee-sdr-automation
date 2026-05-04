@@ -532,26 +532,39 @@ async function getRegrasEmCache(instanceId) {
 function gerarAncoragemContexto(lead, estagioAtual, historico) {
     // Só injeta se conversa tiver mais de 8 mensagens (economia de tokens)
     if (historico.length < 8) return '';
-    
+
     const objservations = historico
         .filter(m => m.content?.includes('[REVERSAO_TENTADA]'))
         .length > 0 ? '⚠️ Já tentou reversão' : '';
-    
+
     const audiosUsados = historico
         .filter(m => m.content?.includes('<<Áudio') && m.role === 'assistant')
         .length;
-    
+
     const ultimaAcaoIA = historico
         .filter(m => m.role === 'assistant')
         .slice(-1)[0]?.content?.substring(0, 50) || 'saudação';
-    
+
+    // 🚨 FORCING CTA: detecta trava prolongada nos estágios de qualificação
+    const estagioNum = parseInt(estagioAtual) || 0;
+    const turnosBot = historico.filter(m => m.role === 'assistant').length;
+    const ultimasMsgBot = historico.filter(m => m.role === 'assistant').slice(-4);
+    const jaProposHorario = ultimasMsgBot.some(m =>
+        /\b(10h|15h|amanhã|horário|calendly|agendar|pode ser às|que horas)\b/i.test(m.content || '')
+    );
+    const travadoSemAvancar = estagioNum >= 1 && estagioNum <= 2 && turnosBot >= 6 && !jaProposHorario;
+
+    const alertaTrava = travadoSemAvancar
+        ? `\n\n🚨 ALERTA DE CONVERSÃO: Você já teve ${turnosBot} turnos sem propor o agendamento. O lead entendeu a dor — continuar qualificando agora vai resfriar o interesse. PRÓXIMA MENSAGEM OBRIGATÓRIA: Proponha um horário específico ("amanhã às 10h ou às 15h?"). Não faça mais perguntas de qualificação.`
+        : '';
+
     return `
 [RESUMO DE ESTADO - INVISÍVEL AO LEAD]
 Estágio atual: ${estagioAtual}
 Última ação sua: ${ultimaAcaoIA}...
 Áudios TTS enviados: ${audiosUsados}/2
-${objservations}
- 
+${objservations}${alertaTrava}
+
 Este resumo existe apenas para manter seu foco. O lead NÃO vê isso.
 `;
 }
@@ -675,10 +688,21 @@ const concessionariaLocal = (MAPA_CONCESSIONARIAS[contextoLead.estado] || 'conce
     let raioXDoLead = extras.raioXDoLead || "Sem dados adicionais de inteligência ainda.";
     const perfilEmocional = extras.perfilEmocional || "Perfil emocional neutro.";
 
-    // 🧠 INJEÇÃO DO HANDOFF REVERSO
-    // Se o banco de dados tiver uma nota de intervenção, ela entra aqui como prioridade máxima
+    // 🧠 INJEÇÃO DO HANDOFF REVERSO + MEMÓRIA DE OBJEÇÕES
     if (contextoLead.internal_notes) {
-        raioXDoLead += `\n\n⚠️ INSTRUÇÃO CRÍTICA (HANDOFF): O gestor humano (Marlon) assumiu a conversa e combinou o seguinte: "${contextoLead.internal_notes}". Ignore estágios anteriores se conflitarem e siga exatamente desta orientação.`;
+        const notas = contextoLead.internal_notes;
+
+        // Extrai log de objeções [OBJ:...] sem misturar com instrução de handoff
+        const objMatches = notas.match(/\[OBJ:[^\]]+\]/g) || [];
+        const handoffNote = notas.replace(/\[OBJ:[^\]]+\]/g, '').trim();
+
+        if (handoffNote) {
+            raioXDoLead += `\n\n⚠️ INSTRUÇÃO CRÍTICA (HANDOFF): O gestor humano assumiu a conversa e combinou o seguinte: "${handoffNote}". Ignore estágios anteriores se conflitarem e siga exatamente desta orientação.`;
+        }
+        if (objMatches.length > 0) {
+            const listaObjecoes = objMatches.map(o => o.replace('[OBJ:', '').replace(']', '')).join(' | ');
+            raioXDoLead += `\n\n⚠️ MEMÓRIA DE OBJEÇÕES (NÃO repita ângulos que já falharam): ${listaObjecoes}`;
+        }
     }
 
     // --- 9. Substituição universal ---
@@ -1870,20 +1894,36 @@ const concessionariaLocal = (MAPA_CONCESSIONARIAS[ufLead] || 'concessionária de
 const nomeEmpresa = limparNomeEmpresa(lead.name);
 
 // ── BALÃO ÚNICO: curiosidade + qualificação casual numa só mensagem ──
-let variacoesAbertura;
 const saudacao = primeiroNomeDono ? `Oi ${primeiroNomeDono}` : 'Oi, tudo bem?';
+const bairroLead = lead.bairro || lead.cidade || 'sua região';
 
-if (lead.is_decisor && lead.origin_company_name) {
+// Substitui variáveis nos templates vindos do Supabase
+const substituirVarsAbertura = (tpl) => tpl
+    .replace(/\$\{saudacao\}/g, saudacao)
+    .replace(/\$\{nomeEmpresa\}/g, nomeEmpresa)
+    .replace(/\$\{concessionariaLocal\}/g, concessionariaLocal)
+    .replace(/\$\{bairroLead\}/g, bairroLead)
+    .replace(/\$\{origem\}/g, lead.origin_company_name || '');
+
+// Tenta usar templates do Supabase; cai no hardcoded se não houver
+const tplsInstancia = instanceData?.opening_templates;
+let variacoesAbertura;
+
+if (tplsInstancia && Array.isArray(tplsInstancia.decisor) && lead.is_decisor && lead.origin_company_name) {
+    variacoesAbertura = tplsInstancia.decisor.map(substituirVarsAbertura);
+} else if (tplsInstancia && Array.isArray(tplsInstancia.padrao) && tplsInstancia.padrao.length > 0) {
+    variacoesAbertura = tplsInstancia.padrao.map(substituirVarsAbertura);
+} else if (lead.is_decisor && lead.origin_company_name) {
+    // fallback hardcoded decisor
     variacoesAbertura = [
         `${saudacao}, o pessoal da ${lead.origin_company_name} me passou seu contato. Vi algo sobre a conta de energia de vcs que achei que valia compartilhar — vc que cuida dessa parte?`,
         `${saudacao}, falei com a equipe da ${lead.origin_company_name} e me indicaram vc. Tem uma informação sobre a ${concessionariaLocal} que a maioria das empresas não sabe — vc cuida das contas fixas aí?`,
     ];
 } else {
+    // fallback hardcoded padrão
     variacoesAbertura = [
         `${saudacao}, vi algo sobre a conta de energia da ${nomeEmpresa} que achei que valia te passar. Vc cuida dessa parte de contas fixas aí?`,
-        
         `${saudacao}, dei uma olhada no cadastro da ${nomeEmpresa} e tem uma coisa sobre a conta de luz da ${concessionariaLocal} que achei que valia te avisar. Tô falando com quem cuida disso?`,
-        
         `${saudacao}, mapeamos empresas da região que podem estar pagando a mais na ${concessionariaLocal}. A ${nomeEmpresa} apareceu na lista. Vc é quem cuida dessa parte?`
     ];
 }
@@ -2211,11 +2251,55 @@ await delay(jitterAntiBan);
             }
         }
 
+        // ====================================================================
+        // 🔄 5. REATIVAÇÃO DE LEADS FRIOS (roda 1x por dia, janela FOLLOWUP)
+        // ====================================================================
+        const QUARENTA_CINCO_DIAS = 45 * 24 * 60 * 60 * 1000;
+        const agora45 = Date.now();
+        const deveReativar = podeFazerFollowup &&
+            (!global.ultimaReativacaoLeadsFrios || agora45 - global.ultimaReativacaoLeadsFrios > 23 * 60 * 60 * 1000);
+
+        if (deveReativar) {
+            global.ultimaReativacaoLeadsFrios = agora45;
+            const quarentaCincoDiasAtrasISO = new Date(agora45 - QUARENTA_CINCO_DIAS).toISOString();
+
+            const { data: leadsFrios } = await supabase
+                .from('leads')
+                .select('id, name, current_stage, internal_notes, last_contact_at')
+                .eq('lead_temperature', 'dead')
+                .lt('last_contact_at', quarentaCincoDiasAtrasISO)
+                .limit(3);
+
+            if (leadsFrios && leadsFrios.length > 0) {
+                console.log(`🔄 [REATIVAÇÃO] ${leadsFrios.length} lead(s) frio(s) encontrado(s) para reativação.`);
+                for (const lf of leadsFrios) {
+                    // Não reativa se já foi reativado antes
+                    if (lf.internal_notes?.includes('[REATIVADO]')) continue;
+
+                    const mesesFrio = Math.round((agora45 - new Date(lf.last_contact_at).getTime()) / (30 * 24 * 60 * 60 * 1000));
+                    const notaReativacao = `[REATIVADO] Lead ficou frio por ~${mesesFrio} meses. Use um ângulo completamente novo — mencione que o cenário de tarifas mudou desde a última conversa. Seja curto e despretensioso. NÃO repita o pitch anterior.`;
+                    const notasAtuais = lf.internal_notes ? `${lf.internal_notes}\n${notaReativacao}` : notaReativacao;
+
+                    await supabase.from('leads').update({
+                        lead_temperature: 'cold',
+                        status: 'contact',
+                        is_paused: false,
+                        followup_count: 0,
+                        link_sent_at: null,
+                        last_followup_type: null,
+                        internal_notes: notasAtuais
+                    }).eq('id', lf.id);
+
+                    console.log(`✅ [REATIVAÇÃO] ${lf.name} reativado após ${mesesFrio} meses frio.`);
+                }
+            }
+        }
+
     } catch (errGeral) {
         console.error("❌ [ERRO CRÍTICO] Falha no motor de recuperação:", errGeral.message);
     } finally {
         // 🔓 LIBERA O BLOQUEIO E AGENDA O PRÓXIMO CICLO
-        vigiaEmExecucao = false; 
+        vigiaEmExecucao = false;
         setTimeout(loopRecuperacaoConversas, 1000 * 60 * 5); // Roda a cada 5 minutos
     }
 }
@@ -2459,7 +2543,18 @@ if (!promptResolvido) {
 
 } else if (intencao === 'OBJECAO') {
     console.log(`🛡️ [WORKER-IA] OBJEÇÃO detectada! Acionando The Tank para ${lead.name}...`);
-    // Passamos lead.current_stage para o agente saber onde manter o lead
+
+    // 🧠 MEMÓRIA DE OBJEÇÕES: registra a objeção em internal_notes para contexto futuro
+    const textoObjecao = historico.filter(m => m.role === 'user').slice(-1)[0]?.content?.substring(0, 80) || 'objeção';
+    const tagObjecao = `[OBJ:${textoObjecao}]`;
+    const notasAtuais = lead.internal_notes || '';
+    if (!notasAtuais.includes(tagObjecao.substring(0, 20))) {
+        await supabase.from('leads')
+            .update({ internal_notes: notasAtuais ? `${notasAtuais}\n${tagObjecao}` : tagObjecao })
+            .eq('id', lead.id);
+        lead.internal_notes = notasAtuais ? `${notasAtuais}\n${tagObjecao}` : tagObjecao;
+    }
+
     resposta = await objectionAgent.quebrarObjecao(historico, promptResolvido, lead.current_stage);
 
 } else {

@@ -40,7 +40,8 @@ const db = {
                 company_name,
                 system_prompt,
                 daily_limit,
-                calendly_link
+                calendly_link,
+                opening_templates
             `)
             .eq('id', instanceId)
             .single();

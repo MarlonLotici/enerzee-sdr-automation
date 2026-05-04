@@ -4,7 +4,11 @@
       "Bash(Get-ChildItem -Path \"C:\\\\dev\\\\enerzee-sdr-automation\" -Force)",
       "Bash(Select-Object Name, PSIsContainer)",
       "PowerShell(ls -Name C:\\\\dev\\\\enerzee-sdr-automation | Where-Object { -not $_.StartsWith\\('.'\\) })",
-      "Bash(npm run *)"
+      "Bash(npm run *)",
+      "Bash(node --check 4_sdr.js)",
+      "Bash(node --check agents/routerAgent.js)",
+      "Bash(node --check agents/closerAgent.js)",
+      "Bash(node --check database.js)"
     ]
   }
 }
