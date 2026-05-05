@@ -180,6 +180,7 @@ const iaRespondendo = new Set();
 const mapaRastreioLID = new Map();
 const gavetaDeMensagens = new Map(); // 🧠 OUVIDO PACIENTE: Gaveta temporária de mensagens
 const cacheRegrasInstancia = new Map(); // 🧠 Memória de curto prazo para regras
+const cacheAvisosMidia = new Map(); // 🛡️ TTL 5min — previne race condition em flood de fotos/catálogos
 let sdrEventsGlobal = null; // 🛡️ Adicione esta linha aqui no topo
 
 // ============================================================================
@@ -479,7 +480,18 @@ function analisarIntencaoRegex(texto) {
         /(?:n[ãa]o\s+(?:é|e)\s+poss[ií]vel\s+atend|fora\s+do\s+hor[aá]rio)/i,
         /(?:para\s+falar\s+com\s+(?:um|nosso)\s+atendente)/i,
         /atendimento\s+autom[áa]tico/i,
-        /voc[êe]\s+est[áa]\s+na\s+fila/i
+        /voc[êe]\s+est[áa]\s+na\s+fila/i,
+
+        // 5. URAs modernas sem menu numerado (textos longos de boas-vindas)
+        /hor[aá]rio\s+de\s+funcionamento/i,
+        /(?:em\s+breve\s+)?(?:um\s+)?atendente\s+(?:ir[aá]|vai|estará)/i,
+        /aguarde\s+(?:um\s+momento|seu\s+atendimento)/i,
+        /transferindo\s+(?:sua\s+)?(?:chamada|mensagem|atendimento)/i,
+        /n[ãa]o\s+(?:estamos\s+)?(?:conseguindo\s+)?(?:atender|te\s+atender)\s+no\s+momento/i,
+        /(?:segunda\s+[aà]\s+sexta|seg\s+[aà]\s+sex)[^.]{0,40}\d{1,2}h/i,
+
+        // 6. Listas por letras (A) Financeiro  B) Comercial)
+        /^\s*(?:\*?[A-Z]\)\*?|\*?[A-Z]\.\*?)\s+\S+/m,
     ];
 
     for (const padrao of PADROES_ROBO) {
@@ -1096,12 +1108,13 @@ async function enviarAudioTTS(sock, remoteJid, texto, lead, instanceId) {
         // 1. HUMANIZAÇÃO DO TEXTO (O Pulo do Gato)
         // Adicionamos pontuações que forçam a IA a fazer pausas naturais de quem está pensando.
         let textoHumanizado = texto
-            .replace(/\?/g, '? ... ') // Pausa reflexiva após pergunta
-            .replace(/!/g, '! ... ') // Pausa após exclamação
-            .replace(/\./g, ', ... ') // Transforma ponto final em pausa curta de continuação
-            .replace(/energia/gi, 'energia, né,') // Vício de linguagem comum no Brasil
-            .replace(/fatura/gi, 'fatura, ... tipo,') // Hesitação natural
-            .replace(/economizar/gi, 'dar uma economizada'); // Termo mais informal
+            .replace(/\.{2,}/g, ' ') // Limpa reticências antes de tudo para não bugar o TTS
+            .replace(/\?/g, '? ... ')
+            .replace(/!/g, '! ... ')
+            .replace(/\./g, ', ... ')
+            .replace(/energia/gi, 'energia, né,')
+            .replace(/fatura/gi, 'fatura, ... tipo,')
+            .replace(/economizar/gi, 'dar uma economizada');
 
         await sock.sendPresenceUpdate('recording', remoteJid);
         
@@ -1220,8 +1233,9 @@ if (matchClima) updates.sentiment = matchClima[1].toLowerCase();
             // 🎙️ Último balão como áudio (quando aplicável)
             if (usarTTS && isUltimoBalao) {
                 console.log(`🎙️ [TTS] Enviando último balão como áudio para ${lead.name}...`);
-                await enviarAudioTTS(sock, remoteJid, trecho, lead, instanceId);
-                continue;
+                const audioOk = await enviarAudioTTS(sock, remoteJid, trecho, lead, instanceId);
+                if (audioOk) continue;
+                console.log(`⚠️ [TTS FALLBACK] Áudio falhou. Enviando como texto para ${lead.name} não ficar no vácuo.`);
             }
 
             await sock.sendPresenceUpdate('composing', remoteJid);
@@ -1535,18 +1549,11 @@ if (fromMe) {
                 return; 
             } else if (messageType !== 'audioMessage') {
                 if (!lead.is_paused) {
-                    // Guard: só avisa uma vez — evita flood de "essa foto" quando lead envia catálogo inteiro
-                    const { data: ultimaBot } = await supabase
-                        .from('messages')
-                        .select('content')
-                        .eq('whatsapp_id', lead.whatsapp_id)
-                        .eq('instance_id', instanceId)
-                        .eq('role', 'assistant')
-                        .order('created_at', { ascending: false })
-                        .limit(1)
-                        .maybeSingle();
-                    const jaAvisouFoto = ultimaBot?.content?.includes('essa foto parece ser de outra coisa');
-                    if (!jaAvisouFoto) {
+                    // Guard RAM: previne race condition quando lead envia catálogo com 10+ fotos simultâneas
+                    const chaveAviso = `${lead.id}_foto`;
+                    if (!cacheAvisosMidia.has(chaveAviso)) {
+                        cacheAvisosMidia.set(chaveAviso, Date.now());
+                        setTimeout(() => cacheAvisosMidia.delete(chaveAviso), 5 * 60 * 1000);
                         const msgFoto = "Opa, essa foto parece ser de outra coisa rs. Consegue mandar uma nítida da fatura aberta? Pode ser print do PDF também.";
                         await sock.sendMessage(remoteJid, { text: msgFoto });
                         await db.saveMessage(lead.whatsapp_id, 'assistant', msgFoto, instanceId);
@@ -2556,6 +2563,30 @@ if (!promptResolvido) {
     }
 
     resposta = await objectionAgent.quebrarObjecao(historico, promptResolvido, lead.current_stage);
+
+} else if (intencao === 'REPASSE') {
+    console.log(`🔄 [WORKER-IA] REPASSE detectado para ${lead.name}. Extraindo contato...`);
+
+    // Extrai telefone do texto — cobre formatos: (85)99999-9999, 85 9 9999-9999, 5585999999999
+    const regexTel = /\b(?:(?:\+?55\s?)?(?:\(?\d{2}\)?\s?)(?:9\s?)?\d{4}[-\s]?\d{4})\b/g;
+    const numerosEncontrados = ultimaMsg.match(regexTel) || [];
+
+    if (numerosEncontrados.length > 0) {
+        // Tenta capturar nome mencionado junto ao número: "fala com o João no 9...", "é a Maria 9..."
+        const nomeMencionado = ultimaMsg.match(
+            /(?:fala\s+com\s+[oa]?\s*|chama\s+[oa]?\s*|é\s+[oa]?\s*|contato\s+(?:do|da)\s*)([A-ZÀ-Ú][a-zà-ú]{2,})/
+        )?.[1] || null;
+
+        const decisorSalvo = await salvarDecisor(numerosEncontrados[0], lead, instanceId);
+        if (decisorSalvo) {
+            if (nomeMencionado) {
+                await supabase.from('leads').update({ dono: nomeMencionado }).eq('id', decisorSalvo.id);
+            }
+            console.log(`✅ [REPASSE] Decisor salvo: ${decisorSalvo.name}. Motor vai contatá-lo automaticamente.`);
+        }
+    }
+
+    resposta = await closerAgent.gerarRespostaCloser(historico, lead, promptResolvido, 'REPASSE', { calendlyLink: instanceData?.calendly_link });
 
 } else {
     // LIXO — "oi", "opa", "ok", "sim" solto
