@@ -564,7 +564,7 @@ function gerarAncoragemContexto(lead, estagioAtual, historico) {
     const jaProposHorario = ultimasMsgBot.some(m =>
         /\b(10h|15h|amanhã|horário|calendly|agendar|pode ser às|que horas)\b/i.test(m.content || '')
     );
-    const travadoSemAvancar = estagioNum >= 1 && estagioNum <= 2 && turnosBot >= 6 && !jaProposHorario;
+    const travadoSemAvancar = estagioNum >= 1 && estagioNum <= 3 && turnosBot >= 8 && !jaProposHorario;
 
     const alertaTrava = travadoSemAvancar
         ? `\n\n🚨 ALERTA DE CONVERSÃO: Você já teve ${turnosBot} turnos sem propor o agendamento. O lead entendeu a dor — continuar qualificando agora vai resfriar o interesse. PRÓXIMA MENSAGEM OBRIGATÓRIA: Proponha um horário específico ("amanhã às 10h ou às 15h?"). Não faça mais perguntas de qualificação.`

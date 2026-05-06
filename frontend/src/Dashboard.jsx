@@ -191,26 +191,31 @@ const carregarDados = useCallback(async () => {
             const agendados = agendamentosReais.length
 
             // === KPIs PRINCIPAIS ===
-            const totalDisparados  = leads?.filter(l => l.status !== 'new').length || 0
+            // disparosHoje: apenas leads contactados HOJE (para o card "Disparos Hoje")
+            const disparosHoje     = leads?.filter(l => l.last_contact_at && new Date(l.last_contact_at) >= hoje).length || 0
+            // totalDisparados: histórico completo (para o funil e taxa de resposta)
+            const totalDisparados  = leads?.filter(l => !!l.last_contact_at).length || 0
             const emAtendimento    = leads?.filter(l => l.status === 'contact').length || 0
-            const aguardandoHumano = leads?.filter(l => l.is_paused && !l.manual_pause).length || 0
+            const pausaAutomatica  = leads?.filter(l => l.is_paused && !l.manual_pause).length || 0
             const pausadoManual    = leads?.filter(l => l.manual_pause).length || 0
 
-            // 🛡️ Mensagens REAIS do cliente (exclui autoresposta)
-            const mensagensDoCliente = mensagens?.filter(m => 
+            // 🛡️ Mensagens REAIS do cliente (exclui autoresposta) — últimos 30 dias
+            const mensagensDoCliente = mensagens?.filter(m =>
                 m.role === 'user' && !m.content?.startsWith('[AUTORESPOSTA]')
             ) || []
-            
-            // Leads únicos que responderam (não conta mensagens totais)
-            const leadsQueResponderam = new Set(mensagensDoCliente.map(m => m.whatsapp_id)).size
-            const taxaResposta = totalDisparados > 0 
-                ? Math.round((leadsQueResponderam / totalDisparados) * 100) 
+
+            // Leads que responderam (30d via mensagens — para o KPI de taxa de resposta)
+            const leadsQueResponderam30d = new Set(mensagensDoCliente.map(m => m.whatsapp_id)).size
+            // Leads que avançaram no funil (histórico total — para o funil de conversão)
+            const leadsQueResponderamTotal = leads?.filter(l => (l.current_stage || 0) > 0 && l.last_contact_at).length || 0
+            const taxaResposta = totalDisparados > 0
+                ? Math.round((leadsQueResponderamTotal / totalDisparados) * 100)
                 : 0
 
-            // === FUNIL DE CONVERSÃO (corrigido) ===
+            // === FUNIL DE CONVERSÃO — todos históricos, períodos consistentes ===
             const funil = [
                 { nome: 'Disparados',     valor: totalDisparados,                                                       cor: CORES.slate    },
-                { nome: 'Responderam',    valor: leadsQueResponderam,                                                   cor: CORES.azul     },
+                { nome: 'Responderam',    valor: leadsQueResponderamTotal,                                              cor: CORES.azul     },
                 { nome: 'Em Conversa',    valor: emAtendimento,                                                         cor: CORES.ciano    },
                 { nome: 'Fatura Enviada', valor: leads?.filter(l => l.status === 'waiting_analysis').length || 0,       cor: CORES.amarelo  },
                 { nome: 'Agendados',      valor: agendados,                                                             cor: CORES.verde    },
@@ -255,13 +260,13 @@ const carregarDados = useCallback(async () => {
                 return { hora: `${h}h`, Respostas: count }
             })
 
-            // === DISTRIBUIÇÃO POR STATUS ===
+            // === DISTRIBUIÇÃO POR STATUS — todos históricos ===
             const statusDist = [
-                { nome: 'Em Atendimento',  valor: emAtendimento,                                                         cor: CORES.azul    },
-                { nome: 'Agendados',       valor: agendados,                                                             cor: CORES.verde   },
-                { nome: 'Fatura',          valor: leads?.filter(l => l.status === 'waiting_analysis').length || 0,       cor: CORES.amarelo },
-                { nome: 'Robô/Inválido',   valor: leadsRobo + leadsInvalidos,                                            cor: CORES.vermelho},
-                { nome: 'Pausa Manual',    valor: pausadoManual,                                                          cor: CORES.roxo    },
+                { nome: 'Em Atendimento',      valor: emAtendimento,                                                                  cor: CORES.azul    },
+                { nome: 'Agendados',           valor: agendados,                                                                      cor: CORES.verde   },
+                { nome: 'Fatura',              valor: leads?.filter(l => l.status === 'waiting_analysis').length || 0,                cor: CORES.amarelo },
+                { nome: 'Inválidos/Bloqueados',valor: leadsInvalidos,                                                                 cor: CORES.vermelho},
+                { nome: 'Pausa Manual',        valor: pausadoManual,                                                                  cor: CORES.roxo    },
             ].filter(s => s.valor > 0)
 
             // === SAÚDE DOS CHIPS ===
@@ -322,16 +327,18 @@ valor: leads?.filter(l => !['new', 'invalid', 'blacklisted', 'error', 'dead'].in
                 cor: spinCores[i],
             }))//mudança para deploy 
             setDados({
-                kpis: { 
-                    totalDisparados, 
-                    taxaResposta, 
-                    agendados, 
-                    leadsQueResponderam, 
-                    aguardandoHumano, 
-                    pausadoManual, 
-                    leadsRobo, 
-                    tempoMedioResposta, 
-                    tempCounts 
+                kpis: {
+                    disparosHoje,
+                    totalDisparados,
+                    taxaResposta,
+                    agendados,
+                    leadsQueResponderam30d,
+                    leadsQueResponderamTotal,
+                    pausaAutomatica,
+                    pausadoManual,
+                    leadsRobo,
+                    tempoMedioResposta,
+                    tempCounts
                 },
                 funil,
                 spinFunil,
@@ -398,7 +405,7 @@ valor: leads?.filter(l => !['new', 'invalid', 'blacklisted', 'error', 'dead'].in
 
             {/* === KPIs OPERACIONAIS === */}
                           <div className="grid grid-cols-2 lg:grid-cols-4 gap-4">
-             <KpiCard icon={Zap}           label="Disparos Hoje"      value={d?.kpis.totalDisparados || 0}     sub="leads contactados"              color={CORES.azul}     />
+             <KpiCard icon={Zap}           label="Disparos Hoje"      value={d?.kpis.disparosHoje || 0}        sub={`de ${d?.kpis.totalDisparados || 0} totais`} color={CORES.azul}     />
              <KpiCard icon={Clock}         label="Tempo Médio Resposta" value={d?.kpis.tempoMedioResposta ? `${d.kpis.tempoMedioResposta}min` : '--'} sub="do disparo à 1ª resposta" color={CORES.ciano} />
              <KpiCard icon={Flame}         label="Leads Hot"           value={d?.kpis.tempCounts?.hot || 0}     sub="prontos pra fechar"             color={CORES.vermelho} />
              <KpiCard icon={Bot}           label="Robôs Detectados"    value={d?.kpis.leadsRobo || 0}           sub="silenciados"                    color={CORES.slate}    />
@@ -417,9 +424,9 @@ valor: leads?.filter(l => !['new', 'invalid', 'blacklisted', 'error', 'dead'].in
     <div className="space-y-2">
         {[
             {
-                label: 'Aguardando resposta da IA',
-                desc: 'Lead respondeu mas IA ainda não processou',
-                value: d?.kpis.aguardandoHumano || 0,
+                label: 'Pausa Automática',
+                desc: 'IA pausou — aguardando intervenção humana',
+                value: d?.kpis.pausaAutomatica || 0,
                 color: CORES.amarelo,
             },
             {

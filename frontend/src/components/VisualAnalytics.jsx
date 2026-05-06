@@ -85,11 +85,14 @@ function computeMetrics(leads, instances, realTotalLeads) {
         (l.current_stage || 0) >= 4
     ).length
 
+    // "Abordados" = leads que efetivamente receberam disparo (têm last_contact_at)
+    // Consistente com totalAbordados do KPI abaixo
+    const totalAbordadosFunil = leadsValidos.filter(l => !!l.last_contact_at).length
     const funnel = [
-        { etapa: 'Capturados',  qtd: leadsValidos.length,                              fill: NEON.blue },
-        { etapa: 'Abordados',   qtd: sc.contact + sc.waiting_analysis + sc.booked,     fill: NEON.cyan },
-        { etapa: 'Em análise',  qtd: sc.waiting_analysis + sc.booked,                  fill: NEON.violet },
-        { etapa: 'Agendados',   qtd: totalAgendamentosReais,                           fill: NEON.emerald },
+        { etapa: 'Capturados',  qtd: leadsValidos.length,       fill: NEON.blue },
+        { etapa: 'Abordados',   qtd: totalAbordadosFunil,        fill: NEON.cyan },
+        { etapa: 'Em análise',  qtd: sc.waiting_analysis + sc.booked, fill: NEON.violet },
+        { etapa: 'Agendados',   qtd: totalAgendamentosReais,    fill: NEON.emerald },
     ]
     // ── 3. Nichos (top 6) ──
     const nicheCount = {}
@@ -163,9 +166,10 @@ function computeMetrics(leads, instances, realTotalLeads) {
     ].filter(d => d.value > 0)
 
     // ── 8. A/B Testing de aberturas ──
+    // "responderam" = avançaram além do estágio 0 (melhor proxy disponível sem histórico de mensagens)
     const templateStats = {}
     leadsValidos.forEach(l => {
-        if (!l.opening_template) return
+        if (!l.opening_template || !l.last_contact_at) return
         if (!templateStats[l.opening_template]) {
             templateStats[l.opening_template] = { enviados: 0, responderam: 0 }
         }
@@ -184,9 +188,11 @@ function computeMetrics(leads, instances, realTotalLeads) {
         .sort((a, b) => b.taxa - a.taxa)
 
     // ── 9. Taxa de resposta por nicho ──
+    // Denominador: apenas leads que foram efetivamente disparados (têm last_contact_at)
+    // Proxy de resposta: avançou além do estágio 0 (sem acesso a mensagens históricas aqui)
     const nicheResponse = {}
     leadsValidos.forEach(l => {
-        if (!l.niche) return
+        if (!l.niche || !l.last_contact_at) return
         const n = String(l.niche).trim()
         if (!nicheResponse[n]) nicheResponse[n] = { total: 0, responderam: 0 }
         nicheResponse[n].total++
