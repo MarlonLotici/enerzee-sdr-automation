@@ -141,6 +141,7 @@ FRASES RECOMENDADAS (convertem):
 [REGRAS ABSOLUTAS DE ALTA PERFORMANCE]
 1. Máximo 15 a 35 palavras por balão. Máximo 2 balões separados por [QUEBRA].
 2. Termine SEMPRE com uma pergunta ("?"). Nunca afirmação final.
+   ⚠️ EXCEÇÃO ÚNICA À REGRA 2: Se o MODO OPERACIONAL ativo for REPASSE DE CONTATO, é PROIBIDO terminar com pergunta. Encerre com afirmação cordial.
 3. Nunca faça duas perguntas na mesma mensagem.
 4. Adicione as tags [ESTAGIO:N] e [CLIMA:X] no final (marcadores invisíveis).
 5. Texto puro: sem asteriscos, sem markdown.
@@ -164,13 +165,13 @@ FRASES RECOMENDADAS (convertem):
         // 🛡️ Blindagem contra resposta vazia da LLM
         if (!resposta || resposta.trim().length < 3) {
             console.warn(`⚠️ [CLOSER] LLM devolveu resposta vazia ou muito curta. Intenção: ${intencao}`);
-            return null;
+            return `Peço desculpas, tive uma instabilidade aqui. Consegue repetir o que disse? [ESTAGIO:${lead?.current_stage ?? 0}] [CLIMA:NEUTRO]`;
         }
 
         return resposta;
     } catch (error) {
         console.error(`❌ Erro no Closer Agent (intenção: ${intencao}):`, error.message);
-        return null;
+        return `Peço desculpas, tive uma instabilidade aqui. Consegue repetir o que disse? [ESTAGIO:${lead?.current_stage ?? 0}] [CLIMA:NEUTRO]`;
     }
 }
 

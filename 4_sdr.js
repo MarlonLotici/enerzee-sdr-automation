@@ -2089,18 +2089,26 @@ async function loopRecuperacaoConversas() {
     .from('leads')
     .select('id, name, whatsapp_id, instance_id, dono, followup_count, last_contact_at, backup_phone, backup_whatsapp_id, backup_tried')
     .eq('status', 'contact')
+    .eq('is_paused', false)
     .eq('calendly_booked', false)
     .is('link_sent_at', null)
-    .lt('followup_count', 2) 
-        .order('last_contact_at', { ascending: true })
-    .limit(5) // 🛡️ Reduzido de 15 → 5: distribui follow-ups ao longo do dia em vez de explosão
+    .lt('followup_count', 2)
+    .not('instance_id', 'is', null)
+    .order('last_contact_at', { ascending: true })
+    .limit(5)
     : { data: null };
 
         if (leadsFollowUp) {
             for (const lf of leadsFollowUp) {
                 try {
-                    const { data: temResposta } = await supabase.from('messages').select('id').eq('whatsapp_id', lf.whatsapp_id).eq('role', 'user').limit(1);
-                    if (temResposta && temResposta.length > 0) continue; 
+                    // Só pula se respondeu nos últimos 7 dias — não bloqueia leads reativados com histórico antigo
+                    const seteDiasAtras = new Date(Date.now() - 7 * 86400000).toISOString();
+                    const { data: temResposta } = await supabase.from('messages').select('id')
+                        .eq('whatsapp_id', lf.whatsapp_id)
+                        .eq('role', 'user')
+                        .gte('created_at', seteDiasAtras)
+                        .limit(1);
+                    if (temResposta && temResposta.length > 0) continue;
 
                     const diasPassados = (agora - new Date(lf.last_contact_at).getTime()) / UM_DIA;
                     if (diasPassados < 1) continue; 
