@@ -1151,7 +1151,7 @@ async function filtrarEEnviarResposta(sock, remoteJid, resposta, historico, lead
     console.log(`📝 [FILTRO] Resposta RAW da LLM (${resposta.length} chars): "${resposta.substring(0, 200)}..."`);
 
     // ── 1. LIMPEZA TOTAL DE TAGS (À PROVA DE ALUCINAÇÃO) ──
-    const regexTags = /\[\s*(ESTAGIO|ESTÁGIO|CLIMA|RAIO-X|PERFIL|ROBO|CONTADOR|ENGANO|GATEKEEPER|AGENDAMENTO_MANUAL|PAUSA\s*PARA\s*RESPOSTA)[^\]]*\]/gi;
+    const regexTags = /\[\s*(ESTAGIO|ESTÁGIO|CLIMA|RAIO-X|PERFIL|ROBO|CONTADOR|ENGANO|GATEKEEPER|AGENDAMENTO_MANUAL|PAUSA\s*PARA\s*RESPOSTA|REVERSAO_TENTADA)[^\]]*\]/gi;
     const matchEstagio = /\[?\s*EST[AÁ]GIO\s*:?\s*(\d)\s*\]?/gi.exec(resposta);
     const matchEncerrado = /\[?\s*EST[AÁ]GIO\s*:?\s*ENCERRADO\s*\]?/gi.test(resposta);
     const matchClima = /\[?\s*CLIMA\s*:?\s*([a-zA-Z_]+)\s*\]?/gi.exec(resposta);
@@ -1159,8 +1159,13 @@ async function filtrarEEnviarResposta(sock, remoteJid, resposta, historico, lead
 
     let textoLimpo = resposta
         .replace(regexTags, '')
-        .replace(/\[?\s*est[aá]gio\s*:?\s*\d\s*\]?/gi, '') // Pega casos bizarros como [ estágio 0 ]
-        .replace(/\bROBO\b/gi, '')   // LLM às vezes emite ROBO sem colchetes — remove antes de enviar
+        .replace(/\[?\s*est[aá]gio\s*:?\s*\d\s*\]?/gi, '')           // [ estágio 0 ] sem formato certo
+        .replace(/\[?\s*est[aá]gio\s*:?\s*encerrado\s*\]?/gi, '')     // ESTAGIO:ENCERRADO sem colchetes
+        .replace(/\[?\s*clima\s*:?\s*[a-z_]+\s*\]?/gi, '')            // CLIMA:PALAVRA sem colchetes
+        .replace(/\[?\s*reversao[_\s]tentada\s*\]?/gi, '')            // [REVERSAO_TENTADA] malformado
+        .replace(/\bROBO\b/gi, '')                                     // ROBO sem colchetes
+        .replace(/\bCONTADOR\b/gi, '')                                 // CONTADOR sem colchetes
+        .replace(/\bENGANO\b/gi, '')                                   // ENGANO sem colchetes
         .trim();
 
     if (textoLimpo.length === 0) {
