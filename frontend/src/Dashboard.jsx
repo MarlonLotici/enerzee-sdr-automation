@@ -282,13 +282,15 @@ const carregarDados = useCallback(async () => {
                 return { hora: `${h}h`, Respostas: count }
             })
 
-            // === DISTRIBUIÇÃO POR STATUS — todos históricos ===
+            // === DISTRIBUIÇÃO POR STATUS — categorias exclusivas (sem sobreposição) ===
+            // Agendados tem prioridade: um lead agendado não conta também em "Em Atendimento"
+            const agendadosIds = new Set((agendamentosReais || []).map(l => l.id))
             const statusDist = [
-                { nome: 'Em Atendimento',      valor: emAtendimento,                                                                  cor: CORES.azul    },
-                { nome: 'Agendados',           valor: agendados,                                                                      cor: CORES.verde   },
-                { nome: 'Fatura',              valor: leads?.filter(l => l.status === 'waiting_analysis').length || 0,                cor: CORES.amarelo },
-                { nome: 'Inválidos/Bloqueados',valor: leadsInvalidos,                                                                 cor: CORES.vermelho},
-                { nome: 'Pausa Manual',        valor: pausadoManual,                                                                  cor: CORES.roxo    },
+                { nome: 'Agendados',           valor: agendados,                                                                                              cor: CORES.verde   },
+                { nome: 'Em Atendimento',      valor: leads?.filter(l => l.status === 'contact' && !agendadosIds.has(l.id)).length || 0,                     cor: CORES.azul    },
+                { nome: 'Fatura',              valor: leads?.filter(l => l.status === 'waiting_analysis' && !agendadosIds.has(l.id)).length || 0,            cor: CORES.amarelo },
+                { nome: 'Inválidos/Bloqueados',valor: leadsInvalidos,                                                                                         cor: CORES.vermelho},
+                { nome: 'Pausa Manual',        valor: leads?.filter(l => l.manual_pause && !agendadosIds.has(l.id)).length || 0,                             cor: CORES.roxo    },
             ].filter(s => s.valor > 0)
 
             // === SAÚDE DOS CHIPS — usa daily_limit real da instância ===
@@ -334,16 +336,18 @@ const carregarDados = useCallback(async () => {
                 if (tempCounts[t] !== undefined) tempCounts[t]++
             })
 
-           // === FUNIL SPIN (0-5) ===
+            // === FUNIL SPIN (0-5) — cumulativo ===
+            // Um lead no stage 4 passou pelos stages 0,1,2,3 — conta em todos eles
+            // Assim stages 3 e 4 não ficam zerados só porque os leads avançaram para 5
             const spinLabels = ['Qualificação', 'Situação', 'Dor', 'Solução', 'Agendamento', 'Fechamento']
             const spinCores  = [CORES.slate, CORES.azul, CORES.ciano, CORES.roxo, CORES.amarelo, CORES.verde]
-            const spinFunil = spinLabels.map((nome, i) => ({
-                nome,
-                // 🎯 CORREÇÃO: Só conta no funil se já tiver saído do status 'new'
-                // 🎯 Ignora virgens e também ignora mortos, robôs, erros e bloqueados
-valor: leads?.filter(l => !['new', 'invalid', 'blacklisted', 'error', 'dead'].includes(l.status) && (l.current_stage || 0) === i).length || 0,
-                cor: spinCores[i],
-            }))//mudança para deploy 
+            const spinCounts = [0, 0, 0, 0, 0, 0]
+            leads?.forEach(l => {
+                if (['new', 'invalid', 'blacklisted', 'error', 'dead'].includes(l.status)) return
+                const stage = Math.min(l.current_stage || 0, 5)
+                for (let i = 0; i <= stage; i++) spinCounts[i]++
+            })
+            const spinFunil = spinLabels.map((nome, i) => ({ nome, valor: spinCounts[i], cor: spinCores[i] }))
             setDados({
                 kpis: {
                     disparosHoje,
