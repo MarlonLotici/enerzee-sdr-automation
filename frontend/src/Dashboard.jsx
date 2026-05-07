@@ -50,6 +50,28 @@ function TooltipCustom({ active, payload, label }) {
 }
 
 // ============================================================
+// INFO TOOLTIP
+// ============================================================
+function InfoBtn({ text }) {
+    const [open, setOpen] = React.useState(false)
+    return (
+        <span className="relative inline-flex items-center ml-1.5 cursor-pointer flex-shrink-0"
+              onMouseEnter={() => setOpen(true)}
+              onMouseLeave={() => setOpen(false)}
+              onClick={e => { e.stopPropagation(); setOpen(v => !v) }}>
+            <span className="inline-flex items-center justify-center w-3.5 h-3.5 rounded-full text-[9px] font-black"
+                  style={{ background: 'rgba(255,255,255,0.08)', border: '1px solid rgba(255,255,255,0.15)', color: 'rgba(255,255,255,0.4)' }}>?</span>
+            {open && (
+                <span className="absolute bottom-full left-0 mb-1 z-50 pointer-events-none"
+                      style={{ background: '#0f172a', border: '1px solid rgba(255,255,255,0.12)', borderRadius: 10, padding: '10px 14px', fontSize: 11, color: 'rgba(255,255,255,0.75)', fontWeight: 500, width: 220, lineHeight: 1.6, boxShadow: '0 8px 32px rgba(0,0,0,0.8)', whiteSpace: 'normal', display: 'block' }}>
+                    {text}
+                </span>
+            )}
+        </span>
+    )
+}
+
+// ============================================================
 // KPI CARD
 // ============================================================
 function KpiCard({ icon: Icon, label, value, sub, color, trend }) {
@@ -148,7 +170,7 @@ const carregarDados = useCallback(async () => {
                     .gte('created_at', trintaDiasAtras)
                     .order('created_at', { ascending: false }) // 🎯 FALTAVA ISSO: Garante que as mensagens recentes venham primeiro
                     .limit(50000),
-                supabase.from('instances').select('id, name, whatsapp_status'),
+                supabase.from('instances').select('id, name, whatsapp_status, daily_limit'),
             ])
 
             const agora = new Date()
@@ -269,11 +291,7 @@ const carregarDados = useCallback(async () => {
                 { nome: 'Pausa Manual',        valor: pausadoManual,                                                                  cor: CORES.roxo    },
             ].filter(s => s.valor > 0)
 
-            // === SAÚDE DOS CHIPS ===
-            const CONFIG_LIMITE = {
-                "2ff1fd4d-c3a4-4b2f-977b-8472eb9c80f1": 55,
-                "74905749-7b50-4b13-92e8-b12663c1d67d": 55,
-            }
+            // === SAÚDE DOS CHIPS — usa daily_limit real da instância ===
             const chipsSaude = (instancias || []).map(inst => {
                 const disparosHoje = leads?.filter(l => {
                     if (l.instance_id !== inst.id) return false
@@ -284,7 +302,7 @@ const carregarDados = useCallback(async () => {
                 return {
                     chip: inst,
                     disparosHoje,
-                    limite: CONFIG_LIMITE[inst.id] || 20,
+                    limite: inst.daily_limit || 50,
                 }
             })
 
@@ -419,7 +437,7 @@ valor: leads?.filter(l => !['new', 'invalid', 'blacklisted', 'error', 'dead'].in
                 {/* LEADS QUE PRECISAM DE AÇÃO */}
 <div className="lg:col-span-2 glass-panel rounded-3xl p-6 border border-white/5">
     <p className="text-[10px] font-black text-amber-400 uppercase tracking-[0.3em] mb-4 flex items-center gap-2">
-        <AlertTriangle className="h-4 w-4" /> Leads que precisam de ação
+        <AlertTriangle className="h-4 w-4" /> Leads que precisam de ação<InfoBtn text="Leads que exigem atenção humana agora. Pausa Automática = IA pausou (autoresposta ou encerramento). Pausa Manual = operador pausou. Warm esfriando = engajaram mas pararam. Dead = 3 follow-ups sem resposta." />
     </p>
     <div className="space-y-2">
         {[
@@ -470,7 +488,7 @@ valor: leads?.filter(l => !['new', 'invalid', 'blacklisted', 'error', 'dead'].in
                 {/* DISTRIBUIÇÃO STATUS */}
                 <div className="glass-panel rounded-3xl p-6 border border-white/5">
                     <p className="text-[10px] font-black text-blue-400 uppercase tracking-[0.3em] mb-4 flex items-center gap-2">
-                        <Activity className="h-4 w-4" /> Distribuição Atual
+                        <Activity className="h-4 w-4" /> Distribuição Atual<InfoBtn text="Status atual de todos os leads na base (exceto new/invalid). Em Atendimento = conversa ativa. Agendados = confirmados. Fatura = conta enviada aguardando análise. Inválidos = número sem WhatsApp ou bloqueado." />
                     </p>
                     <ResponsiveContainer width="100%" height={180}>
                         <PieChart>
@@ -506,7 +524,7 @@ valor: leads?.filter(l => !['new', 'invalid', 'blacklisted', 'error', 'dead'].in
                         {/* === FUNIL SPIN (ESTÁGIO 0-5) === */}
             <div className="glass-panel rounded-3xl p-6 border border-white/5">
                 <p className="text-[10px] font-black text-blue-400 uppercase tracking-[0.3em] mb-6 flex items-center gap-2">
-                    <Target className="h-4 w-4" /> Funil SPIN — Estágio da Conversa
+                    <Target className="h-4 w-4" /> Funil SPIN — Estágio da Conversa<InfoBtn text="Distribuição atual dos leads por estágio do funil. 0=Qualificação (quem é?), 1=Situação (equipamentos), 2=Dor (valor da conta), 3=Solução (economia), 4=Agendamento (link enviado), 5=Fechamento (confirmado)." />
                 </p>
                 <div className="grid grid-cols-6 gap-3">
                     {d?.spinFunil?.map((etapa, i) => {
@@ -534,7 +552,7 @@ valor: leads?.filter(l => !['new', 'invalid', 'blacklisted', 'error', 'dead'].in
             <div className="glass-panel rounded-3xl p-6 border border-white/5">
                 <div className="flex justify-between items-center mb-6">
                     <p className="text-[10px] font-black text-blue-400 uppercase tracking-[0.3em] flex items-center gap-2">
-                        <TrendingUp className="h-4 w-4" /> Disparos vs Respostas
+                        <TrendingUp className="h-4 w-4" /> Disparos vs Respostas<InfoBtn text="Disparos = leads únicos contactados por dia (via last_contact_at). Respostas = leads únicos que enviaram mensagem naquele dia (últimos 30 dias de mensagens). A lacuna entre as linhas indica silêncio." />
                     </p>
                     <div className="flex gap-2">
                         {['7d', '30d'].map(p => (
@@ -580,7 +598,7 @@ valor: leads?.filter(l => !['new', 'invalid', 'blacklisted', 'error', 'dead'].in
                 {/* RESPOSTAS POR HORA */}
                 <div className="glass-panel rounded-3xl p-6 border border-white/5">
                     <p className="text-[10px] font-black text-blue-400 uppercase tracking-[0.3em] mb-6 flex items-center gap-2">
-                        <Clock className="h-4 w-4" /> Melhor Horário para Disparar
+                        <Clock className="h-4 w-4" /> Melhor Horário para Disparar<InfoBtn text="Distribuição de respostas recebidas por hora do dia (últimos 30 dias). Barra amarela = pico de engajamento. Use para configurar a janela de disparo nos horários com mais retorno." />
                     </p>
                     <ResponsiveContainer width="100%" height={200}>
                         <BarChart data={d?.respostasPorHora} margin={{ top: 5, right: 5, bottom: 5, left: -25 }}>
@@ -611,7 +629,7 @@ valor: leads?.filter(l => !['new', 'invalid', 'blacklisted', 'error', 'dead'].in
                 {/* SAÚDE DOS CHIPS */}
                 <div className="glass-panel rounded-3xl p-6 border border-white/5">
                     <p className="text-[10px] font-black text-blue-400 uppercase tracking-[0.3em] mb-6 flex items-center gap-2">
-                        <Wifi className="h-4 w-4" /> Saúde dos Chips
+                        <Wifi className="h-4 w-4" /> Saúde dos Chips<InfoBtn text="Status e progresso de disparos de cada chip hoje. O limite diário vem da configuração de cada instância no Supabase. Verde = dentro do limite, amarelo = acima de 70%, vermelho = acima de 90%." />
                     </p>
                     <div className="space-y-3">
                         {d?.chipsSaude.length > 0 ? (

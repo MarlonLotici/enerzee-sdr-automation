@@ -62,17 +62,22 @@ const db = {
 
     getDailyContactCount: async (instanceId) => {
         const hoje = new Date(Date.now() - 3 * 60 * 60 * 1000).toISOString().split('T')[0]; // Data em BRT (UTC-3)
-        
+
+        // Conta todos os leads contatados hoje, independente do status atual.
+        // O filtro antigo usava status='contact', mas leads que avançaram para booked/dead/invalid
+        // no mesmo dia saíam da contagem, fazendo o motor disparar além do limite configurado.
+        // followup_count=0 garante que só contamos aberturas, não follow-ups.
         const { count, error } = await supabase
             .from('leads')
             .select('*', { count: 'exact', head: true })
             .eq('instance_id', instanceId)
-            .eq('status', 'contact') // Conta apenas quem já foi movido para atendimento
-            .gte('last_contact_at', hoje); // Que ocorreu hoje
+            .eq('followup_count', 0)
+            .neq('status', 'new')
+            .gte('last_contact_at', hoje);
 
         if (error) {
             console.error(`[DB] Erro ao contar envios do chip ${instanceId}:`, error.message);
-            return 0; // Retorna 0 para não travar o motor por erro transitório de leitura
+            return 0;
         }
         return count || 0;
     },

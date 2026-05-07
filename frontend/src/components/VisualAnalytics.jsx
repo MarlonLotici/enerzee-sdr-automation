@@ -306,15 +306,15 @@ const NeonTooltip = ({ active, payload, label, prefix = '', suffix = '' }) => {
 function InfoTooltip({ text }) {
     const [open, setOpen] = React.useState(false)
     return (
-        <span style={{ position: 'relative', display: 'inline-flex', alignItems: 'center', marginLeft: 5, cursor: 'pointer' }}
+        <span style={{ position: 'relative', display: 'inline-flex', alignItems: 'center', marginLeft: 5, cursor: 'pointer', flexShrink: 0 }}
               onMouseEnter={() => setOpen(true)}
               onMouseLeave={() => setOpen(false)}
               onClick={() => setOpen(v => !v)}>
             <span style={{ display: 'inline-flex', alignItems: 'center', justifyContent: 'center', width: 14, height: 14, borderRadius: '50%', background: 'rgba(255,255,255,0.08)', border: '1px solid rgba(255,255,255,0.15)', fontSize: 9, fontWeight: 900, color: 'rgba(255,255,255,0.4)', lineHeight: 1 }}>?</span>
             {open && (
-                <span style={{ position: 'absolute', bottom: '120%', left: '50%', transform: 'translateX(-50%)', background: '#0f172a', border: '1px solid rgba(255,255,255,0.12)', borderRadius: 10, padding: '10px 14px', fontSize: 11, color: 'rgba(255,255,255,0.75)', fontWeight: 500, width: 220, lineHeight: 1.5, zIndex: 100, boxShadow: '0 8px 32px rgba(0,0,0,0.6)', pointerEvents: 'none', whiteSpace: 'normal' }}>
+                <span style={{ position: 'absolute', bottom: '130%', left: 0, background: '#0f172a', border: '1px solid rgba(255,255,255,0.12)', borderRadius: 10, padding: '10px 14px', fontSize: 11, color: 'rgba(255,255,255,0.75)', fontWeight: 500, width: 220, lineHeight: 1.6, zIndex: 999, boxShadow: '0 8px 32px rgba(0,0,0,0.8)', pointerEvents: 'none', whiteSpace: 'normal' }}>
                     {text}
-                    <span style={{ position: 'absolute', top: '100%', left: '50%', transform: 'translateX(-50%)', width: 0, height: 0, borderLeft: '6px solid transparent', borderRight: '6px solid transparent', borderTop: '6px solid #0f172a' }} />
+                    <span style={{ position: 'absolute', top: '100%', left: 10, width: 0, height: 0, borderLeft: '6px solid transparent', borderRight: '6px solid transparent', borderTop: '6px solid #0f172a' }} />
                 </span>
             )}
         </span>
@@ -351,10 +351,12 @@ function KpiCard({ icon: Icon, label, value, sub, delta, color, info }) {
     )
 }
 
-const SectionTitle = ({ children, accent = NEON.blue }) => (
+const SectionTitle = ({ children, accent = NEON.blue, info }) => (
     <div style={{ display: 'flex', alignItems: 'center', gap: 10, marginBottom: 18 }}>
-        <div style={{ width: 3, height: 18, borderRadius: 2, background: accent, boxShadow: `0 0 8px ${accent}` }} />
-        <span style={{ fontSize: 11, fontWeight: 900, textTransform: 'uppercase', letterSpacing: '0.25em', color: 'rgba(255,255,255,0.45)' }}>{children}</span>
+        <div style={{ width: 3, height: 18, borderRadius: 2, background: accent, boxShadow: `0 0 8px ${accent}`, flexShrink: 0 }} />
+        <span style={{ fontSize: 11, fontWeight: 900, textTransform: 'uppercase', letterSpacing: '0.25em', color: 'rgba(255,255,255,0.45)', display: 'flex', alignItems: 'center' }}>
+            {children}{info && <InfoTooltip text={info} />}
+        </span>
     </div>
 )
 
@@ -536,7 +538,7 @@ export default function VisualAnalytics() {
 
                 {/* EVOLUÇÃO MENSAL — criados vs abordados (ambos reais) */}
                 <ChartCard>
-                    <SectionTitle accent={NEON.blue}>Evolução Mensal — Capturados vs Abordados</SectionTitle>
+                    <SectionTitle accent={NEON.blue} info="Capturados = leads salvos pelo radar no mês. Abordados = leads que efetivamente receberam a primeira mensagem. A diferença representa leads em fila de espera ou descartados antes do disparo.">Evolução Mensal — Capturados vs Abordados</SectionTitle>
                     <ResponsiveContainer width="100%" height={230}>
                         <AreaChart data={monthly} margin={{ top: 4, right: 4, bottom: 0, left: -10 }}>
                             <defs>
@@ -569,7 +571,7 @@ export default function VisualAnalytics() {
 
                 {/* FUNIL — por status real */}
                 <ChartCard>
-                    <SectionTitle accent={NEON.violet}>Funil de Status</SectionTitle>
+                    <SectionTitle accent={NEON.violet} info="Mostra a progressão dos leads pelo funil comercial. Capturados → Abordados → Em análise (conta de luz recebida) → Agendados. Cada etapa é subconjunto da anterior.">Funil de Status</SectionTitle>
                     <ResponsiveContainer width="100%" height={190}>
                         <BarChart data={funnel} layout="vertical" margin={{ top: 0, right: 8, bottom: 0, left: -10 }}>
                             <CartesianGrid stroke={NEON.grid} horizontal={false} />
@@ -637,7 +639,7 @@ export default function VisualAnalytics() {
 
                 {/* NICHOS — donut real */}
                 <ChartCard>
-                    <SectionTitle accent={NEON.cyan}>
+                    <SectionTitle accent={NEON.cyan} info="Top 6 nichos por volume de leads capturados. A % é calculada sobre o total de leads válidos. Útil para entender quais setores o radar está priorizando.">
                         <MapPin size={12} color={NEON.cyan} style={{ display: 'inline', marginRight: 6 }} />
                         Nichos
                     </SectionTitle>
@@ -677,7 +679,7 @@ export default function VisualAnalytics() {
 
                 {/* LEADS POR DIA DA SEMANA — substitui Taxa por Dia, via created_at (nunca null) */}
                 <ChartCard>
-                    <SectionTitle accent={NEON.rose}>
+                    <SectionTitle accent={NEON.rose} info="Quantidade de leads capturados por dia da semana, baseado em created_at. Mostra quais dias o radar está mais ativo. Não é o dia do disparo — é o dia em que o lead entrou na base.">
                         <Flame size={12} color={NEON.rose} style={{ display: 'inline', marginRight: 4 }} />
                         Captura por Dia
                     </SectionTitle>
@@ -713,7 +715,7 @@ export default function VisualAnalytics() {
 
     {/* TAXA DE RESPOSTA POR NICHO */}
     <ChartCard>
-        <SectionTitle accent={NEON.cyan}>Resposta por nicho</SectionTitle>
+        <SectionTitle accent={NEON.cyan} info="% de leads por nicho que avançaram além do estágio 0 (proxy de resposta). Mínimo de 3 leads por nicho para aparecer. Verde ≥30%, amarelo ≥15%, vermelho abaixo disso.">Resposta por nicho</SectionTitle>
         {nicheResponseData && nicheResponseData.length > 0 ? (
             <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
                 {nicheResponseData.map((d, i) => (
@@ -751,7 +753,7 @@ export default function VisualAnalytics() {
 
     {/* TAXA DE PASSAGEM ENTRE ESTÁGIOS */}
     <ChartCard>
-        <SectionTitle accent={NEON.violet}>Passagem entre estágios</SectionTitle>
+        <SectionTitle accent={NEON.violet} info="Funil cumulativo: de todos os leads que chegaram ao estágio N, quantos avançaram para N+1. Verde ≥50%, amarelo ≥25%, vermelho abaixo. Pontos com baixa passagem indicam gargalos no pitch.">Passagem entre estágios</SectionTitle>
         {spinPassagem && spinPassagem.length > 0 ? (
             <div style={{ display: 'flex', flexDirection: 'column', gap: 10 }}>
                 {spinPassagem.map((d, i) => (
@@ -790,7 +792,7 @@ export default function VisualAnalytics() {
 
     {/* A/B TESTING DE ABERTURAS (mantém igual) */}
     <ChartCard>
-        <SectionTitle accent={NEON.emerald}>A/B Testing — Aberturas</SectionTitle>
+        <SectionTitle accent={NEON.emerald} info="Compara as variações de mensagem de abertura. A taxa é a % de leads que avançaram além do estágio 0 após receber cada template. V1/V2/V3 correspondem aos templates cadastrados no Supabase.">A/B Testing — Aberturas</SectionTitle>
         {abTestData.length > 0 ? (
             <div style={{ display: 'flex', flexDirection: 'column', gap: 10 }}>
                 {abTestData.map((d, i) => (
