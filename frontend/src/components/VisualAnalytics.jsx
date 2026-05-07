@@ -1,4 +1,5 @@
-import React, { useState, useEffect, useMemo } from 'react'
+import React, { useState, useEffect, useMemo, useRef } from 'react'
+import { createPortal } from 'react-dom'
 import {
     AreaChart, Area, BarChart, Bar,
     PieChart, Pie, Cell,
@@ -304,20 +305,34 @@ const NeonTooltip = ({ active, payload, label, prefix = '', suffix = '' }) => {
 
 // ─── INFO TOOLTIP ──────────────────────────────────────────────────────────────
 function InfoTooltip({ text }) {
-    const [open, setOpen] = React.useState(false)
+    const [pos, setPos] = useState(null)
+    const ref = useRef(null)
+
+    const show = () => {
+        if (!ref.current) return
+        const r = ref.current.getBoundingClientRect()
+        const W = 224
+        let left = r.left
+        if (left + W > window.innerWidth - 8) left = window.innerWidth - W - 8
+        if (left < 8) left = 8
+        const openBelow = r.top < 160
+        setPos({ left, triggerTop: r.top, triggerBottom: r.bottom, openBelow })
+    }
+    const hide = () => setPos(null)
+
     return (
-        <span style={{ position: 'relative', display: 'inline-flex', alignItems: 'center', marginLeft: 5, cursor: 'pointer', flexShrink: 0 }}
-              onMouseEnter={() => setOpen(true)}
-              onMouseLeave={() => setOpen(false)}
-              onClick={() => setOpen(v => !v)}>
-            <span style={{ display: 'inline-flex', alignItems: 'center', justifyContent: 'center', width: 14, height: 14, borderRadius: '50%', background: 'rgba(255,255,255,0.08)', border: '1px solid rgba(255,255,255,0.15)', fontSize: 9, fontWeight: 900, color: 'rgba(255,255,255,0.4)', lineHeight: 1 }}>?</span>
-            {open && (
-                <span style={{ position: 'absolute', bottom: '130%', left: 0, background: '#0f172a', border: '1px solid rgba(255,255,255,0.12)', borderRadius: 10, padding: '10px 14px', fontSize: 11, color: 'rgba(255,255,255,0.75)', fontWeight: 500, width: 220, lineHeight: 1.6, zIndex: 999, boxShadow: '0 8px 32px rgba(0,0,0,0.8)', pointerEvents: 'none', whiteSpace: 'normal' }}>
+        <>
+            <span ref={ref} onMouseEnter={show} onMouseLeave={hide} onClick={() => pos ? hide() : show()}
+                  style={{ display: 'inline-flex', alignItems: 'center', marginLeft: 5, cursor: 'pointer', flexShrink: 0 }}>
+                <span style={{ display: 'inline-flex', alignItems: 'center', justifyContent: 'center', width: 14, height: 14, borderRadius: '50%', background: 'rgba(255,255,255,0.08)', border: '1px solid rgba(255,255,255,0.15)', fontSize: 9, fontWeight: 900, color: 'rgba(255,255,255,0.4)', lineHeight: 1 }}>?</span>
+            </span>
+            {pos && createPortal(
+                <div style={{ position: 'fixed', left: pos.left, ...(pos.openBelow ? { top: pos.triggerBottom + 6 } : { bottom: window.innerHeight - pos.triggerTop + 6 }), zIndex: 99999, background: '#0f172a', border: '1px solid rgba(255,255,255,0.15)', borderRadius: 10, padding: '10px 14px', fontSize: 11, color: 'rgba(255,255,255,0.75)', fontWeight: 500, width: 224, lineHeight: 1.6, boxShadow: '0 8px 32px rgba(0,0,0,0.9)', pointerEvents: 'none', whiteSpace: 'normal' }}>
                     {text}
-                    <span style={{ position: 'absolute', top: '100%', left: 10, width: 0, height: 0, borderLeft: '6px solid transparent', borderRight: '6px solid transparent', borderTop: '6px solid #0f172a' }} />
-                </span>
+                </div>,
+                document.body
             )}
-        </span>
+        </>
     )
 }
 

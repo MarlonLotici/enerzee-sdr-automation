@@ -1,4 +1,5 @@
-import React, { useState, useEffect, useCallback } from 'react'
+import React, { useState, useEffect, useCallback, useRef } from 'react'
+import { createPortal } from 'react-dom'
 import { createClient } from '@supabase/supabase-js'
 import {
     AreaChart, Area, BarChart, Bar, PieChart, Pie, Cell,
@@ -53,28 +54,43 @@ function TooltipCustom({ active, payload, label }) {
 // INFO TOOLTIP
 // ============================================================
 function InfoBtn({ text }) {
-    const [open, setOpen] = React.useState(false)
+    const [pos, setPos] = useState(null)
+    const ref = useRef(null)
+
+    const show = () => {
+        if (!ref.current) return
+        const r = ref.current.getBoundingClientRect()
+        const W = 224
+        let left = r.left
+        if (left + W > window.innerWidth - 8) left = window.innerWidth - W - 8
+        if (left < 8) left = 8
+        const openBelow = r.top < 160
+        setPos({ left, triggerTop: r.top, triggerBottom: r.bottom, openBelow })
+    }
+    const hide = () => setPos(null)
+
     return (
-        <span className="relative inline-flex items-center ml-1.5 cursor-pointer flex-shrink-0"
-              onMouseEnter={() => setOpen(true)}
-              onMouseLeave={() => setOpen(false)}
-              onClick={e => { e.stopPropagation(); setOpen(v => !v) }}>
-            <span className="inline-flex items-center justify-center w-3.5 h-3.5 rounded-full text-[9px] font-black"
-                  style={{ background: 'rgba(255,255,255,0.08)', border: '1px solid rgba(255,255,255,0.15)', color: 'rgba(255,255,255,0.4)' }}>?</span>
-            {open && (
-                <span className="absolute bottom-full left-0 mb-1 z-50 pointer-events-none"
-                      style={{ background: '#0f172a', border: '1px solid rgba(255,255,255,0.12)', borderRadius: 10, padding: '10px 14px', fontSize: 11, color: 'rgba(255,255,255,0.75)', fontWeight: 500, width: 220, lineHeight: 1.6, boxShadow: '0 8px 32px rgba(0,0,0,0.8)', whiteSpace: 'normal', display: 'block' }}>
+        <>
+            <span ref={ref} onMouseEnter={show} onMouseLeave={hide}
+                  onClick={e => { e.stopPropagation(); pos ? hide() : show() }}
+                  className="inline-flex items-center ml-1.5 cursor-pointer flex-shrink-0">
+                <span className="inline-flex items-center justify-center w-3.5 h-3.5 rounded-full text-[9px] font-black"
+                      style={{ background: 'rgba(255,255,255,0.08)', border: '1px solid rgba(255,255,255,0.15)', color: 'rgba(255,255,255,0.4)' }}>?</span>
+            </span>
+            {pos && createPortal(
+                <div style={{ position: 'fixed', left: pos.left, ...(pos.openBelow ? { top: pos.triggerBottom + 6 } : { bottom: window.innerHeight - pos.triggerTop + 6 }), zIndex: 99999, background: '#0f172a', border: '1px solid rgba(255,255,255,0.15)', borderRadius: 10, padding: '10px 14px', fontSize: 11, color: 'rgba(255,255,255,0.75)', fontWeight: 500, width: 224, lineHeight: 1.6, boxShadow: '0 8px 32px rgba(0,0,0,0.9)', pointerEvents: 'none', whiteSpace: 'normal' }}>
                     {text}
-                </span>
+                </div>,
+                document.body
             )}
-        </span>
+        </>
     )
 }
 
 // ============================================================
 // KPI CARD
 // ============================================================
-function KpiCard({ icon: Icon, label, value, sub, color, trend }) {
+function KpiCard({ icon: Icon, label, value, sub, color, trend, info }) {
     const trendPositivo = trend > 0
     return (
         <div className="glass-card rounded-3xl p-5 flex flex-col gap-3 border border-white/5 hover:border-blue-500/30 transition-all">
@@ -90,7 +106,7 @@ function KpiCard({ icon: Icon, label, value, sub, color, trend }) {
                 )}
             </div>
             <div>
-                <p className="text-[9px] font-black text-slate-500 uppercase tracking-[0.3em] mb-1">{label}</p>
+                <p className="text-[9px] font-black text-slate-500 uppercase tracking-[0.3em] mb-1 flex items-center">{label}{info && <InfoBtn text={info} />}</p>
                 <p className="text-3xl font-black text-white leading-none italic tracking-tighter">{value}</p>
                 {sub && <p className="text-[10px] text-slate-500 font-bold mt-1">{sub}</p>}
             </div>
@@ -427,10 +443,10 @@ const carregarDados = useCallback(async () => {
 
             {/* === KPIs OPERACIONAIS === */}
                           <div className="grid grid-cols-2 lg:grid-cols-4 gap-4">
-             <KpiCard icon={Zap}           label="Disparos Hoje"      value={d?.kpis.disparosHoje || 0}        sub={`de ${d?.kpis.totalDisparados || 0} totais`} color={CORES.azul}     />
-             <KpiCard icon={Clock}         label="Tempo Médio Resposta" value={d?.kpis.tempoMedioResposta ? `${d.kpis.tempoMedioResposta}min` : '--'} sub="do disparo à 1ª resposta" color={CORES.ciano} />
-             <KpiCard icon={Flame}         label="Leads Hot"           value={d?.kpis.tempCounts?.hot || 0}     sub="prontos pra fechar"             color={CORES.vermelho} />
-             <KpiCard icon={Bot}           label="Robôs Detectados"    value={d?.kpis.leadsRobo || 0}           sub="silenciados"                    color={CORES.slate}    />
+             <KpiCard icon={Zap}   label="Disparos Hoje"        value={d?.kpis.disparosHoje || 0}   sub={`de ${d?.kpis.totalDisparados || 0} totais`} color={CORES.azul}     info="Leads que receberam a primeira mensagem hoje. O subtítulo mostra o total histórico de disparos de todos os tempos." />
+             <KpiCard icon={Clock} label="Tempo Médio Resposta" value={d?.kpis.tempoMedioResposta ? `${d.kpis.tempoMedioResposta}min` : '--'} sub="do disparo à 1ª resposta" color={CORES.ciano} info="Tempo médio entre o disparo e a primeira resposta do lead (últimos 30 dias). Respostas após 24h são descartadas da média para não distorcer o dado." />
+             <KpiCard icon={Flame} label="Leads Hot"            value={d?.kpis.tempCounts?.hot || 0} sub="prontos pra fechar"  color={CORES.vermelho} info="Leads marcados com temperatura 'hot'. Indica leads que demonstraram alto interesse e estão prontos para fechar. A temperatura é atualizada pelo perfiler da IA em cada troca de mensagem." />
+             <KpiCard icon={Bot}   label="Robôs Detectados"     value={d?.kpis.leadsRobo || 0}       sub="silenciados (30d)"   color={CORES.slate}    info="Leads únicos que receberam ao menos uma autoresposta detectada nos últimos 30 dias. O bot silencia automaticamente ao detectar robô e pausa o lead." />
                           </div>
 
             
