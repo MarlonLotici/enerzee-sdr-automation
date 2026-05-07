@@ -75,13 +75,18 @@ function computeMetrics(leads, instances, realTotalLeads) {
     const monthly = Object.values(monthBuckets)
 
     // ── 2. Funil por status ──
-    const sc = { new: 0, contact: 0, waiting_analysis: 0, booked: 0, error: 0, invalid: 0, blacklisted: 0, dead: 0 }
+    const sc = { new: 0, contact: 0, waiting_analysis: 0, booked: 0, closed: 0, error: 0, invalid: 0, blacklisted: 0, dead: 0 }
     leadsValidos.forEach(l => { if (sc[l.status] !== undefined) sc[l.status]++ })
 
-    // 🎯 AGENDAMENTOS REAIS: status booked OU current_stage >= 4 OU calendly_booked = true
-    const totalAgendamentosReais = leadsValidos.filter(l => 
-        l.status === 'booked' || 
-        l.calendly_booked === true ||
+    // 🎯 AGENDAMENTOS REAIS: cobre todos os caminhos possíveis
+    // - 'booked'  = agendamento manual via WhatsApp ([AGENDAMENTO_MANUAL])
+    // - 'closed'  = confirmado pelo webhook do Calendly (server.js seta 'closed', não 'booked')
+    // - calendly_booked = true = flag explícita do Calendly
+    // - current_stage >= 4 = bot enviou o link e lead avançou
+    const totalAgendamentosReais = leadsValidos.filter(l =>
+        l.status === 'booked'        ||
+        l.status === 'closed'        ||
+        l.calendly_booked === true   ||
         (l.current_stage || 0) >= 4
     ).length
 
@@ -91,7 +96,7 @@ function computeMetrics(leads, instances, realTotalLeads) {
     const funnel = [
         { etapa: 'Capturados',  qtd: leadsValidos.length,       fill: NEON.blue },
         { etapa: 'Abordados',   qtd: totalAbordadosFunil,        fill: NEON.cyan },
-        { etapa: 'Em análise',  qtd: sc.waiting_analysis + sc.booked, fill: NEON.violet },
+        { etapa: 'Em análise',  qtd: sc.waiting_analysis + sc.booked + sc.closed, fill: NEON.violet },
         { etapa: 'Agendados',   qtd: totalAgendamentosReais,    fill: NEON.emerald },
     ]
     // ── 3. Nichos (top 6) ──
@@ -138,13 +143,16 @@ function computeMetrics(leads, instances, realTotalLeads) {
     const dailyCapture = DIA_LABEL.map((dia, i) => ({ dia, leads: diaCriados[i] }))
 
     // ── 6. Funil SPIN por estágio (0-5) ──
+    // Usa contagem CUMULATIVA: um lead no stage 4 também conta nos stages 0-3
+    // Isso representa o fluxo histórico ("quantos chegaram a cada stage") não o snapshot atual
     const estagioLabels = ['Qualificação', 'Situação', 'Dor/Implicação', 'Solução', 'Agendamento', 'Fechamento']
     const estagioColors = ['#64748b', '#3B82F6', '#06B6D4', '#8B5CF6', '#F59E0B', '#10B981']
     const estagioCount = [0, 0, 0, 0, 0, 0]
     leadsValidos.forEach(l => {
         if (l.status === 'new') return
-        const stage = l.current_stage || 0
-        if (stage >= 0 && stage <= 5) estagioCount[stage]++
+        const stage = Math.min(l.current_stage || 0, 5)
+        // Acumula: um lead no stage 3 passou pelos stages 0, 1, 2 e 3
+        for (let i = 0; i <= stage; i++) estagioCount[i]++
     })
     const funnelSpin = estagioLabels.map((label, i) => ({
         etapa: label,
