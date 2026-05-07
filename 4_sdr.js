@@ -637,9 +637,9 @@ async function resolverPromptCompleto(promptBase, contextoLead, instanceData, hi
     const companyName = instanceData?.company_name || "Enerzee";
 
     // --- 2. Dados do lead ---
-    const nomeLead = (contextoLead.dono && typeof contextoLead.dono === 'string')
-        ? contextoLead.dono.split(' ')[0]
-        : (contextoLead.name || "Gestor");
+    // extrairNomeHumano filtra nomes de CNPJ (LTDA, Comércio, cargos) e retorna null se não parecer pessoa real
+    // Se retornar null, usamos "vc" para não chamar o gatekeeper pelo nome do dono do CNPJ sem confirmação
+    const nomeLead = extrairNomeHumano(contextoLead.dono) || 'vc';
 
     const nomeEmpresa = limparNomeEmpresa(contextoLead.name);
 
@@ -1166,6 +1166,7 @@ async function filtrarEEnviarResposta(sock, remoteJid, resposta, historico, lead
         .replace(/\bROBO\b/gi, '')                                     // ROBO sem colchetes
         .replace(/\bCONTADOR\b/gi, '')                                 // CONTADOR sem colchetes
         .replace(/\bENGANO\b/gi, '')                                   // ENGANO sem colchetes
+        .replace(/\s*--\s*/g, ', ')                                    // em-dash estilístico do LLM → vírgula natural
         .trim();
 
     if (textoLimpo.length === 0) {
@@ -1554,14 +1555,20 @@ if (fromMe) {
                 return; 
             } else if (messageType !== 'audioMessage') {
                 if (!lead.is_paused) {
-                    // Guard RAM: previne race condition quando lead envia catálogo com 10+ fotos simultâneas
-                    const chaveAviso = `${lead.id}_foto`;
-                    if (!cacheAvisosMidia.has(chaveAviso)) {
-                        cacheAvisosMidia.set(chaveAviso, Date.now());
-                        setTimeout(() => cacheAvisosMidia.delete(chaveAviso), 5 * 60 * 1000);
-                        const msgFoto = "Opa, essa foto parece ser de outra coisa rs. Consegue mandar uma nítida da fatura aberta? Pode ser print do PDF também.";
-                        await sock.sendMessage(remoteJid, { text: msgFoto });
-                        await db.saveMessage(lead.whatsapp_id, 'assistant', msgFoto, instanceId);
+                    const estagioAtual = lead.current_stage || 0;
+                    // Só pede fatura se já estamos no estágio 2+ (lead já foi questionado sobre energia)
+                    // Nos estágios 0-1, foto de cardápio/produto/catálogo é normal — ignorar silenciosamente
+                    if (estagioAtual >= 2) {
+                        const chaveAviso = `${lead.id}_foto`;
+                        if (!cacheAvisosMidia.has(chaveAviso)) {
+                            cacheAvisosMidia.set(chaveAviso, Date.now());
+                            setTimeout(() => cacheAvisosMidia.delete(chaveAviso), 5 * 60 * 1000);
+                            const msgFoto = "Opa, essa foto parece ser de outra coisa rs. Consegue mandar uma nítida da fatura aberta? Pode ser print do PDF também.";
+                            await sock.sendMessage(remoteJid, { text: msgFoto });
+                            await db.saveMessage(lead.whatsapp_id, 'assistant', msgFoto, instanceId);
+                        }
+                    } else {
+                        console.log(`📸 [FOTO] Lead ${lead.name} no estágio ${estagioAtual} enviou foto — contexto não é fatura. Ignorando.`);
                     }
                 }
                 return;

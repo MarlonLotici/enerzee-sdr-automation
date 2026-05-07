@@ -12,6 +12,7 @@ import ChipStatus from "./components/Chipstatus"
 import ConversaList from './components/ConversaList'
 import OnboardingBriefing from './components/OnboardingBriefing'
 import Dashboard from "./Dashboard"
+import AuditorDashboard from "./components/AuditorDashboard"
 // --- ÍCONES (FULL SET 2026) ---
 import { 
     Rocket, MapPin, LayoutDashboard, MessageSquare, Phone, Play, LocateFixed, Send, 
@@ -1203,6 +1204,7 @@ return (
         {[
            { key: 'overview', label: 'Resultados' },
            { key: 'operations', label: 'Operação' },
+           { key: 'auditor', label: 'QA · Auditor' },
         ].map(tab => (
             <button
                 key={tab.key}
@@ -1220,7 +1222,7 @@ return (
 
     {/* Conteúdo */}
     <div className="flex-1 overflow-auto">
-        {analyticsView === 'overview' ? <VisualAnalytics /> : <Dashboard />}
+        {analyticsView === 'overview' ? <VisualAnalytics /> : analyticsView === 'operations' ? <Dashboard /> : <AuditorDashboard />}
     </div>
 </TabsContent>
 
