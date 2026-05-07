@@ -1107,14 +1107,18 @@ async function enviarAudioTTS(sock, remoteJid, texto, lead, instanceId) {
         
         // 1. HUMANIZAÇÃO DO TEXTO (O Pulo do Gato)
         // Adicionamos pontuações que forçam a IA a fazer pausas naturais de quem está pensando.
+        // Humanização sequencial sem cascata:
+        // REGRA: nenhum substituto pode conter pontos ('.') — senão o replace de pontos os processa de novo
         let textoHumanizado = texto
-            .replace(/\.{2,}/g, ' ') // Limpa reticências antes de tudo para não bugar o TTS
-            .replace(/\?/g, '? ... ')
-            .replace(/!/g, '! ... ')
-            .replace(/\./g, ', ... ')
-            .replace(/energia/gi, 'energia, né,')
-            .replace(/fatura/gi, 'fatura, ... tipo,')
-            .replace(/economizar/gi, 'dar uma economizada');
+            .replace(/\.{2,}/g, '. ')              // 1. Reticências → ponto único (sem multiplicar)
+            .replace(/energia/gi, 'energia né,')   // 2. Vícios de linguagem (sem pontos internos)
+            .replace(/fatura/gi, 'fatura tipo,')
+            .replace(/economizar/gi, 'dar uma economizada')
+            .replace(/\?/g, '? ')                  // 3. Pontuação → só espaço (edge-tts entonação natural)
+            .replace(/!/g, '! ')
+            .replace(/\./g, ', ')                  // 4. Ponto → vírgula (pausa suave — SEM pontos no substituto)
+            .replace(/,\s*,/g, ',')                // 5. Limpa duplas vírgulas eventuais
+            .trim();
 
         await sock.sendPresenceUpdate('recording', remoteJid);
         
