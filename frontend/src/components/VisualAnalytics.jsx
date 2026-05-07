@@ -33,7 +33,7 @@ const MES_LABEL     = ['Jan','Fev','Mar','Abr','Mai','Jun','Jul','Ago','Set','Ou
 const DIA_LABEL     = ['Dom','Seg','Ter','Qua','Qui','Sex','Sáb']
 
 // ─── COMPUTAÇÃO ───────────────────────────────────────────────────────────────
-function computeMetrics(leads, instances, realTotalLeads) {
+function computeMetrics(leads, instances, realTotalLeads, realAgendados = 0) {
     if (!leads?.length) return null
 
     // 🛡️ FILTRO BLINDADO: leads válidos = exclui inválidos, blacklisted e erros
@@ -78,12 +78,9 @@ function computeMetrics(leads, instances, realTotalLeads) {
     const sc = { new: 0, contact: 0, waiting_analysis: 0, booked: 0, closed: 0, error: 0, invalid: 0, blacklisted: 0, dead: 0 }
     leadsValidos.forEach(l => { if (sc[l.status] !== undefined) sc[l.status]++ })
 
-    // 🎯 AGENDAMENTOS REAIS: cobre todos os caminhos possíveis
-    // - 'booked'  = agendamento manual via WhatsApp ([AGENDAMENTO_MANUAL])
-    // - 'closed'  = confirmado pelo webhook do Calendly (server.js seta 'closed', não 'booked')
-    // - calendly_booked = true = flag explícita do Calendly
-    // - current_stage >= 4 = bot enviou o link e lead avançou
-    const totalAgendamentosReais = leadsValidos.filter(l =>
+    // 🎯 AGENDAMENTOS REAIS: count vem do servidor (bypassa limite de 1000 rows do Supabase)
+    // realAgendados é calculado com query server-side em fetchData
+    const totalAgendamentosReais = realAgendados || leadsValidos.filter(l =>
         l.status === 'booked'        ||
         l.status === 'closed'        ||
         l.calendly_booked === true   ||
@@ -354,35 +351,41 @@ const Skeleton = ({ h = 200 }) => (
 
 // ─── COMPONENTE PRINCIPAL ──────────────
 export default function VisualAnalytics() {
-    const [leads,           setLeads]           = useState([])
-    const [instances,       setInstances]       = useState([])
-    const [loading,         setLoading]         = useState(true)
-    const [lastSync,        setLastSync]        = useState(null)
-    const [realTotalLeads,  setRealTotalLeads]  = useState(0)   // ← MOVIDO PRA FORA
+    const [leads,              setLeads]              = useState([])
+    const [instances,          setInstances]          = useState([])
+    const [loading,            setLoading]            = useState(true)
+    const [lastSync,           setLastSync]           = useState(null)
+    const [realTotalLeads,     setRealTotalLeads]     = useState(0)
+    const [realAgendados,      setRealAgendados]      = useState(0) // count server-side, bypassa limite de 1000
 
     const fetchData = async () => {
         setLoading(true)
         try {
-            // Busca leads, instâncias e a CONTAGEM TOTAL em paralelo
-           const [leadsRes, instRes, countRes] = await Promise.all([
+            const [leadsRes, instRes, countRes, agendadosRes] = await Promise.all([
                 supabase
                     .from('leads')
-                    // 🎯 Adicionado: last_seen_at (para Engajamento) e calendly_booked (para Conversão)
                     .select('id, status, niche, created_at, last_contact_at, instance_id, capital_social_numeric, current_stage, lead_temperature, opening_template, last_seen_at, calendly_booked')
-                    .order('created_at', { ascending: false })
+                    .order('current_stage', { ascending: false }) // prioriza leads avançados no funil
                     .limit(10000),
                 supabase
                     .from('instances')
                     .select('id, name, whatsapp_status'),
                 supabase
                     .from('leads')
-                    .select('*', { count: 'exact', head: true }) // 🎯 Conta o total real
+                    .select('*', { count: 'exact', head: true }),
+                // Count server-side de agendamentos — não depende do limite de rows
+                supabase
+                    .from('leads')
+                    .select('*', { count: 'exact', head: true })
+                    .not('status', 'in', '(invalid,blacklisted,error)')
+                    .or('status.eq.booked,status.eq.closed,calendly_booked.eq.true,current_stage.gte.4')
             ])
-            if (!leadsRes.error && leadsRes.data)     setLeads(leadsRes.data)
-            if (!instRes.error  && instRes.data)      setInstances(instRes.data)
+            if (!leadsRes.error && leadsRes.data)          setLeads(leadsRes.data)
+            if (!instRes.error  && instRes.data)           setInstances(instRes.data)
             if (!countRes.error && countRes.count != null) setRealTotalLeads(countRes.count)
+            if (!agendadosRes.error && agendadosRes.count != null) setRealAgendados(agendadosRes.count)
 
-             setLastSync(new Date())
+            setLastSync(new Date())
 
         } finally {
             setLoading(false)
@@ -395,7 +398,7 @@ export default function VisualAnalytics() {
         return () => clearInterval(id)
     }, [])
 
-        const metrics = useMemo(() => computeMetrics(leads, instances, realTotalLeads), [leads, instances, realTotalLeads])
+        const metrics = useMemo(() => computeMetrics(leads, instances, realTotalLeads, realAgendados), [leads, instances, realTotalLeads, realAgendados])
     // ── LOADING ───────────────────────────────────────────────────────────────
     if (loading && !metrics) {
         return (
