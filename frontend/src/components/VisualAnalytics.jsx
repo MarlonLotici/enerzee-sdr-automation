@@ -33,7 +33,7 @@ const MES_LABEL     = ['Jan','Fev','Mar','Abr','Mai','Jun','Jul','Ago','Set','Ou
 const DIA_LABEL     = ['Dom','Seg','Ter','Qua','Qui','Sex','Sáb']
 
 // ─── COMPUTAÇÃO ───────────────────────────────────────────────────────────────
-function computeMetrics(leads, instances, realTotalLeads, realAgendados = 0) {
+function computeMetrics(leads, instances, realTotalLeads, realAgendados = 0, realAbordados = 0) {
     if (!leads?.length) return null
 
     // 🛡️ FILTRO BLINDADO: leads válidos = exclui inválidos, blacklisted e erros
@@ -87,14 +87,12 @@ function computeMetrics(leads, instances, realTotalLeads, realAgendados = 0) {
         (l.current_stage || 0) >= 4
     ).length
 
-    // "Abordados" = leads que efetivamente receberam disparo (têm last_contact_at)
-    // Consistente com totalAbordados do KPI abaixo
-    const totalAbordadosFunil = leadsValidos.filter(l => !!l.last_contact_at).length
+    // Funil usa valores server-side para Capturados e Abordados (bypassa limite de 1000 rows)
     const funnel = [
-        { etapa: 'Capturados',  qtd: leadsValidos.length,       fill: NEON.blue },
-        { etapa: 'Abordados',   qtd: totalAbordadosFunil,        fill: NEON.cyan },
+        { etapa: 'Capturados',  qtd: realTotalLeads || leadsValidos.length,    fill: NEON.blue },
+        { etapa: 'Abordados',   qtd: realAbordados  || leadsValidos.filter(l => !!l.last_contact_at).length, fill: NEON.cyan },
         { etapa: 'Em análise',  qtd: sc.waiting_analysis + sc.booked + sc.closed, fill: NEON.violet },
-        { etapa: 'Agendados',   qtd: totalAgendamentosReais,    fill: NEON.emerald },
+        { etapa: 'Agendados',   qtd: totalAgendamentosReais,                   fill: NEON.emerald },
     ]
     // ── 3. Nichos (top 6) ──
     const nicheCount = {}
@@ -267,10 +265,10 @@ function computeMetrics(leads, instances, realTotalLeads, realAgendados = 0) {
     })
     const engagementRate = visualizados > 0 ? Math.round((responderamAposVer / visualizados) * 100) : 0
 
-    // ── KPIs ──
-    const totalLeads = realTotalLeads || leadsValidos.length
-    const totalAbordados = leadsValidos.filter(l => l.last_contact_at).length
-    const totalAgendados = totalAgendamentosReais  // 🎯 Agora usa a regra blindada
+    // ── KPIs — todos usam valores server-side quando disponíveis ──
+    const totalLeads     = realTotalLeads || leadsValidos.length
+    const totalAbordados = realAbordados  || leadsValidos.filter(l => l.last_contact_at).length
+    const totalAgendados = totalAgendamentosReais
     const taxaAbordagem  = totalLeads > 0 ? Math.round(totalAbordados / totalLeads * 100) : 0
 
     const last2 = monthly.slice(-2)
@@ -304,8 +302,27 @@ const NeonTooltip = ({ active, payload, label, prefix = '', suffix = '' }) => {
     )
 }
 
+// ─── INFO TOOLTIP ──────────────────────────────────────────────────────────────
+function InfoTooltip({ text }) {
+    const [open, setOpen] = React.useState(false)
+    return (
+        <span style={{ position: 'relative', display: 'inline-flex', alignItems: 'center', marginLeft: 5, cursor: 'pointer' }}
+              onMouseEnter={() => setOpen(true)}
+              onMouseLeave={() => setOpen(false)}
+              onClick={() => setOpen(v => !v)}>
+            <span style={{ display: 'inline-flex', alignItems: 'center', justifyContent: 'center', width: 14, height: 14, borderRadius: '50%', background: 'rgba(255,255,255,0.08)', border: '1px solid rgba(255,255,255,0.15)', fontSize: 9, fontWeight: 900, color: 'rgba(255,255,255,0.4)', lineHeight: 1 }}>?</span>
+            {open && (
+                <span style={{ position: 'absolute', bottom: '120%', left: '50%', transform: 'translateX(-50%)', background: '#0f172a', border: '1px solid rgba(255,255,255,0.12)', borderRadius: 10, padding: '10px 14px', fontSize: 11, color: 'rgba(255,255,255,0.75)', fontWeight: 500, width: 220, lineHeight: 1.5, zIndex: 100, boxShadow: '0 8px 32px rgba(0,0,0,0.6)', pointerEvents: 'none', whiteSpace: 'normal' }}>
+                    {text}
+                    <span style={{ position: 'absolute', top: '100%', left: '50%', transform: 'translateX(-50%)', width: 0, height: 0, borderLeft: '6px solid transparent', borderRight: '6px solid transparent', borderTop: '6px solid #0f172a' }} />
+                </span>
+            )}
+        </span>
+    )
+}
+
 // ─── KPI CARD ─────────────────────────────────────────────────────────────────
-function KpiCard({ icon: Icon, label, value, sub, delta, color }) {
+function KpiCard({ icon: Icon, label, value, sub, delta, color, info }) {
     const isUp = delta >= 0
     return (
         <div
@@ -325,7 +342,9 @@ function KpiCard({ icon: Icon, label, value, sub, delta, color }) {
                     </div>
                 )}
             </div>
-            <p style={{ fontSize: 11, fontWeight: 900, color: 'rgba(255,255,255,0.38)', textTransform: 'uppercase', letterSpacing: '0.2em', marginBottom: 4 }}>{label}</p>
+            <p style={{ fontSize: 11, fontWeight: 900, color: 'rgba(255,255,255,0.38)', textTransform: 'uppercase', letterSpacing: '0.2em', marginBottom: 4, display: 'flex', alignItems: 'center' }}>
+                {label}{info && <InfoTooltip text={info} />}
+            </p>
             <p style={{ fontSize: 28, fontWeight: 900, color: '#fff', letterSpacing: '-0.03em', lineHeight: 1, marginBottom: 4 }}>{value}</p>
             <p style={{ fontSize: 11, color: 'rgba(255,255,255,0.28)', fontWeight: 700 }}>{sub}</p>
         </div>
@@ -356,34 +375,39 @@ export default function VisualAnalytics() {
     const [loading,            setLoading]            = useState(true)
     const [lastSync,           setLastSync]           = useState(null)
     const [realTotalLeads,     setRealTotalLeads]     = useState(0)
-    const [realAgendados,      setRealAgendados]      = useState(0) // count server-side, bypassa limite de 1000
+    const [realAgendados,      setRealAgendados]      = useState(0)
+    const [realAbordados,      setRealAbordados]      = useState(0)
 
     const fetchData = async () => {
         setLoading(true)
         try {
-            const [leadsRes, instRes, countRes, agendadosRes] = await Promise.all([
+            const [leadsRes, instRes, countRes, agendadosRes, abordadosRes] = await Promise.all([
                 supabase
                     .from('leads')
                     .select('id, status, niche, created_at, last_contact_at, instance_id, capital_social_numeric, current_stage, lead_temperature, opening_template, last_seen_at, calendly_booked')
-                    .order('current_stage', { ascending: false }) // prioriza leads avançados no funil
+                    .order('current_stage', { ascending: false })
                     .limit(10000),
-                supabase
-                    .from('instances')
-                    .select('id, name, whatsapp_status'),
-                supabase
-                    .from('leads')
-                    .select('*', { count: 'exact', head: true }),
-                // Count server-side de agendamentos — não depende do limite de rows
+                supabase.from('instances').select('id, name, whatsapp_status'),
+                // Count total de leads no banco
+                supabase.from('leads').select('*', { count: 'exact', head: true }),
+                // Count agendamentos server-side
                 supabase
                     .from('leads')
                     .select('*', { count: 'exact', head: true })
                     .not('status', 'in', '(invalid,blacklisted,error)')
-                    .or('status.eq.booked,status.eq.closed,calendly_booked.eq.true,current_stage.gte.4')
+                    .or('status.eq.booked,status.eq.closed,calendly_booked.eq.true,current_stage.gte.4'),
+                // Count abordados server-side (têm last_contact_at)
+                supabase
+                    .from('leads')
+                    .select('*', { count: 'exact', head: true })
+                    .not('last_contact_at', 'is', null)
+                    .not('status', 'in', '(invalid,blacklisted,error)')
             ])
-            if (!leadsRes.error && leadsRes.data)          setLeads(leadsRes.data)
-            if (!instRes.error  && instRes.data)           setInstances(instRes.data)
-            if (!countRes.error && countRes.count != null) setRealTotalLeads(countRes.count)
+            if (!leadsRes.error && leadsRes.data)            setLeads(leadsRes.data)
+            if (!instRes.error  && instRes.data)             setInstances(instRes.data)
+            if (!countRes.error && countRes.count != null)   setRealTotalLeads(countRes.count)
             if (!agendadosRes.error && agendadosRes.count != null) setRealAgendados(agendadosRes.count)
+            if (!abordadosRes.error && abordadosRes.count != null) setRealAbordados(abordadosRes.count)
 
             setLastSync(new Date())
 
@@ -398,7 +422,7 @@ export default function VisualAnalytics() {
         return () => clearInterval(id)
     }, [])
 
-        const metrics = useMemo(() => computeMetrics(leads, instances, realTotalLeads, realAgendados), [leads, instances, realTotalLeads, realAgendados])
+        const metrics = useMemo(() => computeMetrics(leads, instances, realTotalLeads, realAgendados, realAbordados), [leads, instances, realTotalLeads, realAgendados, realAbordados])
     // ── LOADING ───────────────────────────────────────────────────────────────
     if (loading && !metrics) {
         return (
@@ -475,32 +499,35 @@ export default function VisualAnalytics() {
                     value={totalLeads.toLocaleString('pt-BR')}
                     sub="total na base"
                     delta={deltaCriados}   color={NEON.blue}
+                    info="Total de empresas capturadas pelo radar e salvas no banco. Inclui leads em qualquer status — novos, em conversa, inválidos e mortos."
                 />
                 <KpiCard
                     icon={Zap}     label="Leads Abordados"
                     value={totalAbordados.toLocaleString('pt-BR')}
                     sub="receberam disparo"
                     delta={deltaAbordados} color={NEON.cyan}
+                    info="Leads que efetivamente receberam a primeira mensagem do SDR. Exclui leads capturados mas ainda não disparados (status 'new')."
                 />
                 <KpiCard
                     icon={Target}  label="Agendamentos"
                     value={totalAgendados.toLocaleString('pt-BR')}
-                    sub="status closed no CRM"
+                    sub="booked, closed ou stage 4+"
                     delta={null}           color={NEON.emerald}
+                    info="Leads que agendaram a validação. Conta quem tem status booked/closed, calendly_booked ativo ou chegou ao estágio 4 do funil (link enviado e aceito)."
                 />
-                {/* 👇 NOVO CARD DE ENGAJAMENTO (MÉTRICA DE VÁCUO) 👇 */}
-               <KpiCard
+                <KpiCard
                     icon={Activity} label="Conversão Total"
-                    // 🎯 Usando Abordados e .toFixed(1) para não zerar números menores que 1%
                     value={(totalAbordados > 0 ? (totalAgendados / totalAbordados * 100).toFixed(1) : 0).toString().replace('.', ',') + '%'}
-                    sub="agendados / abordados" 
+                    sub="agendamentos ÷ abordados"
                     delta={null} color={NEON.emerald}
+                    info="Percentual de leads abordados que chegaram ao agendamento. Mede a eficiência geral do funil: de quem recebeu mensagem, quantos converteram."
                 />
-                   <KpiCard
+                <KpiCard
                     icon={Flame} label="Engajamento Real"
                     value={engagementRate + '%'}
                     sub="responderam após ver"
                     delta={null} color={NEON.rose}
+                    info="De todos os leads que leram a mensagem (confirmado pelo visto azul), quantos avançaram além do estágio 0. Mede qualidade da abertura, não quantidade de disparos."
                 />
             </div>
 
