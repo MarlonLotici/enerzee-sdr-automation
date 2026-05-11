@@ -459,38 +459,48 @@ function analisarIntencaoRegex(texto) {
     const PADROES_ROBO = [
         // 1. Padrões de Menu e Digitação
         /(?:digite|opcao|opção|selecione|escolha)\s*(?:a|uma)?\s*(?:opção|alternativa)?\s*\d/i,
-        /^\s*\d\s*[-–—\.)]\s*.+/m, // Deteta listas como "1- Menu" ou "2) Reservas"
-        /(?:1\s*[-–]\s*.+\n\s*2\s*[-–])/, // Deteta blocos de opções numeradas
-        
+        /^\s*\d\s*[-–—\.)]\s*.+/m,
+        /(?:1\s*[-–]\s*.+\n\s*2\s*[-–])/,
+
         // 2. Mensagens de Ausência e Horário
-        /agradec\w+\s+(?:seu|sua|o)\s+contato/i,
+        /agradec\w+\s+(?:o\s+)?(?:seu|sua)\s+contato/i,   // "agradece o seu contato" e "agradece seu contato"
+        /agradec\w+\s+o\s+contato/i,                       // "agradece o contato"
         /(?:retornaremos|em\s+breve\s+retorn|entraremos\s+em\s+contato)/i,
         /(?:em\s+)?hor[aá]rio\s+comercial/i,
+        /hor[aá]rio\s+de\s+atendimento/i,                  // "horário de atendimento" (não pegava antes)
         /sua\s+mensagem\s+foi\s+recebida/i,
         /bem[- ]?vind[oa]\s+(?:ao?|à)/i,
         /atendimento\s+(?:das|de)\s+\d/i,
         /^(?:seg\s+[aà]\s+sex|segunda\s+[aà]|funciona\w+\s+das?\s+\d)/i,
-        
-        // 3. Links de Cardápios e Catálogos (Gargalo detetado nos logs)
+
+        // 3. Formulários / coleta de dados (URAs que pedem nome, data, produto)
+        /(?:informe|deixe|envie|mande)\s+(?:seu|sua|o)\s+(?:nome|cpf|data|pedido|produto)/i,
+        /⚠️\s*seu\s+nome/i,                                // "⚠️ Seu nome:" — padrão comum de bots
+        /para\s+iniciar\s+(?:o\s+)?atendimento/i,          // "para iniciar o atendimento"
+        /atendimento\s+por\s+ordem\s+de/i,                 // "atendimento por ordem de envio"
+
+        // 4. Links de Cardápios e Catálogos
         /(?:cardapio|card[áa]pio|menu|catalogo|catálogo)\s*(?:digital|online|aqui)/i,
         /(?:acesse|confira|veja)\s+(?:nosso|o)\s+(?:cardápio|menu|catálogo)/i,
         /https?:\/\/(?:instadelivery|menudino|goomer|ola\.click|linktr\.ee|instagram\.com)/i,
-        
-        // 4. Frases típicas de Chatbots Business
+
+        // 5. Frases típicas de Chatbots Business
         /(?:n[ãa]o\s+(?:é|e)\s+poss[ií]vel\s+atend|fora\s+do\s+hor[aá]rio)/i,
         /(?:para\s+falar\s+com\s+(?:um|nosso)\s+atendente)/i,
         /atendimento\s+autom[áa]tico/i,
         /voc[êe]\s+est[áa]\s+na\s+fila/i,
+        /n[ãa]o\s+atendemos\s+liga[çc][õo]es/i,            // "não atendemos ligações"
 
-        // 5. URAs modernas sem menu numerado (textos longos de boas-vindas)
+        // 6. URAs modernas sem menu numerado
         /hor[aá]rio\s+de\s+funcionamento/i,
         /(?:em\s+breve\s+)?(?:um\s+)?atendente\s+(?:ir[aá]|vai|estará)/i,
         /aguarde\s+(?:um\s+momento|seu\s+atendimento)/i,
         /transferindo\s+(?:sua\s+)?(?:chamada|mensagem|atendimento)/i,
         /n[ãa]o\s+(?:estamos\s+)?(?:conseguindo\s+)?(?:atender|te\s+atender)\s+no\s+momento/i,
         /(?:segunda\s+[aà]\s+sexta|seg\s+[aà]\s+sex)[^.]{0,40}\d{1,2}h/i,
+        /segunda\s+a\s+s[aá]bado[^.]{0,40}\d{1,2}[:h]/i,  // "segunda a sábado 09:00"
 
-        // 6. Listas por letras (A) Financeiro  B) Comercial)
+        // 7. Listas por letras
         /^\s*(?:\*?[A-Z]\)\*?|\*?[A-Z]\.\*?)\s+\S+/m,
     ];
 
@@ -1173,6 +1183,20 @@ async function filtrarEEnviarResposta(sock, remoteJid, resposta, historico, lead
         .replace(/\s*--\s*/g, ', ')                                    // em-dash estilístico do LLM → vírgula natural
         .trim();
 
+    // ── BLINDAGEM ANTI-PENSAMENTO: remove parágrafos iniciais de raciocínio interno ──
+    // Detecta quando a LLM "pensa em voz alta" antes de responder ao cliente
+    const regexPensamento = /^(parece que|percebo que|vou tentar|detectei que|vejo que|vi que estamos|estou vendo que|não consigo|isso parece|o lead parece|a mensagem parece|caímos em|caimos em)[^\n]*/gi;
+    textoLimpo = textoLimpo
+        .replace(regexPensamento, '')  // remove a linha de pensamento
+        .replace(/^\s*\n+/, '')        // remove linhas em branco que sobram no início
+        .trim();
+
+    if (textoLimpo.length === 0 && resposta.length > 0) {
+        // A resposta era só pensamento — loga e aborta silenciosamente
+        console.warn(`⚠️ [FILTRO] Resposta era só pensamento interno. Abortando envio para ${lead.name}.`);
+        return;
+    }
+
     if (textoLimpo.length === 0) {
     console.error(`❌ [FILTRO] Texto ficou VAZIO após limpeza de tags! Resposta original: "${resposta}"`);
     
@@ -1192,6 +1216,30 @@ async function filtrarEEnviarResposta(sock, remoteJid, resposta, historico, lead
 }
 
     console.log(`✅ [FILTRO] Texto limpo pronto pra envio (${textoLimpo.length} chars): "${textoLimpo.substring(0, 150)}..."`);
+
+    // ── TRAVÃO ANTI-LOOP IA vs IA ──
+    // Se as últimas 3 mensagens da conversa são todas da IA (assistant), estamos
+    // em loop com um bot. Pausa o lead silenciosamente antes de enviar mais spam.
+    try {
+        const { data: recentMsgs } = await supabase
+            .from('messages')
+            .select('role')
+            .eq('whatsapp_id', lead.whatsapp_id)
+            .order('created_at', { ascending: false })
+            .limit(3);
+
+        if (recentMsgs && recentMsgs.length >= 3 && recentMsgs.every(m => m.role === 'assistant')) {
+            console.warn(`🔁 [LOOP IA] Últimas 3 mensagens são todas da IA para ${lead.name}. Pausando para evitar spam.`);
+            await supabase.from('leads').update({
+                is_paused: true,
+                internal_notes: `Loop IA detectado em ${new Date().toLocaleString('pt-BR')} — bot do cliente`
+            }).eq('id', lead.id);
+            await enviarAlerta(`🔁 *Loop IA detectado*\n*Lead:* ${lead.name}\nIA pausada automaticamente para evitar spam.`, 16711680);
+            return;
+        }
+    } catch (e) {
+        console.error('❌ [TRAVÃO ANTI-LOOP] Erro ao checar histórico:', e.message);
+    }
 
     // ── 2. ATUALIZAÇÃO DE STATUS NO BANCO ──
     let updates = {};
@@ -1926,7 +1974,9 @@ const substituirVarsAbertura = (tpl) => tpl
     .replace(/\$\{nomeEmpresa\}/g, nomeEmpresa)
     .replace(/\$\{concessionariaLocal\}/g, concessionariaLocal)
     .replace(/\$\{bairroLead\}/g, bairroLead)
-    .replace(/\$\{origem\}/g, lead.origin_company_name || '');
+    .replace(/\$\{origem\}/g, lead.origin_company_name || '')
+    .replace(/\s*--\s*/g, ', ') // remove em-dash do template antes de enviar
+    .trim();
 
 // Tenta usar templates do Supabase; cai no hardcoded se não houver
 const tplsInstancia = instanceData?.opening_templates;
