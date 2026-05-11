@@ -298,6 +298,14 @@ export default function ChipStatus({ instances = [], socket }) {
         if (!socket) return
         setConnectingSet(prev => new Set(prev).add(instanceId))
         socket.emit('reconnect_instance', instanceId)
+        // Timeout de segurança: se em 30s não chegou CONNECTED nem qr_code, tira o spinner
+        setTimeout(() => {
+            setConnectingSet(prev => {
+                const next = new Set(prev)
+                next.delete(instanceId)
+                return next
+            })
+        }, 30000)
     }, [socket])
 
     // ── Sumários globais ──────────────────────────────────────────────────────

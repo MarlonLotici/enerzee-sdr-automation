@@ -2864,19 +2864,29 @@ enviarAlerta("🎊 REUNIÃO AGENDADA!", `Lead: ${lead.name}\nData: ${new Date(da
     },
 
     reconectarInstancia: async (instanceId) => {
-        // Limpa estado antigo para permitir nova tentativa sem destruir sessão do Redis
-        instanciasLigando.delete(instanceId);
-        instanciasEncerrandoManualmente.delete(instanceId);
+        const instanceData = await getRegrasEmCache(instanceId);
+        const name = instanceData?.name || instanceId;
+        console.log(`🔄 [RECONEXÃO MANUAL] Reiniciando chip ${name}...`);
 
+        // 1. Sinaliza encerramento manual para suprimir auto-reconexão do handler de close
+        instanciasEncerrandoManualmente.add(instanceId);
+        instanciasLigando.delete(instanceId);
+
+        // 2. Fecha o socket antigo se existir
         const instanciaAtual = sessions.get(instanceId);
         if (instanciaAtual?.sock) {
             try { instanciaAtual.sock.end(); } catch(e) {}
         }
+        sessions.delete(instanceId);
+        cacheRegrasInstancia.delete(instanceId);
 
-        const instanceData = await getRegrasEmCache(instanceId);
-        const name = instanceData?.name || instanceId;
+        // 3. Aguarda handlers de close processarem antes de iniciar novo socket
+        await new Promise(r => setTimeout(r, 1500));
 
-        console.log(`🔄 [RECONEXÃO MANUAL] Tentando reconectar chip ${name}...`);
-        await startInstance(instanceId, name);
+        // 4. Libera flag de encerramento para o novo socket funcionar normalmente
+        instanciasEncerrandoManualmente.delete(instanceId);
+
+        // 5. Inicia nova sessão (reutiliza credenciais do Redis — sem QR se sessão válida)
+        startInstance(instanceId, name);
     }
 };
