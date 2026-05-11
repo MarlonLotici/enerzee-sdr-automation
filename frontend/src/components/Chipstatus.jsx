@@ -1,6 +1,6 @@
 import React, { useState, useEffect, useCallback } from 'react'
 import { createClient } from '@supabase/supabase-js'
-import { Cpu, Wifi, WifiOff, Loader2, RefreshCw, Zap, User, Building2, Target, Clock } from 'lucide-react'
+import { Cpu, Wifi, WifiOff, Loader2, RefreshCw, Zap, User, Building2, Target, Clock, RotateCcw } from 'lucide-react'
 
 // FORMA CORRETA - ALTA PERFORMANCE
 const supabase = createClient(
@@ -41,7 +41,7 @@ function timeAgo(isoStr) {
 }
 
 // ─── CHIP CARD ────────────────────────────────────────────────────────────────
-function ChipCard({ instance, dailyCount, statusInfo }) {
+function ChipCard({ instance, dailyCount, statusInfo, onReconnect }) {
     const limit    = instance.daily_limit || 55
     const pct      = Math.min(Math.round(dailyCount / limit * 100), 100)
     const isMaxed  = pct >= 100
@@ -115,6 +115,30 @@ function ChipCard({ instance, dailyCount, statusInfo }) {
                     </span>
                 </div>
             </div>
+
+            {/* ── Botão reconectar (só aparece quando offline) ── */}
+            {statusInfo.icon === 'off' && onReconnect && (
+                <button
+                    onClick={() => onReconnect(instance.id)}
+                    style={{
+                        display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 6,
+                        width: '100%', padding: '7px 0',
+                        background: 'rgba(245,158,11,0.08)',
+                        border: '1px solid rgba(245,158,11,0.25)',
+                        borderRadius: '0.6rem',
+                        cursor: 'pointer',
+                        color: '#F59E0B',
+                        fontSize: 10, fontWeight: 900,
+                        textTransform: 'uppercase', letterSpacing: '0.12em',
+                        transition: 'background 0.2s',
+                    }}
+                    onMouseEnter={e => e.currentTarget.style.background = 'rgba(245,158,11,0.15)'}
+                    onMouseLeave={e => e.currentTarget.style.background = 'rgba(245,158,11,0.08)'}
+                >
+                    <RotateCcw size={10} />
+                    Reconectar
+                </button>
+            )}
 
             {/* ── Agente e empresa ── */}
             <div style={{ display: 'flex', gap: 10 }}>
@@ -254,13 +278,11 @@ export default function ChipStatus({ instances = [], socket }) {
                     next.delete(instanceId)
                     return next
                 })
-                // Refaz contagem após conexão
                 fetchDailyCounts()
             }
         }
 
         const onQr = ({ instanceId }) => {
-            // QR sendo exibido = chip está conectando
             setConnectingSet(prev => new Set(prev).add(instanceId))
         }
 
@@ -271,6 +293,12 @@ export default function ChipStatus({ instances = [], socket }) {
             socket.off('qr_code',         onQr)
         }
     }, [socket, fetchDailyCounts])
+
+    const handleReconnect = useCallback((instanceId) => {
+        if (!socket) return
+        setConnectingSet(prev => new Set(prev).add(instanceId))
+        socket.emit('reconnect_instance', instanceId)
+    }, [socket])
 
     // ── Sumários globais ──────────────────────────────────────────────────────
     const totalConectados = instances.filter(i => i.whatsapp_status === 'CONNECTED').length
@@ -347,6 +375,7 @@ export default function ChipStatus({ instances = [], socket }) {
                             instance={inst}
                             dailyCount={dailyCounts[inst.id] ?? 0}
                             statusInfo={resolveStatus(inst, connectingSet)}
+                            onReconnect={handleReconnect}
                         />
                     ))}
                 </div>

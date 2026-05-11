@@ -2007,6 +2007,7 @@ const mensagensSplit = [balaoUnico]; // ← BALÃO ÚNICO (era [balao1, balao2])
     } finally {
         // 🔓 SEMPRE solta a trava quando a função termina (seja por break ou erro fatal)
         motoresEmExecucao.delete(instanceId);
+        controleFadiga.delete(instanceId); // Reseta o timer para o próximo ciclo começar do zero
     }
 }
 
@@ -2648,6 +2649,55 @@ workerIA.on('error', err => console.error('❌ [REDIS WORKER ERROR]:', err));
 
 let loopIniciado = false;
 
+// ============================================================================
+// ♻️ REDISTRIBUIÇÃO DE LEADS ÓRFÃOS
+// Roda a cada varredura do VIGIA. Move leads 'new' de chips desconectados
+// para chips conectados via round-robin. Não toca em leads 'contact'.
+// ============================================================================
+async function redistribuirLeadsOrfaos() {
+    try {
+        const { data: instancias } = await supabase
+            .from('instances')
+            .select('id, name, whatsapp_status');
+        if (!instancias?.length) return;
+
+        const conectados = instancias.filter(i => i.whatsapp_status === 'CONNECTED');
+        if (!conectados.length) return;
+
+        const idsDesconectados = instancias
+            .filter(i => i.whatsapp_status !== 'CONNECTED')
+            .map(i => i.id);
+        if (!idsDesconectados.length) return;
+
+        const { data: orfaos } = await supabase
+            .from('leads')
+            .select('id')
+            .eq('status', 'new')
+            .in('instance_id', idsDesconectados);
+
+        if (!orfaos?.length) return;
+
+        console.log(`♻️ [REDISTRIBUIÇÃO] ${orfaos.length} leads órfãos detectados. Distribuindo entre ${conectados.length} chips conectados...`);
+
+        let counter = 0;
+        const chipsAcordados = new Set();
+        for (const lead of orfaos) {
+            const chip = conectados[counter % conectados.length];
+            counter++;
+            await supabase.from('leads').update({ instance_id: chip.id }).eq('id', lead.id);
+            chipsAcordados.add(chip.id);
+        }
+
+        console.log(`✅ [REDISTRIBUIÇÃO] ${orfaos.length} leads redistribuídos com sucesso.`);
+
+        for (const chipId of chipsAcordados) {
+            sdrEvents?.emit('NOVO_LEAD_DISPONIVEL', chipId);
+        }
+    } catch (err) {
+        console.error('❌ [REDISTRIBUIÇÃO] Erro:', err.message);
+    }
+}
+
 module.exports = {
     // 👇 Recebe a porta de comunicação (io) e o Alarme (sdrEvents)
     initMultiTenancy: async (io, sdrEvents) => {
@@ -2693,8 +2743,9 @@ module.exports = {
             loopAuditor();
             
             // ⏰ VIGIA NOTURNO: Varredura de segurança a cada 30 minutos
-            setInterval(() => {
+            setInterval(async () => {
                 console.log("⏰ [VIGIA] Varredura de segurança ativada...");
+                await redistribuirLeadsOrfaos();
                 for (const id of sessions.keys()) {
                     processarFilaDeAtaque(id);
                 }
@@ -2804,12 +2855,28 @@ enviarAlerta("🎊 REUNIÃO AGENDADA!", `Lead: ${lead.name}\nData: ${new Date(da
     },
     criarNovaInstancia: async (n, t, userId) => {
         const { data } = await supabase.from('instances').insert([{ name: n, owner_phone: t, user_id: userId }]).select().single();
-    
+
         if (data) {
-            await startInstance(data.id, data.name); 
-            // 👇 MELHORIA: Dá o arranque imediato assim que um chip novo é criado no painel
+            await startInstance(data.id, data.name);
             processarFilaDeAtaque(data.id);
         }
-        return data; 
+        return data;
+    },
+
+    reconectarInstancia: async (instanceId) => {
+        // Limpa estado antigo para permitir nova tentativa sem destruir sessão do Redis
+        instanciasLigando.delete(instanceId);
+        instanciasEncerrandoManualmente.delete(instanceId);
+
+        const instanciaAtual = sessions.get(instanceId);
+        if (instanciaAtual?.sock) {
+            try { instanciaAtual.sock.end(); } catch(e) {}
+        }
+
+        const instanceData = await getRegrasEmCache(instanceId);
+        const name = instanceData?.name || instanceId;
+
+        console.log(`🔄 [RECONEXÃO MANUAL] Tentando reconectar chip ${name}...`);
+        await startInstance(instanceId, name);
     }
 };

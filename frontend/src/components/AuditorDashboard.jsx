@@ -76,19 +76,22 @@ export default function AuditorDashboard() {
                 .select('id, name, niche, created_at, audit_report, current_stage')
                 .eq('is_audited', true)
                 .not('audit_report', 'is', null)
-                .neq('audit_report', 'Sem interação suficiente.')
                 .order('created_at', { ascending: false })
-                .limit(500)
+                .limit(1000)
 
             if (data) {
-                // Parse audit_report que pode vir como string JSON ou objeto
                 const parsed = data.map(l => {
                     let report = l.audit_report
+                    // audit_report pode vir como string JSON, objeto JSONB, ou string simples
                     if (typeof report === 'string') {
-                        try { report = JSON.parse(report) } catch { report = null }
+                        if (report.startsWith('{')) {
+                            try { report = JSON.parse(report) } catch { report = null }
+                        } else {
+                            report = null // string simples como "Sem interação suficiente."
+                        }
                     }
                     return { ...l, report }
-                }).filter(l => l.report && l.report.desfecho)
+                }).filter(l => l.report && typeof l.report === 'object' && l.report.desfecho)
 
                 setLeads(parsed)
                 setLastSync(new Date())
@@ -100,7 +103,11 @@ export default function AuditorDashboard() {
         }
     }
 
-    useEffect(() => { fetchData() }, [])
+    useEffect(() => {
+        fetchData()
+        const interval = setInterval(fetchData, 120000) // auto-refresh a cada 2 min
+        return () => clearInterval(interval)
+    }, [])
 
     const metrics = useMemo(() => {
         if (!leads.length) return null

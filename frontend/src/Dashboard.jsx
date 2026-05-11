@@ -179,18 +179,21 @@ const carregarDados = useCallback(async () => {
                 supabase
                     .from('leads')
                     .select('id, status, created_at, instance_id, is_paused, manual_pause, last_contact_at, current_stage, lead_temperature, followup_count, calendly_booked, whatsapp_id')
+                    .order('last_contact_at', { ascending: false, nullsFirst: false }) // leads mais recentes primeiro
                     .limit(50000),
                 supabase
                     .from('messages')
                     .select('role, content, created_at, whatsapp_id')
                     .gte('created_at', trintaDiasAtras)
-                    .order('created_at', { ascending: false }) // 🎯 FALTAVA ISSO: Garante que as mensagens recentes venham primeiro
+                    .order('created_at', { ascending: false })
                     .limit(50000),
                 supabase.from('instances').select('id, name, whatsapp_status, daily_limit'),
             ])
 
-            const agora = new Date()
-            const hoje = new Date(agora.getFullYear(), agora.getMonth(), agora.getDate())
+            // BRT = UTC-3 → meia-noite BRT = 03:00 UTC
+            // Usar UTC puro para comparar com os timestamps do banco (que são UTC)
+            const todayBRT = new Date(Date.now() - 3 * 3600000).toISOString().slice(0, 10)
+            const hoje = new Date(todayBRT + 'T03:00:00Z') // meia-noite BRT em UTC
             const diasAtras = (n) => new Date(hoje.getTime() - n * 86400000)
 
             // 🎯 MAPA DE LEAD: lead.id → lead.whatsapp_id (pra cruzar com mensagens corretamente)
@@ -395,9 +398,9 @@ const carregarDados = useCallback(async () => {
 
     useEffect(() => { carregarDados() }, [carregarDados])
 
-    // Auto-refresh a cada 2 minutos
+    // Auto-refresh a cada 60 segundos
     useEffect(() => {
-        const timer = setInterval(carregarDados, 120000)
+        const timer = setInterval(carregarDados, 60000)
         return () => clearInterval(timer)
     }, [carregarDados])
 
@@ -427,7 +430,7 @@ const carregarDados = useCallback(async () => {
 
                     {ultimaAtualizacao && (
                         <p className="text-[10px] text-slate-500 font-bold uppercase tracking-widest mt-1">
-                            Atualizado às {ultimaAtualizacao.toLocaleTimeString('pt-BR', { hour: '2-digit', minute: '2-digit' })}
+                            Atualizado às {ultimaAtualizacao.toLocaleTimeString('pt-BR', { hour: '2-digit', minute: '2-digit', second: '2-digit' })} · atualiza a cada 60s
                         </p>
                     )}
                 </div>

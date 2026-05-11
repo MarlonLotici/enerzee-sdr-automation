@@ -128,6 +128,11 @@ io.on('connection', (socket) => {
         console.log(`🗑️ Chip ${instanceId} removido e sessão encerrada.`);
     });
 
+    socket.on('reconnect_instance', async (instanceId) => {
+        await sdr.reconectarInstancia(instanceId);
+        await atualizarListaInstancias();
+    });
+
     // 👇 O listener que responde à pergunta do Front-end quando a página reabre 👇
     socket.on('check_scraper_status', () => {
         socket.emit('scraper_status', { 
@@ -139,11 +144,12 @@ io.on('connection', (socket) => {
     socket.on('start_scraping', async (params) => {
         shouldStop = false;
         
-        const activeChips = await db.getActiveInstances();
-        let chipCounter = 0; 
+        const allChips = await db.getActiveInstances();
+        const activeChips = allChips.filter(c => c.whatsapp_status === 'CONNECTED');
+        let chipCounter = 0;
 
         if (activeChips.length === 0) {
-            return socket.emit('notification', '❌ Erro: Nenhum chip ativo encontrado para distribuir os leads.');
+            return socket.emit('notification', '❌ Erro: Nenhum chip CONECTADO encontrado. Verifique o status dos chips antes de raspar.');
         }
 
         if (!params.niche || (Array.isArray(params.niche) && params.niche.length === 0)) {
