@@ -3,13 +3,8 @@ import {
     BarChart, Bar, PieChart, Pie, Cell,
     XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer,
 } from 'recharts'
-import { createClient } from '@supabase/supabase-js'
+import { supabase } from '@/lib/supabase'
 import { RefreshCw, Star, AlertTriangle, CheckCircle, XCircle, TrendingUp, FileText } from 'lucide-react'
-
-const supabase = createClient(
-    import.meta.env.VITE_SUPABASE_URL,
-    import.meta.env.VITE_SUPABASE_ANON_KEY
-)
 
 const CORES = {
     verde:    '#10B981',

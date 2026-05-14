@@ -1,5 +1,5 @@
 import React, { useState, useEffect } from 'react'
-import { createClient } from '@supabase/supabase-js'
+import { supabase } from '@/lib/supabase'
 import { Button } from "@/components/ui/button"
 import { Input } from "@/components/ui/input"
 import { Label } from "@/components/ui/label"
@@ -8,11 +8,6 @@ import {
     Brain, Shield, ChevronRight, ChevronLeft, Check,
     Loader2, Zap, Send, FileText
 } from 'lucide-react'
-
-const supabase = createClient(
-    import.meta.env.VITE_SUPABASE_URL,
-    import.meta.env.VITE_SUPABASE_ANON_KEY
-)
 
 // Steps do formulário
 const STEPS = [

@@ -1,6 +1,6 @@
 import React, { useState, useEffect, useCallback, useRef } from 'react'
 import { createPortal } from 'react-dom'
-import { createClient } from '@supabase/supabase-js'
+import { supabase } from '@/lib/supabase'
 import {
     AreaChart, Area, BarChart, Bar, PieChart, Pie, Cell,
     XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer, Legend
@@ -11,12 +11,6 @@ import {
     Wifi, WifiOff, PauseCircle, CheckCircle2, XCircle,
     BarChart2, Activity, AlertTriangle
 } from 'lucide-react'
-
-// FORMA CORRETA - ALTA PERFORMANCE
-const supabase = createClient(
-    import.meta.env.VITE_SUPABASE_URL, 
-    import.meta.env.VITE_SUPABASE_ANON_KEY
-)
 
 // ============================================================
 // PALETA DE CORES

@@ -1,13 +1,6 @@
 import React, { useState, useEffect, useCallback } from 'react'
-import { createClient } from '@supabase/supabase-js'
+import { supabase } from '@/lib/supabase'
 import { Search, BrainCircuit, Clock, RefreshCw, Cpu } from 'lucide-react'
-
-
-// FORMA CORRETA - ALTA PERFORMANCE
-const supabase = createClient(
-    import.meta.env.VITE_SUPABASE_URL, 
-    import.meta.env.VITE_SUPABASE_ANON_KEY
-)
 
 // ─── HELPERS ──────────────────────────────────────────────────────────────────
 function timeAgo(isoStr) {

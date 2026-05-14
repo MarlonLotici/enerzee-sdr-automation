@@ -8,7 +8,12 @@
       "Bash(node --check 4_sdr.js)",
       "Bash(node --check agents/routerAgent.js)",
       "Bash(node --check agents/closerAgent.js)",
-      "Bash(node --check database.js)"
+      "Bash(node --check database.js)",
+      "Bash(Get-ChildItem -Path \"c:\\\\dev\\\\enerzee-sdr-automation\\\\frontend\\\\src\" -Recurse)",
+      "Bash(Select-Object FullName)",
+      "Bash(Sort-Object FullName)",
+      "Bash(npm install *)",
+      "Bash(npm list *)"
     ]
   }
 }

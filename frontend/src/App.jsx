@@ -1,4 +1,5 @@
 import React, { useState, useEffect, useRef, useMemo } from 'react'
+import * as XLSX from 'xlsx'
 // --- IMPORTAÇÕES DE UI ---
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs"
 import { Button } from "@/components/ui/button"
@@ -15,10 +16,10 @@ import Dashboard from "./Dashboard"
 import AuditorDashboard from "./components/AuditorDashboard"
 // --- ÍCONES (FULL SET 2026) ---
 import { 
-    Rocket, MapPin, LayoutDashboard, MessageSquare, Phone, Play, LocateFixed, Send, 
-    BrainCircuit, Search, Download, X, CheckSquare, Square, Users, StopCircle, 
-    Map as MapIcon, Loader2, Edit2, Trash2, Crosshair, Zap, Star, ShieldCheck, FileText, 
-    DollarSign, Briefcase, Building2, ArrowRight, ShieldAlert, Trash, Check, BarChart2, Flame, Cpu, Radio, Settings, LogOut, Menu 
+    Rocket, MapPin, LayoutDashboard, MessageSquare, Phone, Play, LocateFixed, Send,
+    BrainCircuit, Search, Download, X, CheckSquare, Square, Users, StopCircle,
+    Map as MapIcon, Loader2, Edit2, Trash2, Crosshair, Zap, Star, ShieldCheck, FileText,
+    DollarSign, Briefcase, Building2, ArrowRight, ShieldAlert, Trash, Check, BarChart2, Flame, Cpu, Radio, Settings, LogOut, Menu, ChevronDown
 } from 'lucide-react'
 
 // --- MAPAS E SOCKET ---
@@ -46,14 +47,7 @@ const playNotificationSound = () => {
 
 // --- Componentes Mapa ---
 
-import { createClient } from '@supabase/supabase-js'
-
-// --- CONFIGURAÇÃO ---
-// LINHA 62 CORRIGIDA:
-const supabase = createClient(
-    import.meta.env.VITE_SUPABASE_URL, 
-    import.meta.env.VITE_SUPABASE_ANON_KEY
-)
+import { supabase } from '@/lib/supabase'
     // --- COMPONENTES AUXILIARES DO MAPA --- //mudança
 function MapController({ center }) {
     const map = useMap();
@@ -213,6 +207,7 @@ const [botLogs, setBotLogs] = useState([]);
     const [citySuggestions, setCitySuggestions] = useState([]);
     const [showNotes, setShowNotes] = useState(false);
     const [notesContent, setNotesContent] = useState(() => localStorage.getItem('radar_notes') ?? '');
+    const [showExportMenu, setShowExportMenu] = useState(false);
 
     // --- PERFORMANCE: FILTRO MEMOIZADO ---
     const filteredLeads = useMemo(() => {
@@ -482,6 +477,33 @@ if (session?.user?.id) checkBriefing()
         setSelectedLeadIds(n);
     };
 
+    const exportLeadsExcel = (limit) => {
+        const data = limit ? leads.slice(0, limit) : leads;
+        if (data.length === 0) return alert('Nenhum lead para exportar');
+        const rows = data.map(l => ({
+            'Nome': l.name || '',
+            'Telefone': l.phone || '',
+            'CNPJ': l.cnpj || '',
+            'Sócio/Dono': l.dono || '',
+            'Nicho': l.niche || '',
+            'Bairro': l.bairro || '',
+            'CEP': l.cep || '',
+            'Status': l.status || '',
+            'Temperatura': l.lead_temperature || '',
+            'Estágio SPIN': String(l.current_stage || 0),
+            'Porte': l.porte || '',
+            'Capital Social': l.capital_social_numeric || '',
+            'Criado em': l.created_at ? new Date(l.created_at).toLocaleDateString('pt-BR') : '',
+            'Último contato': l.last_contact_at ? new Date(l.last_contact_at).toLocaleDateString('pt-BR') : '',
+        }));
+        const ws = XLSX.utils.json_to_sheet(rows);
+        const wb = XLSX.utils.book_new();
+        XLSX.utils.book_append_sheet(wb, ws, 'Leads');
+        const filename = `leads_${new Date().toLocaleDateString('pt-BR').replace(/\//g, '-')}.xlsx`;
+        XLSX.writeFile(wb, filename);
+        setShowExportMenu(false);
+    };
+
     const handleClearLeads = () => {
         if(confirm("Deseja limpar todos os leads da base visual?")) {
             setLeads([]);
@@ -715,24 +737,32 @@ return (
                        <Input placeholder="Buscar por Nome, Sócio, CNPJ ou Celular..." className="bg-transparent border-none pl-12 text-white h-11 focus:ring-0 font-bold text-sm" value={filterText} onChange={e => setFilterText(e.target.value)} />
     </div>
     <div className="flex gap-3">
-        <Button onClick={() => {
-    if (filteredLeads.length === 0) return alert('Nenhum lead para exportar')
-    const header = ['Nome','Telefone','CNPJ','Nicho','Dono','Bairro','Status','Temperatura','Estagio']
-    const rows = filteredLeads.map(function(l) {
-        return [l.name||'', l.phone||'', l.cnpj||'', l.niche||'', l.dono||'', l.bairro||'', l.status||'', l.lead_temperature||'', String(l.current_stage||0)]
-    })
-    const lines = [header].concat(rows)
-    const csvText = lines.map(function(row) {
-        return row.map(function(cell) { return '"' + cell.replace(/"/g, '""') + '"' }).join(',')
-    }).join('\n')
-    var blob = new Blob(['\ufeff' + csvText], { type: 'text/csv;charset=utf-8' })
-    var link = document.createElement('a')
-    link.href = URL.createObjectURL(blob)
-    link.download = 'leads_antix.csv'
-    link.click()
-}} className="glass-card hover:bg-white/10 text-white h-9 px-5 rounded-lg font-black text-[10px] tracking-widest uppercase border-white/10">
-    <Download className="mr-2 h-4 w-4 text-amber-400" /> Exportar
-</Button>
+        <div className="relative">
+            <div className="flex">
+                <Button onClick={() => exportLeadsExcel(null)} className="glass-card hover:bg-white/10 text-white h-9 px-4 rounded-l-lg rounded-r-none font-black text-[10px] tracking-widest uppercase border-white/10 border-r-0">
+                    <Download className="mr-2 h-4 w-4 text-amber-400" /> Excel
+                </Button>
+                <Button onClick={() => setShowExportMenu(v => !v)} className="glass-card hover:bg-white/10 text-white h-9 px-2 rounded-l-none rounded-r-lg font-black text-[10px] border-white/10">
+                    <ChevronDown className="h-3.5 w-3.5 text-amber-400" />
+                </Button>
+            </div>
+            {showExportMenu && (
+                <>
+                    <div className="fixed inset-0 z-40" onClick={() => setShowExportMenu(false)} />
+                    <div className="absolute right-0 top-10 z-50 bg-[#1a1a1a] border border-white/10 rounded-lg shadow-2xl overflow-hidden w-48">
+                        {[200, 500, 1000, 5000].map(n => (
+                            <button key={n} onClick={() => exportLeadsExcel(n)} className="w-full px-4 py-2.5 text-left text-xs text-white hover:bg-white/10 transition-colors">
+                                \u00daltimos {n.toLocaleString('pt-BR')}
+                            </button>
+                        ))}
+                        <div className="border-t border-white/10" />
+                        <button onClick={() => exportLeadsExcel(null)} className="w-full px-4 py-2.5 text-left text-xs text-amber-400 font-bold hover:bg-white/10 transition-colors">
+                            Todos ({leads.length.toLocaleString('pt-BR')})
+                        </button>
+                    </div>
+                </>
+            )}
+        </div>
 
         <Button onClick={handleClearLeads} className="h-9 px-4 rounded-lg font-black text-[10px] text-red-500 hover:bg-red-500/10 glass-card border-transparent">
             <Trash2 className="mr-2 h-3.5 w-3.5" /> Limpar

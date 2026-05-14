@@ -5,18 +5,13 @@ import {
     PieChart, Pie, Cell,
     XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer,
 } from 'recharts'
-import { createClient } from '@supabase/supabase-js'
+import { supabase } from '@/lib/supabase'
 import {
     TrendingUp, TrendingDown, Zap, Users, Target,
     Activity, Flame, RefreshCw, Cpu, MapPin,
 } from 'lucide-react'
 
 
-// FORMA CORRETA - ALTA PERFORMANCE
-const supabase = createClient(
-    import.meta.env.VITE_SUPABASE_URL, 
-    import.meta.env.VITE_SUPABASE_ANON_KEY
-)
 
 // ─── PALETA ───────────────────────────────────────────────────────────────────
 const NEON = {

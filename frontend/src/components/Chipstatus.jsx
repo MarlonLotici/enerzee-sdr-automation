@@ -1,12 +1,6 @@
 import React, { useState, useEffect, useCallback } from 'react'
-import { createClient } from '@supabase/supabase-js'
+import { supabase } from '@/lib/supabase'
 import { Cpu, Wifi, WifiOff, Loader2, RefreshCw, Zap, User, Building2, Target, Clock, RotateCcw } from 'lucide-react'
-
-// FORMA CORRETA - ALTA PERFORMANCE
-const supabase = createClient(
-    import.meta.env.VITE_SUPABASE_URL, 
-    import.meta.env.VITE_SUPABASE_ANON_KEY
-)
 
 // ─── PALETA ───────────────────────────────────────────────────────────────────
 const C = {
