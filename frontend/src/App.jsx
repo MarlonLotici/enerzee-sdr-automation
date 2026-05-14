@@ -1,5 +1,4 @@
 import React, { useState, useEffect, useRef, useMemo } from 'react'
-import * as XLSX from 'xlsx'
 // --- IMPORTAÇÕES DE UI ---
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs"
 import { Button } from "@/components/ui/button"
@@ -477,7 +476,8 @@ if (session?.user?.id) checkBriefing()
         setSelectedLeadIds(n);
     };
 
-    const exportLeadsExcel = (limit) => {
+    const exportLeadsExcel = async (limit) => {
+        const XLSX = await import('xlsx');
         const data = limit ? leads.slice(0, limit) : leads;
         if (data.length === 0) return alert('Nenhum lead para exportar');
         const rows = data.map(l => ({
