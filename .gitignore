@@ -60,6 +60,7 @@ node_modules/
 node_modules/
 .env
 wpp_sessions/
+wpp_simulador/
 .wwebjs_auth/
 temp_audio_*
 *.ogg
