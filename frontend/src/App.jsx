@@ -208,9 +208,11 @@ const [botLogs, setBotLogs] = useState([]);
     const [selectedNiche, setSelectedNiche] = useState(null);
     const [locationName, setLocationName] = useState("");
     const [searchRadius, setSearchRadius] = useState(2);
-    const [mapCenter, setMapCenter] = useState([-27.5969, -48.5495]); 
+    const [mapCenter, setMapCenter] = useState([-27.5969, -48.5495]);
     const [isSearchingCity, setIsSearchingCity] = useState(false);
     const [citySuggestions, setCitySuggestions] = useState([]);
+    const [showNotes, setShowNotes] = useState(false);
+    const [notesContent, setNotesContent] = useState(() => localStorage.getItem('radar_notes') ?? '');
 
     // --- PERFORMANCE: FILTRO MEMOIZADO ---
     const filteredLeads = useMemo(() => {
@@ -800,6 +802,19 @@ return (
                                 <input type="range" min="1" max="50" value={searchRadius} onChange={(e) => setSearchRadius(e.target.value)} className="w-full h-3 bg-slate-900 rounded-full appearance-none cursor-pointer accent-amber-500 border border-white/5 shadow-inner" />
                             </div>
                           <Button onClick={startScraping} className="w-full h-20 bg-amber-600 hover:bg-amber-500 text-black font-black text-2xl rounded-3xl mt-10 transition-transform active:scale-95 uppercase tracking-tighter italic" style={{boxShadow:'0 0 24px rgba(245,158,11,0.3)'}}>Ativar Radar Neural <ArrowRight className="ml-3 h-8 w-8"/></Button>
+
+                          <button
+                              onClick={() => setShowNotes(true)}
+                              className="w-full flex items-center gap-3 px-5 py-3 rounded-2xl border border-white/10 bg-white/[0.02] hover:bg-white/[0.06] transition-all text-left"
+                          >
+                              <FileText className="h-4 w-4 text-amber-400 flex-shrink-0" />
+                              <div className="flex-1 min-w-0">
+                                  <p className="text-[10px] font-black text-amber-300 uppercase tracking-[0.25em]">Bloco de Notas</p>
+                                  <p className="text-[9px] text-slate-500 font-bold truncate mt-0.5">
+                                      {notesContent.trim() ? notesContent.trim().split('\n')[0].slice(0, 38) + (notesContent.trim().split('\n')[0].length > 38 ? '…' : '') : 'Cidades, nichos, anotações...'}
+                                  </p>
+                              </div>
+                          </button>
                         </div>
 
                               <div className="flex-1 relative">
@@ -1286,7 +1301,58 @@ return (
                 </DialogContent>
             </Dialog>
 
-            
+
+{/* --- BLOCO DE NOTAS --- */}
+<Dialog open={showNotes} onOpenChange={setShowNotes}>
+    <DialogContent className="border-white/10 text-white max-w-2xl w-full rounded-[2rem] p-0 overflow-hidden bg-[#0d0d0d] shadow-2xl">
+        <div className="flex flex-col h-[75vh]">
+            {/* Header */}
+            <div className="flex items-center justify-between px-6 py-4 border-b border-white/[0.06]">
+                <div className="flex items-center gap-3">
+                    <div className="p-2 rounded-xl" style={{ background: 'rgba(245,158,11,0.1)', border: '1px solid rgba(245,158,11,0.2)' }}>
+                        <FileText className="h-4 w-4 text-amber-400" />
+                    </div>
+                    <div>
+                        <p className="text-xs font-black text-white uppercase tracking-[0.25em]">Bloco de Notas</p>
+                        <p className="text-[9px] text-slate-600 font-bold">Auto-salvo · {notesContent.length} caracteres</p>
+                    </div>
+                </div>
+                <div className="flex items-center gap-2">
+                    <button
+                        onClick={() => { if (confirm('Limpar tudo?')) { setNotesContent(''); localStorage.setItem('radar_notes', ''); } }}
+                        className="text-[9px] font-black uppercase tracking-widest text-slate-600 hover:text-red-400 transition-colors px-3 py-1.5 rounded-lg hover:bg-red-500/10"
+                    >Limpar</button>
+                </div>
+            </div>
+
+            {/* Quick-insert chips */}
+            <div className="flex gap-2 px-6 py-3 border-b border-white/[0.04] flex-wrap">
+                {['📍 Cidade: ', '🎯 Nicho: ', '✅ Feito: ', '❌ Evitar: ', '📝 Obs: '].map(tag => (
+                    <button
+                        key={tag}
+                        onClick={() => {
+                            const newVal = notesContent + (notesContent && !notesContent.endsWith('\n') ? '\n' : '') + tag;
+                            setNotesContent(newVal);
+                            localStorage.setItem('radar_notes', newVal);
+                        }}
+                        className="text-[9px] font-black px-2.5 py-1 rounded-full border border-white/10 text-slate-400 hover:border-amber-500/40 hover:text-amber-400 transition-all bg-white/[0.02] hover:bg-amber-500/10"
+                    >{tag.trim()}</button>
+                ))}
+            </div>
+
+            {/* Textarea */}
+            <textarea
+                value={notesContent}
+                onChange={e => { setNotesContent(e.target.value); localStorage.setItem('radar_notes', e.target.value); }}
+                placeholder={"📍 Cidade: Fortaleza CE\n🎯 Nicho: Padarias\n✅ Feito: Centro, Aldeota\n❌ Evitar: Messejana (saturado)\n📝 Obs: Segunda-feira tem mais respostas..."}
+                className="flex-1 resize-none bg-transparent text-sm text-slate-300 font-mono leading-relaxed p-6 focus:outline-none placeholder:text-slate-700"
+                autoFocus
+                spellCheck={false}
+            />
+        </div>
+    </DialogContent>
+</Dialog>
+
           {/* --- MODAL DETALHES GIGANTE: O DOSSIÊ DE INTELIGÊNCIA --- */}
 {/* --- MODAL DETALHES GIGANTE: O DOSSIÊ DE INTELIGÊNCIA --- */}
 <Dialog open={!!viewingLeadDetail} onOpenChange={() => setViewingLeadDetail(null)}>

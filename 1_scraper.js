@@ -24,6 +24,11 @@ const SINONIMOS = {
     'farmacia': ['drogaria', 'farmácia de manipulação'],
     'beleza': ['salão de beleza', 'barbearia', 'estúdio de beleza'],
     
+    // 🏗️ CONSTRUÇÃO CIVIL E IMOBILIÁRIO (Ticket Alto e Escritórios)
+    'construtora': ['construtora', 'incorporadora', 'engenharia civil', 'empreendimentos imobiliários'],
+    'imobiliaria': ['imobiliária', 'negócios imobiliários', 'corretora de imóveis'],
+
+
     // 🏭 INFRAESTRUTURA
     'oficina': ['oficina mecânica', 'auto center', 'funilaria e pintura'],
     'posto': ['posto de combustível', 'posto de gasolina'],
