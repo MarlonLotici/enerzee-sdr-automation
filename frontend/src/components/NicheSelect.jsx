@@ -35,7 +35,9 @@ const NICHE_DATA = [
   { value: "posto", label: "Postos de Combustível", keywords: "posto" },
   { value: "academia", label: "Academias & Crossfit", keywords: "academia" },
   { value: "hotel", label: "Hotéis & Pousadas", keywords: "hotel" },
-  { value: "industria", label: "Indústrias & Fábricas", keywords: "industria" }
+  { value: "industria", label: "Indústrias & Fábricas", keywords: "industria" },
+  { value: "imobiliaria", label: "Imobiliárias & Corretoras", keywords: "imobiliaria" },
+  { value: "construtora", label: "Construtoras & Incorporadoras", keywords: "construtora" }
 ]
 
 export default function NicheSelect({ onNicheSelect }) {
