@@ -910,9 +910,13 @@ async function startInstance(instanceId, instanceName) {
     const sock = makeWASocket({
         version,
         auth: { creds: state.creds, keys: makeCacheableSignalKeyStore(state.keys, pino({ level: 'silent' })) },
-        printQRInTerminal: false, // QR vai pro dashboard
+        printQRInTerminal: false,
         logger: pino({ level: 'silent' }),
-        browser: ["Enerzee SDR", "Chrome", "1.0"]
+        browser: ["Enerzee SDR", "Chrome", "1.0"],
+        keepAliveIntervalMs: 30000,   // ping a cada 30s — evita socket morrer no descanso de 40min
+        connectTimeoutMs: 60000,      // desiste da conexão em 60s se não responder
+        markOnlineOnConnect: false,   // não anuncia presença — menos suspeito pro WhatsApp
+        retryRequestDelayMs: 2000,    // aguarda 2s antes de reenviar requisições falhas
     });
 
     // Guardamos o socket com uma flag 'ready' falsa inicialmente
@@ -983,9 +987,20 @@ process.on('unhandledRejection', (reason) => {
         return;
     }
 
-    // Demais casos → reconecta
-    console.log(`🔄 [SDR] Conexão instável em ${instanceName} (reason: ${reason}). Reiniciando em 5s...`);
-    setTimeout(() => startInstance(instanceId, instanceName), 5000);
+    // Timeout de conexão → reconecta com backoff
+    if (reason === DisconnectReason.timedOut || reason === DisconnectReason.connectionLost) {
+        const delay = Math.min(5000 * (2 ** (instanciasLigando.size || 1)), 60000); // backoff: 10s → 20s → 40s → 60s (max)
+        console.log(`⏱️ [TIMEOUT] ${instanceName} perdeu conexão. Reconectando em ${delay/1000}s...`);
+        await db.updateInstanceStatus(instanceId, 'DISCONNECTED');
+        setTimeout(() => startInstance(instanceId, instanceName), delay);
+        return;
+    }
+
+    // Demais casos → reconecta com backoff leve
+    const delayMs = reason === undefined ? 15000 : 5000; // reason indefinido = provável ban/rate-limit → espera mais
+    console.log(`🔄 [SDR] Conexão instável em ${instanceName} (reason: ${reason ?? 'desconhecido'}). Reiniciando em ${delayMs/1000}s...`);
+    await db.updateInstanceStatus(instanceId, 'DISCONNECTED');
+    setTimeout(() => startInstance(instanceId, instanceName), delayMs);
 }
     });
     
