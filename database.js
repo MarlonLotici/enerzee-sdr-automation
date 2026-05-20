@@ -92,6 +92,14 @@ const db = {
         const zapId = phonePuro.includes('@') ? phonePuro : `${phonePuro}@s.whatsapp.net`;
 
 
+                // Proteção multi-tenant: impede sobrescrever lead de outro cliente
+        const { data: leadExistente } = await supabase
+            .from('leads').select('user_id').eq('whatsapp_id', zapId).maybeSingle();
+        if (leadExistente?.user_id && leadExistente.user_id !== userId) {
+            console.log();
+            return { error: null };
+        }
+
         let estadoFinal = lead.estado;
 
 // 🕵️ Se o estado estiver vazio, descobre pelo DDD

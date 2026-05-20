@@ -1,6 +1,7 @@
 import React, { useState, useEffect, useCallback } from 'react'
 import { supabase } from '@/lib/supabase'
-import { Cpu, Wifi, WifiOff, Loader2, RefreshCw, Zap, User, Building2, Target, Clock, RotateCcw } from 'lucide-react'
+import { QRCodeSVG } from 'qrcode.react'
+import { Cpu, Wifi, WifiOff, Loader2, RefreshCw, Zap, User, Building2, Target, Clock, RotateCcw, X } from 'lucide-react'
 
 // ─── PALETA ───────────────────────────────────────────────────────────────────
 const C = {
@@ -35,7 +36,7 @@ function timeAgo(isoStr) {
 }
 
 // ─── CHIP CARD ────────────────────────────────────────────────────────────────
-function ChipCard({ instance, dailyCount, statusInfo, onReconnect }) {
+function ChipCard({ instance, dailyCount, statusInfo, onReconnect, qrCode }) {
     const limit    = instance.daily_limit || 55
     const pct      = Math.min(Math.round(dailyCount / limit * 100), 100)
     const isMaxed  = pct >= 100
@@ -110,8 +111,21 @@ function ChipCard({ instance, dailyCount, statusInfo, onReconnect }) {
                 </div>
             </div>
 
-            {/* ── Botão reconectar (só aparece quando offline) ── */}
-            {statusInfo.icon === 'off' && onReconnect && (
+            {/* ── QR Code (aparece quando Baileys emite novo QR) ── */}
+            {qrCode && (
+                <div style={{
+                    display: 'flex', flexDirection: 'column', alignItems: 'center', gap: 10,
+                    background: '#fff', borderRadius: '0.75rem', padding: '16px',
+                }}>
+                    <QRCodeSVG value={qrCode} size={180} />
+                    <p style={{ fontSize: 10, fontWeight: 900, color: '#111', textAlign: 'center', letterSpacing: '0.05em' }}>
+                        Abra o WhatsApp → Aparelhos conectados → Conectar aparelho
+                    </p>
+                </div>
+            )}
+
+            {/* ── Botão reconectar (só aparece quando offline e sem QR pendente) ── */}
+            {statusInfo.icon === 'off' && onReconnect && !qrCode && (
                 <button
                     onClick={() => onReconnect(instance.id)}
                     style={{
@@ -215,11 +229,11 @@ function ChipCard({ instance, dailyCount, statusInfo, onReconnect }) {
  *   socket    — instância do socket.io já conectada
  */
 export default function ChipStatus({ instances = [], socket }) {
-    // dailyCounts: { [instanceId]: number }
     const [dailyCounts,   setDailyCounts]   = useState({})
     const [connectingSet, setConnectingSet] = useState(new Set())
     const [loading,       setLoading]       = useState(true)
     const [lastSync,      setLastSync]      = useState(null)
+    const [qrMap,         setQrMap]         = useState({}) // instanceId → qr string
 
     // Busca contagem diária de disparos por chip direto no Supabase
     // Replica getDailyContactCount do database.js:
@@ -272,12 +286,19 @@ export default function ChipStatus({ instances = [], socket }) {
                     next.delete(instanceId)
                     return next
                 })
+                // Remove QR do mapa — chip conectou, não precisa mais exibir
+                setQrMap(prev => {
+                    const next = { ...prev }
+                    delete next[instanceId]
+                    return next
+                })
                 fetchDailyCounts()
             }
         }
 
-        const onQr = ({ instanceId }) => {
+        const onQr = ({ instanceId, qr }) => {
             setConnectingSet(prev => new Set(prev).add(instanceId))
+            if (qr) setQrMap(prev => ({ ...prev, [instanceId]: qr }))
         }
 
         socket.on('whatsapp_status', onStatus)
@@ -378,6 +399,7 @@ export default function ChipStatus({ instances = [], socket }) {
                             dailyCount={dailyCounts[inst.id] ?? 0}
                             statusInfo={resolveStatus(inst, connectingSet)}
                             onReconnect={handleReconnect}
+                            qrCode={qrMap[inst.id] || null}
                         />
                     ))}
                 </div>

@@ -207,6 +207,49 @@ function ConversaCard({ lead, ultimaMsg, isActive, onClick, onUpdate }) {
 )}
             </div>
 
+            {/* Timeline de follow-up + indicadores de progresso */}
+            <div style={{ display: 'flex', alignItems: 'center', gap: 6, marginTop: 5, flexWrap: 'wrap' }}>
+                {/* D0 → D1 → D3 */}
+                {[
+                    { label: 'D0', done: true },
+                    { label: 'D1', done: (lead.followup_count || 0) >= 1 },
+                    { label: 'D3', done: (lead.followup_count || 0) >= 2 },
+                ].map((step, i) => (
+                    <div key={step.label} style={{ display: 'flex', alignItems: 'center', gap: 3 }}>
+                        {i > 0 && <div style={{ width: 10, height: 1, background: 'rgba(255,255,255,0.1)' }} />}
+                        <span style={{
+                            fontSize: 7, fontWeight: 900,
+                            padding: '1px 5px', borderRadius: 4,
+                            background: step.done ? 'rgba(16,185,129,0.15)' : 'rgba(255,255,255,0.05)',
+                            color: step.done ? '#10b981' : 'rgba(255,255,255,0.2)',
+                            border: `1px solid ${step.done ? '#10b98130' : 'rgba(255,255,255,0.07)'}`,
+                        }}>
+                            {step.label}
+                        </span>
+                    </div>
+                ))}
+                {/* Calendly enviado */}
+                {lead.link_sent_at && !lead.calendly_booked && (
+                    <span style={{ fontSize: 7, fontWeight: 900, padding: '1px 5px', borderRadius: 4, background: 'rgba(245,158,11,0.1)', color: '#f59e0b', border: '1px solid #f59e0b25' }}>
+                        🔗 Link enviado
+                    </span>
+                )}
+                {lead.calendly_booked && (
+                    <span style={{ fontSize: 7, fontWeight: 900, padding: '1px 5px', borderRadius: 4, background: 'rgba(16,185,129,0.15)', color: '#10b981', border: '1px solid #10b98130' }}>
+                        ✅ Agendado
+                    </span>
+                )}
+                {/* Dias em conversa */}
+                {lead.created_at && (() => {
+                    const dias = Math.floor((Date.now() - new Date(lead.created_at).getTime()) / 86400000)
+                    return dias > 0 ? (
+                        <span style={{ fontSize: 7, fontWeight: 700, color: dias > 7 ? '#ef4444' : 'rgba(255,255,255,0.2)', marginLeft: 2 }}>
+                            {dias}d
+                        </span>
+                    ) : null
+                })()}
+            </div>
+
             {/* Indicador de não-lida: última msg é do lead e IA ainda não respondeu */}
 {isUser && !lead.is_paused && !lead.manual_pause && (
     <div style={{
@@ -302,7 +345,7 @@ export default function ConversaList({ onSelect, activeId, socket, instances = [
         try {
            const { data: leads, error } = await supabase
     .from('leads')
-    .select('id, name, whatsapp_id, status, is_paused, manual_pause, last_contact_at, instance_id, dono, niche, bairro, phone, cnpj, capital_social_numeric, porte, current_stage, lead_temperature, internal_notes')
+    .select('id, name, whatsapp_id, status, is_paused, manual_pause, last_contact_at, created_at, instance_id, dono, niche, bairro, phone, cnpj, capital_social_numeric, porte, current_stage, lead_temperature, internal_notes, followup_count, link_sent_at, calendly_booked')
     .in('status', ['contact', 'waiting_analysis'])
     .order('last_contact_at', { ascending: false })
     .limit(300)

@@ -390,16 +390,26 @@ if (session?.user?.id) checkBriefing()
     const [realTotalLeads, setRealTotalLeads] = useState(0);
 
     const fetchLeadsFromDB = async () => {
-        // 1. Baixa os leads recentes para os cartões (limite de segurança)
+        // 1. Busca apenas os chips do usuário logado
+        const { data: userInstances } = await supabase
+            .from('instances')
+            .select('id')
+            .eq('user_id', session?.user?.id);
+        const instanceIds = userInstances?.map(i => i.id) || [];
+        if (instanceIds.length === 0) { setLeads([]); setRealTotalLeads(0); return; }
+
+        // 2. Baixa apenas leads dos chips deste usuário
         const { data } = await supabase.from('leads')
-        .select('id, name, phone, status, niche, dono, cnpj, bairro, cep, porte, capital_social_numeric, whatsapp_id, instance_id, lat, lng, created_at, last_contact_at, is_paused, manual_pause, current_stage, lead_temperature, followup_count, opening_template')
-        .order('created_at', { ascending: false })
-        .limit(10000); 
-        
+            .select('id, name, phone, status, niche, dono, cnpj, bairro, cep, porte, capital_social_numeric, whatsapp_id, instance_id, lat, lng, created_at, last_contact_at, is_paused, manual_pause, current_stage, lead_temperature, followup_count, opening_template')
+            .in('instance_id', instanceIds)
+            .order('created_at', { ascending: false })
+            .limit(10000);
         if (data) setLeads(data);
 
-        // 2. 🎯 BUSCA O NÚMERO TOTAL REAL (Rápido e leve)
-        const { count } = await supabase.from('leads').select('*', { count: 'exact', head: true });
+        // 3. Total real filtrado por usuário
+        const { count } = await supabase.from('leads')
+            .select('*', { count: 'exact', head: true })
+            .in('instance_id', instanceIds);
         if (count !== null) setRealTotalLeads(count);
     };
 
@@ -647,8 +657,6 @@ return (
 </h2>
 <p className="text-[8px] font-bold uppercase tracking-widest mt-0.5" style={{ color: 'rgba(255,255,255,0.25)' }}>
     <span style={{ color: '#F59E0B', fontWeight: 900 }}>A</span>NT<span style={{ color: '#F59E0B', fontWeight: 900 }}>I</span>X
-    <span style={{ color: 'rgba(255,255,255,0.15)', margin: '0 3px' }}>·</span>
-    <span style={{ color: 'rgba(255,255,255,0.2)' }}>by Enerzee</span>
 </p>
             </div>
         </div>
@@ -671,6 +679,17 @@ return (
     </div>
 
     <div className="flex items-center gap-3">
+        {/* Usuário logado */}
+        <div className="hidden md:flex items-center gap-2 px-3 py-1.5 rounded-lg bg-white/[0.03] border border-white/5">
+            <div className="h-5 w-5 rounded-full bg-amber-500/20 flex items-center justify-center">
+                <span className="text-[8px] font-black text-amber-400 uppercase">
+                    {session?.user?.email?.[0]}
+                </span>
+            </div>
+            <span className="text-[9px] text-slate-400 font-bold truncate max-w-[140px]">
+                {session?.user?.email}
+            </span>
+        </div>
         {/* Chips online indicator */}
         <div className="flex items-center gap-2 px-3 py-1.5 rounded-lg bg-white/[0.03] border border-white/5">
             <div className="flex -space-x-1">
@@ -775,27 +794,27 @@ return (
 
             <KanbanColumn title="Novos Leads" count={getLeadsByStatus('new').length} color="from-slate-700 to-slate-900" icon={<Users className="h-6 w-6 text-slate-300"/>}>
     {getLeadsByStatus('new').map(l => (
-        <LeadCard key={l.id} lead={l} isSelected={selectedLeadIds.has(l.id)} onSelect={() => toggleSelectLead(l.id)} onView={() => setViewingLeadDetail(l)} onEdit={() => setEditingLead(l)} onDelete={() => handleDeleteLead(l.id)} />
+        <LeadCard key={l.id} lead={l} isSelected={selectedLeadIds.has(l.id)} onSelect={() => toggleSelectLead(l.id)} onView={() => setViewingLeadDetail(l)} onEdit={() => setEditingLead(l)} onDelete={() => handleDeleteLead(l.id)} onChat={() => { setActiveChat(l); setActiveTab('connections'); }} />
     ))}
 </KanbanColumn>
                             <KanbanColumn title="Em Atendimento IA" count={getLeadsByStatus('contact').length} color="from-blue-700 to-blue-950" icon={<BrainCircuit className="h-6 w-6 text-blue-300"/>} isActive={true}>
                                 {getLeadsByStatus('contact').map(l => (
-                                    <LeadCard key={l.id} lead={l} isSelected={selectedLeadIds.has(l.id)} onSelect={() => toggleSelectLead(l.id)} onView={() => setViewingLeadDetail(l)} onEdit={() => setEditingLead(l)} onDelete={() => handleDeleteLead(l.id)} />
+                                    <LeadCard key={l.id} lead={l} isSelected={selectedLeadIds.has(l.id)} onSelect={() => toggleSelectLead(l.id)} onView={() => setViewingLeadDetail(l)} onEdit={() => setEditingLead(l)} onDelete={() => handleDeleteLead(l.id)} onChat={() => { setActiveChat(l); setActiveTab('connections'); }} />
                                 ))}
                             </KanbanColumn>
                             <KanbanColumn title="Aguardando Resposta" count={getAwaitingReply().length} color="from-slate-600 to-slate-800" icon={<MessageSquare className="h-6 w-6 text-slate-300"/>}>
                                 {getAwaitingReply().map(l => (
-                                    <LeadCard key={l.id} lead={l} isSelected={selectedLeadIds.has(l.id)} onSelect={() => toggleSelectLead(l.id)} onView={() => setViewingLeadDetail(l)} onEdit={() => setEditingLead(l)} onDelete={() => handleDeleteLead(l.id)} />
+                                    <LeadCard key={l.id} lead={l} isSelected={selectedLeadIds.has(l.id)} onSelect={() => toggleSelectLead(l.id)} onView={() => setViewingLeadDetail(l)} onEdit={() => setEditingLead(l)} onDelete={() => handleDeleteLead(l.id)} onChat={() => { setActiveChat(l); setActiveTab('connections'); }} />
                                 ))}
                             </KanbanColumn>
                             <KanbanColumn title="🔥 Hot Leads" count={getHotLeads().length} color="from-red-700 to-orange-900" icon={<Flame className="h-6 w-6 text-red-300 animate-pulse"/>} isActive={true}>
                                 {getHotLeads().map(l => (
-                                    <LeadCard key={l.id} lead={l} isSelected={selectedLeadIds.has(l.id)} onSelect={() => toggleSelectLead(l.id)} onView={() => setViewingLeadDetail(l)} onEdit={() => setEditingLead(l)} onDelete={() => handleDeleteLead(l.id)} />
+                                    <LeadCard key={l.id} lead={l} isSelected={selectedLeadIds.has(l.id)} onSelect={() => toggleSelectLead(l.id)} onView={() => setViewingLeadDetail(l)} onEdit={() => setEditingLead(l)} onDelete={() => handleDeleteLead(l.id)} onChat={() => { setActiveChat(l); setActiveTab('connections'); }} />
                                 ))}
                             </KanbanColumn>
                             <KanbanColumn title="Agendamentos" count={getLeadsByStatus('booked').length} color="from-emerald-700 to-green-900" icon={<CheckSquare className="h-6 w-6 text-emerald-300"/>}>
                                 {getLeadsByStatus('booked').map(l => (
-                                    <LeadCard key={l.id} lead={l} isSelected={selectedLeadIds.has(l.id)} onSelect={() => toggleSelectLead(l.id)} onView={() => setViewingLeadDetail(l)} onEdit={() => setEditingLead(l)} onDelete={() => handleDeleteLead(l.id)} />
+                                    <LeadCard key={l.id} lead={l} isSelected={selectedLeadIds.has(l.id)} onSelect={() => toggleSelectLead(l.id)} onView={() => setViewingLeadDetail(l)} onEdit={() => setEditingLead(l)} onDelete={() => handleDeleteLead(l.id)} onChat={() => { setActiveChat(l); setActiveTab('connections'); }} />
                                 ))}
                             </KanbanColumn>
                         </div>
@@ -1571,7 +1590,7 @@ function KanbanColumn({ title, count, color, children, icon, isActive }) {
     )
 }
 
-function LeadCard({ lead, isSelected, onSelect, onView, onEdit }) {
+function LeadCard({ lead, isSelected, onSelect, onView, onEdit, onChat }) {
     // Tenta pegar o valor de ambas as nomenclaturas possíveis do banco
     const valorPotencial = lead?.capital_social_numeric || lead?.capital_social || 0;
     
@@ -1664,8 +1683,15 @@ function LeadCard({ lead, isSelected, onSelect, onView, onEdit }) {
                     <div className="h-5 w-5 rounded-full bg-slate-800 flex items-center justify-center text-[8px] text-white border border-white/10 font-bold uppercase">{lead?.dono?.[0] || 'G'}</div>
                     <span className="text-[10px] font-bold text-slate-400 uppercase truncate max-w-[140px]">{lead?.dono || 'Gestor Identificado'}</span>
                 </div>
-                <div onClick={(e) => { e.stopPropagation(); onEdit(); }} className="h-6 w-6 rounded-lg bg-blue-600/10 border border-blue-500/20 flex items-center justify-center opacity-0 group-hover:opacity-100 transition-all">
-                    <Edit2 className="h-3 w-3 text-blue-400" />
+                <div className="flex items-center gap-1 opacity-0 group-hover:opacity-100 transition-all">
+                    {onChat && (
+                        <div onClick={(e) => { e.stopPropagation(); onChat(); }} className="h-6 w-6 rounded-lg bg-emerald-600/10 border border-emerald-500/20 flex items-center justify-center" title="Abrir conversa">
+                            <MessageSquare className="h-3 w-3 text-emerald-400" />
+                        </div>
+                    )}
+                    <div onClick={(e) => { e.stopPropagation(); onEdit(); }} className="h-6 w-6 rounded-lg bg-blue-600/10 border border-blue-500/20 flex items-center justify-center">
+                        <Edit2 className="h-3 w-3 text-blue-400" />
+                    </div>
                 </div>
             </div>
 

@@ -14,7 +14,7 @@ const MODELO_PESADO = "meta-llama/Llama-3.3-70B-Instruct-Turbo";
  * @param {string} intencao - 'COMPRA' | 'DUVIDA' | 'LIXO' (vindo do Router)
  */
 async function gerarRespostaCloser(historico, lead, promptPersonalidade, intencao = 'DUVIDA', opcoes = {}) {
-    const calendlyLink = opcoes.calendlyLink || 'https://calendly.com/marlonlotici6/30min';
+    const calendlyLink = opcoes.calendlyLink || '';
     // 🧠 Injeção tática por intenção — evita conflito de instruções
     // 🧠 Injeção tática por intenção — evita conflito de instruções
     let overrideTatico = '';

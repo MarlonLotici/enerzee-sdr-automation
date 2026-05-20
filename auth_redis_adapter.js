@@ -83,4 +83,16 @@ async function useRedisAuthState(redisClient, sessionId) {
     };
 }
 
-module.exports = { useRedisAuthState };
+// Apaga todas as chaves de sessão de um chip — força novo QR no próximo startInstance
+async function clearRedisSession(redisClient, sessionId) {
+    try {
+        const pattern = `wpp_auth:${sessionId}:*`;
+        const keys = await redisClient.keys(pattern);
+        if (keys.length > 0) await redisClient.del(...keys);
+        console.log(`🗑️ [REDIS] Sessão ${sessionId} limpa (${keys.length} chaves removidas)`);
+    } catch (error) {
+        console.error(`Erro ao limpar sessão ${sessionId} do Redis:`, error);
+    }
+}
+
+module.exports = { useRedisAuthState, clearRedisSession };

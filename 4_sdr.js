@@ -22,7 +22,7 @@ const objectionAgent = require('./agents/objectionAgent'); // esse agente assume
 const auditorAgent = require('./agents/auditorAgent'); // faz auditoria das conversas como um 'juiz'
 const handoffAgent = require('./agents/handoffAgent');
 const motoresEmExecucao = new Set(); // 🛡️ Impede que o mesmo chip ligue dois loops infinitos
-const { useRedisAuthState } = require('./auth_redis_adapter');
+const { useRedisAuthState, clearRedisSession } = require('./auth_redis_adapter');
 const { enviarAlerta } = require('./notifier');
 const instanciasEncerrandoManualmente = new Set(); // 🛑 Flag para silenciar alertas no Discord ao remover chip
 const MAPA_CONCESSIONARIAS = {
@@ -332,6 +332,7 @@ async function salvarDecisor(numeroRaw, leadOrigem, instanceId) {
             phone: phoneNormalizado,
             name: leadOrigem.origin_company_name || leadOrigem.name || 'Decisor',
             instance_id: instanceId,
+            user_id: leadOrigem.user_id || null,
             status: 'new',
             is_decisor: true,
             origin_lead_id: leadOrigem.id,
@@ -643,8 +644,8 @@ async function resolverPromptCompleto(promptBase, contextoLead, instanceData, hi
     }
 
     // --- 1. Dados básicos do agente e empresa ---
-    const agentName = instanceData?.agent_name || "Marlon";
-    const companyName = instanceData?.company_name || "Enerzee";
+    const agentName = instanceData?.agent_name || instanceData?.name || "Agente";
+    const companyName = instanceData?.company_name || "nossa empresa";
 
     // --- 2. Dados do lead ---
     // extrairNomeHumano filtra nomes de CNPJ (LTDA, Comércio, cargos) e retorna null se não parecer pessoa real
@@ -667,12 +668,29 @@ const concessionariaLocal = (MAPA_CONCESSIONARIAS[contextoLead.estado] || 'conce
     const percentualReal = MAPA_DESCONTO_REGIONAL[contextoLead.estado] || 0.15; 
     const percentualTexto = String(Math.round(percentualReal * 100));
 
-    // 🧮 Pré-computa a economia para não depender de a LLM fazer matemática
-    const valorAncoraNumerico = parseInt(ancoraConta.replace(/\D/g, '')) || 700;
-    const economiaMensal = Math.round(valorAncoraNumerico * percentualReal); 
+    // 🧮 Tenta extrair o valor real da conta mencionado pelo lead no histórico
+    // Padrões: "pago 1500", "conta de 800 reais", "R$ 1.200", "uns 900", "1800 por mês" etc.
+    const valorRealDaConta = (() => {
+        const mensagensLead = historico
+            .filter(m => m.role === 'user')
+            .map(m => m.content)
+            .join(' ');
+        const regex = /(?:pago?|conta[^.]*?(?:é|fica|gira|vem|chega)|fatura[^.]*?(?:é|fica|gira|vem|chega)|média[^.]*?(?:é|fica)|(?:uns?|umas?|cerca de|em torno de|tipo|algo como))\s*R?\$?\s*([\d.,]+)|R\$\s*([\d.,]+)/gi;
+        const matches = [...mensagensLead.matchAll(regex)];
+        if (!matches.length) return null;
+        const ultimo = matches[matches.length - 1];
+        const raw = (ultimo[1] || ultimo[2] || '').replace(/\./g, '').replace(',', '.');
+        const valor = parseFloat(raw);
+        return (valor >= 100 && valor <= 100000) ? valor : null;
+    })();
+
+    // Usa o valor real se disponível, senão cai na âncora por capital social
+    const valorAncoraNumerico = valorRealDaConta || parseInt(ancoraConta.replace(/\D/g, '')) || 700;
+    const economiaMensal = Math.round(valorAncoraNumerico * percentualReal);
     const economiaAnual = economiaMensal * 12;
     const economiaMensalFormatada = `R$ ${economiaMensal.toLocaleString('pt-BR')}`;
     const economiaAnualFormatada = `R$ ${economiaAnual.toLocaleString('pt-BR')}`;
+    if (valorRealDaConta) console.log(`💡 [ECONOMIA REAL] Lead informou conta de R$${valorRealDaConta} → economia ${percentualTexto}%: ${economiaMensalFormatada}/mês, ${economiaAnualFormatada}/ano`);
     
     const nicheContext = gerarContextoNicho(contextoLead.niche);
     const estagioAtual = String(contextoLead.current_stage || 0);
@@ -748,7 +766,7 @@ const concessionariaLocal = (MAPA_CONCESSIONARIAS[contextoLead.estado] || 'conce
         .replaceAll('${perfilEmocional}', perfilEmocional)
         .replaceAll('${economiaMensal}', economiaMensalFormatada)
         .replaceAll('${economiaAnual}', economiaAnualFormatada)
-        .replaceAll('${calendlyLink}', instanceData?.calendly_link || 'https://calendly.com/marlonlotici6/30min');
+        .replaceAll('${calendlyLink}', instanceData?.calendly_link || '');
         
          
 
@@ -912,7 +930,7 @@ async function startInstance(instanceId, instanceName) {
         auth: { creds: state.creds, keys: makeCacheableSignalKeyStore(state.keys, pino({ level: 'silent' })) },
         printQRInTerminal: false,
         logger: pino({ level: 'silent' }),
-        browser: ["Enerzee SDR", "Chrome", "1.0"],
+        browser: ["Chrome", "Chrome", "1.0"],
         keepAliveIntervalMs: 30000,   // ping a cada 30s — evita socket morrer no descanso de 40min
         connectTimeoutMs: 60000,      // desiste da conexão em 60s se não responder
         markOnlineOnConnect: false,   // não anuncia presença — menos suspeito pro WhatsApp
@@ -973,9 +991,10 @@ process.on('unhandledRejection', (reason) => {
         return;
     }
 
-    // 🔴 Deslogou manualmente → não religa sozinho
+    // 🔴 Deslogou (ban, logout no celular) → limpa sessão e aguarda QR manual
     if (reason === DisconnectReason.loggedOut) {
-        console.log(`🔴 [LOGOUT] ${instanceName} foi deslogado manualmente.`);
+        console.log(`🔴 [LOGOUT] ${instanceName} foi deslogado. Limpando sessão Redis para permitir novo QR...`);
+        await clearRedisSession(redisConnection, instanceId);
         await db.updateInstanceStatus(instanceId, 'DISCONNECTED');
         return;
     }
@@ -1429,8 +1448,11 @@ if (!lead && cleanJid.includes('@lid')) {
 // --- 📝 EXTRAÇÃO DE CONTEÚDO (ACEITANDO A GAVETA) ---
     // Extração de contato vCard → texto sintético que o routerAgent classifica como REPASSE
     const vcardRaw = msg.message.contactMessage?.vcard || msg.message.contactsArrayMessage?.contacts?.[0]?.vcard;
-    const nomeVcard = vcardRaw?.match(/FN:(.+)/i)?.[1]?.trim();
-    const textoContato = nomeVcard ? `Segue o contato: ${nomeVcard}` : (vcardRaw ? 'Te passo o contato' : '');
+    const nomeVcard  = vcardRaw?.match(/FN:(.+)/i)?.[1]?.trim();
+    const telVcard   = vcardRaw?.match(/TEL[^:\r\n]*:([+\d\s\-().]+)/i)?.[1]?.replace(/\D/g, '').trim();
+    const textoContato = vcardRaw
+        ? `Segue o contato: ${nomeVcard || 'contato'}${telVcard ? ` ${telVcard}` : ''}`
+        : '';
 
     const textoOriginal = msg.message.conversation ||
                           msg.message.extendedTextMessage?.text ||
@@ -1828,8 +1850,8 @@ async function processarFilaDeAtaque(instanceId) {
                 const config = {
                     nome: instanceData.name || `Chip-${instanceId.substring(0, 4)}`,
                     limite: instanceData.daily_limit || 50,
-                    agente: instanceData.agent_name || "Marlon",
-                    empresa: instanceData.company_name || "Enerzee"
+                    agente: instanceData.agent_name || "Agente",
+                    empresa: instanceData.company_name || "nossa empresa"
                 };
 
                // ⚡ RESERVA ATÔMICA: SELECT + UPDATE em uma única operação
@@ -1998,15 +2020,19 @@ const tplsInstancia = instanceData?.opening_templates;
 let variacoesAbertura;
 
 if (tplsInstancia && Array.isArray(tplsInstancia.decisor) && lead.is_decisor && lead.origin_company_name) {
+    // Decisor com template customizado no Supabase
     variacoesAbertura = tplsInstancia.decisor.map(substituirVarsAbertura);
+} else if (lead.is_decisor && lead.origin_company_name) {
+    // Decisor sem template customizado → hardcoded com contexto de repasse
+    // (não cai no padrao para preservar o "me indicaram vc")
+    variacoesAbertura = tplsInstancia && Array.isArray(tplsInstancia.decisor_fallback)
+        ? tplsInstancia.decisor_fallback.map(substituirVarsAbertura)
+        : [
+            `${saudacao}, o pessoal da ${lead.origin_company_name} me passou seu contato. Tenho uma informação que achei que valia compartilhar — vc que cuida da parte comercial/financeira aí?`,
+            `${saudacao}, falei com a equipe da ${lead.origin_company_name} e me indicaram vc. Queria confirmar uma coisa rápida — é vc que responde por essa área?`,
+          ];
 } else if (tplsInstancia && Array.isArray(tplsInstancia.padrao) && tplsInstancia.padrao.length > 0) {
     variacoesAbertura = tplsInstancia.padrao.map(substituirVarsAbertura);
-} else if (lead.is_decisor && lead.origin_company_name) {
-    // fallback hardcoded decisor
-    variacoesAbertura = [
-        `${saudacao}, o pessoal da ${lead.origin_company_name} me passou seu contato. Vi algo sobre a conta de energia de vcs que achei que valia compartilhar — vc que cuida dessa parte?`,
-        `${saudacao}, falei com a equipe da ${lead.origin_company_name} e me indicaram vc. Tem uma informação sobre a ${concessionariaLocal} que a maioria das empresas não sabe — vc cuida das contas fixas aí?`,
-    ];
 } else {
     // fallback hardcoded padrão
     variacoesAbertura = [
@@ -2108,11 +2134,16 @@ async function loopRecuperacaoConversas() {
         // ====================================================================
         // 🌟 1. RECUPERAÇÃO DE FALHAS (O Bot ignorou o cliente)
         // ====================================================================
+        // Filtra apenas leads dos chips atualmente ativos — isolamento entre tenants
+        const chipsAtivos = [...sessions.keys()];
+        if (chipsAtivos.length === 0) return;
+
         const { data: leadsAtivos } = await supabase
             .from('leads')
             .select('id, name, whatsapp_id, instance_id, is_paused')
             .eq('status', 'contact')
             .eq('is_paused', false)
+            .in('instance_id', chipsAtivos)
             .order('last_contact_at', { ascending: false })
             .limit(20);
 
@@ -2159,9 +2190,9 @@ async function loopRecuperacaoConversas() {
         }
 
         // ====================================================================
-        // 🚀 2. FOLLOW-UP ÚNICO (D1) + TOMBAMENTO POR SILÊNCIO (ANTES DO LINK)
+        // 🚀 2. FOLLOW-UP D1 + D3 + TOMBAMENTO POR SILÊNCIO (ANTES DO LINK)
         // ====================================================================
-        // 🎚️ Só roda follow-up D1 nas janelas de FOLLOWUP (10h-11h, 17h-18h) ou se base vazia
+        // 🎚️ Só roda nas janelas de FOLLOWUP (10h-11h, 17h-18h) ou se base vazia
         const { data: leadsFollowUp } = podeFazerFollowup ? await supabase
     .from('leads')
     .select('id, name, whatsapp_id, instance_id, dono, followup_count, last_contact_at, backup_phone, backup_whatsapp_id, backup_tried')
@@ -2169,8 +2200,8 @@ async function loopRecuperacaoConversas() {
     .eq('is_paused', false)
     .eq('calendly_booked', false)
     .is('link_sent_at', null)
-    .lt('followup_count', 2)
-    .not('instance_id', 'is', null)
+    .lt('followup_count', 3)
+    .in('instance_id', chipsAtivos)
     .order('last_contact_at', { ascending: true })
     .limit(5)
     : { data: null };
@@ -2188,12 +2219,13 @@ async function loopRecuperacaoConversas() {
                     if (temResposta && temResposta.length > 0) continue;
 
                     const diasPassados = (agora - new Date(lf.last_contact_at).getTime()) / UM_DIA;
-                    if (diasPassados < 1) continue; 
+                    const followupAtual = lf.followup_count || 0;
+                    // D1 espera 1 dia, D3 espera 2 dias após D1, tombamento espera 1 dia após D3
+                    const minimosDias = followupAtual === 0 ? 1 : 2;
+                    if (diasPassados < minimosDias) continue;
 
                     const instancia = sessions.get(lf.instance_id);
                     if (!instancia || !instancia.ready) continue;
-
-                    const followupAtual = lf.followup_count || 0;
 
                     if (followupAtual === 0) {
                         let primeiroNome = lf.dono && lf.dono.trim().length > 2 ? lf.dono.trim().split(' ')[0] : 'Opa';
@@ -2229,17 +2261,38 @@ console.log(`⏸️ [ANTI-BAN] Aguardando ${Math.round(jitterAntiBan/1000)}s ant
 await delay(jitterAntiBan);
                     }
                     else if (followupAtual === 1) {
+                        // D3 — segunda e última tentativa antes do tombamento
+                        let primeiroNome = lf.dono && lf.dono.trim().length > 2 ? lf.dono.trim().split(' ')[0] : 'Opa';
+                        primeiroNome = primeiroNome.charAt(0).toUpperCase() + primeiroNome.slice(1);
+                        const nomeEmpresa = (lf.name || 'empresa').replace(/\s(LTDA|ME|EIRELI|S\.A|LIMITED)\b/gi, '').trim();
+
+                        const msgD3 = `${primeiroNome}, última tentativa da minha parte. Se a conversa sobre a ${nomeEmpresa} ainda fizer sentido, é só me responder aqui. Se não for a hora certa, sem problema — desejo sucesso pra vcs!`;
+
+                        const semaforoOk = await adquirirSemaforoChip(lf.instance_id, 'FOLLOWUP');
+                        if (!semaforoOk) { continue; }
+
+                        console.log(`🔔 [FOLLOW-UP D3] Disparando para ${lf.name}`);
+                        await instancia.sock.sendPresenceUpdate('composing', lf.whatsapp_id);
+                        await delay(Math.min(Math.max(msgD3.length * 80, 4000), 9000));
+                        await enviarMensagemIA(instancia.sock, lf.whatsapp_id, { text: msgD3 });
+                        await db.saveMessage(lf.whatsapp_id, 'assistant', msgD3, lf.instance_id);
+                        await supabase.from('leads').update({ followup_count: 2, last_contact_at: dataAgoraDate.toISOString() }).eq('id', lf.id);
+                        liberarSemaforoChip(lf.instance_id);
+                        await delay(Math.floor(Math.random() * 60000) + 60000);
+                    }
+                    else if (followupAtual === 2) {
+                        // Tombamento após D3 sem resposta
                         if (!lf.backup_tried && lf.backup_whatsapp_id) {
-                            console.log(`🔄 [SILÊNCIO TOTAL] Lead ${lf.name} ignorou o D1. Tombando para backup...`);
+                            console.log(`🔄 [SILÊNCIO TOTAL] Lead ${lf.name} ignorou D1+D3. Tombando para backup...`);
                             await supabase.from('leads').update({
-                                whatsapp_id: lf.backup_whatsapp_id, 
-                                phone: lf.backup_phone, 
-                                backup_tried: true, 
+                                whatsapp_id: lf.backup_whatsapp_id,
+                                phone: lf.backup_phone,
+                                backup_tried: true,
                                 status: 'new',
-                                followup_count: 0 
+                                followup_count: 0
                             }).eq('id', lf.id);
                         } else {
-                            console.log(`💀 [DESCARTE] Lead ${lf.name} sem resposta e sem reserva. Movendo para DEAD.`);
+                            console.log(`💀 [DESCARTE] Lead ${lf.name} ignorou D1+D3 sem reserva. Movendo para DEAD.`);
                             await supabase.from('leads').update({ status: 'dead', lead_temperature: 'dead' }).eq('id', lf.id);
                         }
                     }
@@ -2262,6 +2315,7 @@ await delay(jitterAntiBan);
             .not('link_sent_at', 'is', null)
             .lt('link_sent_at', quatroHorasAtrasISO)
             .is('last_followup_type', null)
+            .in('instance_id', chipsAtivos)
             .limit(3)
             : { data: null };
 
@@ -2311,7 +2365,8 @@ await delay(jitterAntiBan);
         const { data: leadsPausados } = await supabase
             .from('leads')
             .select('id, name, whatsapp_id, instance_id, is_paused, manual_pause, last_human_interaction')
-            .eq('is_paused', true);
+            .eq('is_paused', true)
+            .in('instance_id', chipsAtivos);
 
         if (leadsPausados) {
             for (const lp of leadsPausados) {
@@ -2349,7 +2404,46 @@ await delay(jitterAntiBan);
         }
 
         // ====================================================================
-        // 🔄 5. REATIVAÇÃO DE LEADS FRIOS (roda 1x por dia, janela FOLLOWUP)
+        // 📅 5. LEMBRETE 24H ANTES DA REUNIÃO (roda em janela de trabalho)
+        // ====================================================================
+        if (dentroDoExpediente()) {
+            const vinteQuatroHorasISO   = new Date(agora + 24 * 60 * 60 * 1000).toISOString();
+            const vinteCincoHorasISO    = new Date(agora + 25 * 60 * 60 * 1000).toISOString();
+
+            const { data: leadsReuniao } = await supabase
+                .from('leads')
+                .select('id, name, whatsapp_id, instance_id, dono, calendly_event_at')
+                .eq('status', 'closed')
+                .eq('calendly_booked', true)
+                .is('reminder_sent', null)
+                .gte('calendly_event_at', vinteQuatroHorasISO)
+                .lte('calendly_event_at', vinteCincoHorasISO)
+                .limit(3);
+
+            if (leadsReuniao && leadsReuniao.length > 0) {
+                for (const lr of leadsReuniao) {
+                    const instanciaL = sessions.get(lr.instance_id);
+                    if (!instanciaL || !instanciaL.ready) continue;
+
+                    const dataObj = new Date(lr.calendly_event_at);
+                    const horaF   = dataObj.toLocaleTimeString('pt-BR', { hour: '2-digit', minute: '2-digit' });
+                    const nome    = lr.dono?.split(' ')?.[0] || 'você';
+                    const instanceData = await getRegrasEmCache(lr.instance_id);
+
+                    const msgLembrete = instanceData?.opening_templates?.lembrete_reuniao
+                        || `${nome}, só passando pra lembrar da nossa conversa amanhã às ${horaF}. Até lá!`;
+
+                    await enviarMensagemIA(instanciaL.sock, lr.whatsapp_id, { text: msgLembrete });
+                    await db.saveMessage(lr.whatsapp_id, 'assistant', msgLembrete, lr.instance_id);
+                    await supabase.from('leads').update({ reminder_sent: new Date().toISOString() }).eq('id', lr.id);
+                    console.log(`🔔 [LEMBRETE] Enviado para ${lr.name} — reunião às ${horaF}`);
+                    await delay(Math.floor(Math.random() * 30000) + 30000);
+                }
+            }
+        }
+
+        // ====================================================================
+        // 🔄 6. REATIVAÇÃO DE LEADS FRIOS (roda 1x por dia, janela FOLLOWUP)
         // ====================================================================
         const QUARENTA_CINCO_DIAS = 45 * 24 * 60 * 60 * 1000;
         const agora45 = Date.now();
@@ -2365,6 +2459,7 @@ await delay(jitterAntiBan);
                 .select('id, name, current_stage, internal_notes, last_contact_at')
                 .eq('lead_temperature', 'dead')
                 .lt('last_contact_at', quarentaCincoDiasAtrasISO)
+                .in('instance_id', chipsAtivos)
                 .limit(3);
 
             if (leadsFrios && leadsFrios.length > 0) {
@@ -2657,9 +2752,9 @@ if (!promptResolvido) {
 } else if (intencao === 'REPASSE') {
     console.log(`🔄 [WORKER-IA] REPASSE detectado para ${lead.name}. Extraindo contato...`);
 
-    // Extrai telefone do texto — cobre formatos: (85)99999-9999, 85 9 9999-9999, 5585999999999
-    const regexTel = /\b(?:(?:\+?55\s?)?(?:\(?\d{2}\)?\s?)(?:9\s?)?\d{4}[-\s]?\d{4})\b/g;
-    const numerosEncontrados = ultimaMsg.match(regexTel) || [];
+    // Extrai telefone do texto — cobre formatos: (85)99999-9999, 85 9 9999-9999, 5585999999999, número puro
+    const regexTel = /(?<![a-zA-Z])(\+?55\s?)?(\(?\d{2}\)?\s?)(?:9\s?)?\d{4}[-\s]?\d{4}(?!\d)/g;
+    const numerosEncontrados = [...ultimaMsg.matchAll(regexTel)].map(m => m[0]) || [];
 
     if (numerosEncontrados.length > 0) {
         // Tenta capturar nome mencionado junto ao número: "fala com o João no 9...", "é a Maria 9..."
@@ -2838,16 +2933,16 @@ enviarAlerta("🎊 REUNIÃO AGENDADA!", `Lead: ${lead.name}\nData: ${new Date(da
                         const dataFormatada = dataObjeto.toLocaleDateString('pt-BR', { day: '2-digit', month: '2-digit' });
                         const horaFormatada = dataObjeto.toLocaleTimeString('pt-BR', { hour: '2-digit', minute: '2-digit' });
 
-                        const feedbackPrompt = `O lead ${lead.name} acabou de agendar a reunião para o dia ${dataFormatada} às ${horaFormatada}. Confirme que recebeu o agendamento com sucesso, demonstre empolgação e reforce o pedido da foto da fatura de energia caso ele ainda não tenha mandado (isso é fundamental para a reunião). Seja muito curto e direto.`;
-
-                        const historico = [{ role: 'system', content: feedbackPrompt }];
                         const instanceData = await getRegrasEmCache(instanceId);
-                        const resposta = await gerarRespostaIA(historico, lead, instanceData);
+                        const primeiroNome = lead.dono?.split(' ')?.[0] || 'você';
 
-                        if (resposta) {
-                            console.log(`🤖 [FEEDBACK] IA gerou confirmação para ${lead.name}. Enviando...`);
-                            await filtrarEEnviarResposta(instancia.sock, lead.whatsapp_id, resposta, historico, lead, instanceId);
-                        }
+                        // Template de confirmação — usa o do Supabase se existir, senão fallback
+                        const tplConfirmacao = instanceData?.opening_templates?.confirmacao_agendamento
+                            || `Perfeito, ${primeiroNome}! Reunião confirmada pra ${dataFormatada} às ${horaFormatada}. Te vejo lá!`;
+
+                        await enviarMensagemIA(instancia.sock, lead.whatsapp_id, { text: tplConfirmacao });
+                        await db.saveMessage(lead.whatsapp_id, 'assistant', tplConfirmacao, instanceId);
+                        console.log(`✅ [CONFIRMAÇÃO] Mensagem de confirmação enviada para ${lead.name}.`);
                     } else {
                         console.log(`⚠️ [WEBHOOK] Chip ${instanceId} não está pronto para enviar feedback.`);
                     }
@@ -2945,13 +3040,17 @@ enviarAlerta("🎊 REUNIÃO AGENDADA!", `Lead: ${lead.name}\nData: ${new Date(da
         sessions.delete(instanceId);
         cacheRegrasInstancia.delete(instanceId);
 
-        // 3. Aguarda handlers de close processarem antes de iniciar novo socket
+        // 3. Limpa credenciais do Redis — garante que Baileys gera novo QR em vez de reconectar silenciosamente
+        await clearRedisSession(redisConnection, instanceId);
+        await db.updateInstanceStatus(instanceId, 'DISCONNECTED');
+
+        // 4. Aguarda handlers de close processarem antes de iniciar novo socket
         await new Promise(r => setTimeout(r, 1500));
 
-        // 4. Libera flag de encerramento para o novo socket funcionar normalmente
+        // 5. Libera flag de encerramento para o novo socket funcionar normalmente
         instanciasEncerrandoManualmente.delete(instanceId);
 
-        // 5. Inicia nova sessão (reutiliza credenciais do Redis — sem QR se sessão válida)
+        // 6. Inicia nova sessão — sem credenciais no Redis, Baileys vai gerar QR code
         startInstance(instanceId, name);
     }
 };

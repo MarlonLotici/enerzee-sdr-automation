@@ -14,7 +14,9 @@
       "Bash(Sort-Object FullName)",
       "Bash(npm install *)",
       "Bash(npm list *)",
-      "Bash(git check-ignore *)"
+      "Bash(git check-ignore *)",
+      "Bash(node -e \"const fs=require\\('fs'\\); const c=fs.readFileSync\\('database.js','utf8'\\); const i=c.indexOf\\('zapId = phonePuro'\\); console.log\\(JSON.stringify\\(c.slice\\(i-5, i+200\\)\\)\\);\")",
+      "Bash(node -e ' *)"
     ]
   }
 }
