@@ -390,11 +390,16 @@ if (session?.user?.id) checkBriefing()
     const [realTotalLeads, setRealTotalLeads] = useState(0);
 
     const fetchLeadsFromDB = async () => {
+        // Lê a sessão atual direto do Supabase — evita closure stale quando chamado antes do auth
+        const { data: { session: currentSession } } = await supabase.auth.getSession();
+        const userId = currentSession?.user?.id;
+        if (!userId) return;
+
         // 1. Busca apenas os chips do usuário logado
         const { data: userInstances } = await supabase
             .from('instances')
             .select('id')
-            .eq('user_id', session?.user?.id);
+            .eq('user_id', userId);
         const instanceIds = userInstances?.map(i => i.id) || [];
         if (instanceIds.length === 0) { setLeads([]); setRealTotalLeads(0); return; }
 
