@@ -259,8 +259,12 @@ function liberarSemaforoChip(chipId) {
 // Janelas dedicadas pra cada tipo de disparo. Se base zerar, vira FOLLOWUP.
 // ============================================================================
 
-let baseEstaVazia = false; // Flag: ativada quando motor de ataque encontra fila vazia
-let timestampUltimaCheckBase = 0; // Quando foi a última verificação real
+const baseEstaVaziaMap = new Map(); // instanceId → bool — isolado por chip, não global
+let timestampUltimaCheckBase = 0;
+
+// Helpers para não espalhar a Map pelo código
+function isBaseVazia(instanceId) { return baseEstaVaziaMap.get(instanceId) === true; }
+function setBaseVazia(instanceId, val) { baseEstaVaziaMap.set(instanceId, val); }
 
 /**
  * 🎚️ Retorna o modo operacional atual do sistema baseado em hora + estado da base
@@ -280,7 +284,7 @@ function getModoOperacional() {
     }
     
     // 🔄 FALLBACK INTELIGENTE: se a base está vazia, vira FOLLOWUP independente da janela
-    if (baseEstaVazia) {
+    if ([...baseEstaVaziaMap.values()].some(v => v)) {
         const t = agora.horas * 60 + agora.minutos;
         // Mas respeita o expediente (8h-18h)
         if (t >= 480 && t <= 1080) {
@@ -1809,10 +1813,9 @@ async function processarFilaDeAtaque(instanceId) {
             
         let currentLeadId = null; 
             
-            // 🎚️ Se chegou aqui dentro do loop, significa que existe lead. Desativa flag de base vazia.
-            if (baseEstaVazia) {
-                baseEstaVazia = false;
-                console.log(`✨ [FALLBACK] Base voltou a ter leads. Modo SAUDAÇÃO retomado.`);
+            if (isBaseVazia(instanceId)) {
+                setBaseVazia(instanceId, false);
+                console.log(`✨ [FALLBACK] Base voltou a ter leads para ${config.nome}. Modo SAUDAÇÃO retomado.`);
             }
             
             // --- 🛡️ TRAVA DE FADIGA (TURNO DE TRABALHO) ---
@@ -1869,9 +1872,9 @@ if (!leadReservado || leadReservado.length === 0) {
     console.log(`🌕 [MOTOR HÍBRIDO] Fila limpa para ${config.nome}. Repouso absoluto (0 Egress).`);
     
     // 🎚️ MARCA A BASE COMO VAZIA: Vigia de follow-up vai assumir o turno
-    baseEstaVazia = true;
+    setBaseVazia(instanceId, true);
     timestampUltimaCheckBase = Date.now();
-    console.log(`📨 [FALLBACK] Base de leads novos vazia. Sistema vai migrar pra FOLLOW-UP automaticamente.`);
+    console.log(`📨 [FALLBACK] Base de leads novos vazia para ${config.nome}. Sistema vai migrar pra FOLLOW-UP automaticamente.`);
     
     break;
 }
@@ -2506,12 +2509,16 @@ async function loopAuditor() {
     auditorEmExecucao = true;
 
     try {
-        // Busca 5 leads que já terminaram o funil (booked ou dead) e ainda não foram auditados
+        // Filtra apenas leads dos chips ativos — isolamento entre tenants
+        const chipsAudit = [...sessions.keys()];
+        if (!chipsAudit.length) { auditorEmExecucao = false; return; }
+
         const { data: leadsParaAuditar } = await supabase
             .from('leads')
             .select('id, name, whatsapp_id, instance_id, status, niche')
             .in('status', ['booked', 'dead', 'invalid'])
             .eq('is_audited', false)
+            .in('instance_id', chipsAudit)
             .limit(5);
 
         if (leadsParaAuditar && leadsParaAuditar.length > 0) {

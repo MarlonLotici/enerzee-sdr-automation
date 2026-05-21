@@ -393,28 +393,32 @@ export default function VisualAnalytics() {
     const fetchData = async () => {
         setLoading(true)
         try {
-            const [leadsRes, instRes, countRes, agendadosRes, abordadosRes] = await Promise.all([
+            const { data: { session: s } } = await supabase.auth.getSession()
+            const uid = s?.user?.id
+            if (!uid) { setLoading(false); return }
+
+            const { data: instData } = await supabase.from('instances').select('id, name, whatsapp_status').eq('user_id', uid)
+            const instIds = instData?.map(i => i.id) || []
+            if (!instIds.length) { setLoading(false); return }
+
+            const [leadsRes, countRes, agendadosRes, abordadosRes] = await Promise.all([
                 supabase
                     .from('leads')
                     .select('id, status, niche, created_at, last_contact_at, instance_id, capital_social_numeric, current_stage, lead_temperature, opening_template, last_seen_at, calendly_booked')
+                    .in('instance_id', instIds)
                     .order('current_stage', { ascending: false })
                     .limit(10000),
-                supabase.from('instances').select('id, name, whatsapp_status'),
-                // Count total de leads no banco
-                supabase.from('leads').select('*', { count: 'exact', head: true }),
-                // Count agendamentos server-side
-                supabase
-                    .from('leads')
-                    .select('*', { count: 'exact', head: true })
+                supabase.from('leads').select('*', { count: 'exact', head: true }).in('instance_id', instIds),
+                supabase.from('leads').select('*', { count: 'exact', head: true })
+                    .in('instance_id', instIds)
                     .not('status', 'in', '(invalid,blacklisted,error)')
                     .or('status.eq.booked,status.eq.closed,calendly_booked.eq.true,current_stage.gte.4'),
-                // Count abordados server-side (têm last_contact_at)
-                supabase
-                    .from('leads')
-                    .select('*', { count: 'exact', head: true })
+                supabase.from('leads').select('*', { count: 'exact', head: true })
+                    .in('instance_id', instIds)
                     .not('last_contact_at', 'is', null)
                     .not('status', 'in', '(invalid,blacklisted,error)')
             ])
+            const instRes = { data: instData, error: null }
             if (!leadsRes.error && leadsRes.data)            setLeads(leadsRes.data)
             if (!instRes.error  && instRes.data)             setInstances(instRes.data)
             if (!countRes.error && countRes.count != null)   setRealTotalLeads(countRes.count)

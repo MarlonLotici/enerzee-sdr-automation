@@ -343,10 +343,14 @@ export default function ConversaList({ onSelect, activeId, socket, instances = [
     const fetchConversas = useCallback(async () => {
         setLoading(true)
         try {
+           const instanceIds = instances.map(i => i.id).filter(Boolean)
+           if (!instanceIds.length) { setConversas([]); return }
+
            const { data: leads, error } = await supabase
     .from('leads')
     .select('id, name, whatsapp_id, status, is_paused, manual_pause, last_contact_at, created_at, instance_id, dono, niche, bairro, phone, cnpj, capital_social_numeric, porte, current_stage, lead_temperature, internal_notes, followup_count, link_sent_at, calendly_booked')
     .in('status', ['contact', 'waiting_analysis'])
+    .in('instance_id', instanceIds)
     .order('last_contact_at', { ascending: false })
     .limit(300)
 

@@ -66,11 +66,20 @@ export default function AuditorDashboard() {
     const fetchData = async () => {
         setLoading(true)
         try {
+            const { data: { session: s } } = await supabase.auth.getSession()
+            const uid = s?.user?.id
+            if (!uid) { setLoading(false); return }
+
+            const { data: instData } = await supabase.from('instances').select('id').eq('user_id', uid)
+            const instIds = instData?.map(i => i.id) || []
+            if (!instIds.length) { setLoading(false); return }
+
             const { data } = await supabase
                 .from('leads')
                 .select('id, name, niche, created_at, audit_report, current_stage')
                 .eq('is_audited', true)
                 .not('audit_report', 'is', null)
+                .in('instance_id', instIds)
                 .order('created_at', { ascending: false })
                 .limit(1000)
 

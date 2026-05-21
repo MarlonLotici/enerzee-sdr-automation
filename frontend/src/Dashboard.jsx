@@ -160,20 +160,30 @@ export default function Dashboard() {
 const carregarDados = useCallback(async () => {
         setCarregando(true)
         try {
-            // === BUSCA PARALELA DE DADOS ===
-            // 🛡️ FIX: limit explícito de 50000 para mensagens (default Supabase é 1000)
-            // E filtra mensagens dos últimos 30 dias pra não puxar histórico antigo inútil
+            // Identifica o usuário atual para isolar dados por tenant
+            const { data: { session: s } } = await supabase.auth.getSession()
+            const uid = s?.user?.id
+            if (!uid) return
+
+            const { data: instancias } = await supabase
+                .from('instances')
+                .select('id, name, whatsapp_status, daily_limit')
+                .eq('user_id', uid)
+
+            const instanceIds = instancias?.map(i => i.id) || []
+            if (!instanceIds.length) { setCarregando(false); return }
+
             const trintaDiasAtras = new Date(Date.now() - 30 * 86400000).toISOString()
-            
+
             const [
                 { data: leads },
                 { data: mensagens },
-                { data: instancias },
             ] = await Promise.all([
                 supabase
                     .from('leads')
                     .select('id, status, created_at, instance_id, is_paused, manual_pause, last_contact_at, current_stage, lead_temperature, followup_count, calendly_booked, whatsapp_id')
-                    .order('last_contact_at', { ascending: false, nullsFirst: false }) // leads mais recentes primeiro
+                    .in('instance_id', instanceIds)
+                    .order('last_contact_at', { ascending: false, nullsFirst: false })
                     .limit(50000),
                 supabase
                     .from('messages')
@@ -181,7 +191,6 @@ const carregarDados = useCallback(async () => {
                     .gte('created_at', trintaDiasAtras)
                     .order('created_at', { ascending: false })
                     .limit(50000),
-                supabase.from('instances').select('id, name, whatsapp_status, daily_limit'),
             ])
 
             // BRT = UTC-3 → meia-noite BRT = 03:00 UTC

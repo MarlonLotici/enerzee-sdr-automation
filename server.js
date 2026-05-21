@@ -133,6 +133,8 @@ io.on('connection', (socket) => {
     });
 
     socket.on('remove_instance', async (instanceId) => {
+        const inst = await db.getInstanceRules(instanceId);
+        if (!inst || inst.user_id !== userId) return console.warn(`⛔ [SEGURANÇA] ${socket.user.email} tentou remover chip de outro usuário.`);
         sdr.encerrarInstancia(instanceId);
         await db.removeInstance(instanceId);
         await atualizarListaInstancias();
@@ -140,6 +142,8 @@ io.on('connection', (socket) => {
     });
 
     socket.on('reconnect_instance', async (instanceId) => {
+        const inst = await db.getInstanceRules(instanceId);
+        if (!inst || inst.user_id !== userId) return console.warn(`⛔ [SEGURANÇA] ${socket.user.email} tentou reconectar chip de outro usuário.`);
         await sdr.reconectarInstancia(instanceId);
         await atualizarListaInstancias();
     });
@@ -345,15 +349,16 @@ app.post('/api/send-message', autenticarMiddleware, async (req, res) => {
     try {
         const { instanceId, whatsappId, text } = req.body;
 
-        // 1. Trava de segurança: Verifica se os dados chegaram do front
-        if (!instanceId || !whatsappId || !text) {
+        if (!instanceId || !whatsappId || !text)
             return res.status(400).json({ success: false, error: "Faltam parâmetros obrigatórios." });
-        }
 
-        // 2. Trava de segurança: Verifica se o motor 4_sdr foi importado corretamente
-        if (!sdr || !sdr.enviarMensagemSDR) {
+        if (!sdr || !sdr.enviarMensagemSDR)
             return res.status(500).json({ success: false, error: "Motor SDR não está pronto." });
-        }
+
+        // Verifica que o chip pertence ao usuário autenticado
+        const instOwner = await db.getInstanceRules(instanceId);
+        if (!instOwner || instOwner.user_id !== req.user.id)
+            return res.status(403).json({ success: false, error: "Acesso negado." });
 
         console.log(`📡 [API] Ordem de disparo manual recebida para: ${whatsappId}`);
 
