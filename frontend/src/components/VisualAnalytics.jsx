@@ -84,11 +84,13 @@ function computeMetrics(leads, instances, realTotalLeads, realAgendados = 0, rea
     ).length
 
     // Funil usa valores server-side para Capturados e Abordados (bypassa limite de 1000 rows)
+    const emConversaQtd = sc.contact + sc.waiting_analysis + sc.booked + sc.closed
     const funnel = [
-        { etapa: 'Capturados',  qtd: realTotalLeads || leadsValidos.length,    fill: NEON.blue },
-        { etapa: 'Abordados',   qtd: realAbordados  || leadsValidos.filter(l => !!l.last_contact_at).length, fill: NEON.cyan },
-        { etapa: 'Em análise',  qtd: sc.waiting_analysis + sc.booked + sc.closed, fill: NEON.violet },
-        { etapa: 'Agendados',   qtd: totalAgendamentosReais,                   fill: NEON.emerald },
+        { etapa: 'Capturados',   qtd: realTotalLeads || leadsValidos.length,    fill: NEON.blue    },
+        { etapa: 'Abordados',    qtd: realAbordados  || leadsValidos.filter(l => !!l.last_contact_at).length, fill: NEON.cyan },
+        { etapa: 'Em Conversa',  qtd: emConversaQtd,                             fill: '#6366f1'   },
+        { etapa: 'Em análise',   qtd: sc.waiting_analysis + sc.booked + sc.closed, fill: NEON.violet },
+        { etapa: 'Agendados',    qtd: totalAgendamentosReais,                    fill: NEON.emerald },
     ]
     // ── 3. Nichos (top 6) ──
     const nicheCount = {}

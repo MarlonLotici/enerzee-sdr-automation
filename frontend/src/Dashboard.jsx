@@ -235,30 +235,33 @@ const carregarDados = useCallback(async () => {
             const agendados = agendamentosReais.length
 
             // === KPIs PRINCIPAIS ===
-            // disparosHoje: apenas leads contactados HOJE (para o card "Disparos Hoje")
-            const disparosHoje     = leads?.filter(l => l.last_contact_at && new Date(l.last_contact_at) >= hoje).length || 0
-            // totalDisparados: histórico completo (para o funil e taxa de resposta)
-            const totalDisparados  = leads?.filter(l => !!l.last_contact_at).length || 0
-            const emAtendimento    = leads?.filter(l => l.status === 'contact').length || 0
-            const pausaAutomatica  = leads?.filter(l => l.is_paused && !l.manual_pause).length || 0
-            const pausadoManual    = leads?.filter(l => l.manual_pause).length || 0
+            const disparosHoje    = leads?.filter(l => l.last_contact_at && new Date(l.last_contact_at) >= hoje).length || 0
+            // totalDisparados: histórico completo (para o funil)
+            const totalDisparados = leads?.filter(l => !!l.last_contact_at).length || 0
+            // disparados30d: mesma janela das mensagens — denominador correto para taxa de resposta
+            const disparados30d   = leads?.filter(l => l.last_contact_at && new Date(l.last_contact_at) >= new Date(trintaDiasAtras)).length || 0
+            const emAtendimento   = leads?.filter(l => l.status === 'contact').length || 0
+            const pausaAutomatica = leads?.filter(l => l.is_paused && !l.manual_pause).length || 0
+            const pausadoManual   = leads?.filter(l => l.manual_pause).length || 0
 
-            // 🛡️ Mensagens REAIS do cliente (exclui autoresposta) — últimos 30 dias
+            // Mensagens REAIS do cliente (exclui autoresposta) — últimos 30 dias
             const mensagensDoCliente = mensagens?.filter(m =>
                 m.role === 'user' && !m.content?.startsWith('[AUTORESPOSTA]')
             ) || []
 
-            // Leads únicos que enviaram mensagem real nos últimos 30 dias (fonte: tabela messages)
+            // Leads únicos que responderam nos últimos 30 dias (fonte: tabela messages)
             const leadsQueResponderam30d = new Set(mensagensDoCliente.map(m => m.whatsapp_id)).size
-            // Taxa de resposta real: leads com mensagem real ÷ disparados no período
-            const taxaResposta = totalDisparados > 0
-                ? Math.round((leadsQueResponderam30d / totalDisparados) * 100)
+            // Taxa de resposta: janela 30d no numerador E denominador — agora comparáveis
+            const taxaResposta = disparados30d > 0
+                ? Math.round((leadsQueResponderam30d / disparados30d) * 100)
                 : 0
+            // Para o funil: "Responderam" all-time usa current_stage > 0 como proxy histórico
+            const responderam30dFunil = leads?.filter(l => (l.current_stage || 0) > 0 && l.last_contact_at).length || 0
 
             // === FUNIL DE CONVERSÃO — todos históricos, períodos consistentes ===
             const funil = [
                 { nome: 'Disparados',     valor: totalDisparados,                                                       cor: CORES.slate    },
-                { nome: 'Responderam',    valor: leadsQueResponderam30d,                                                cor: CORES.azul     },
+                { nome: 'Responderam',    valor: responderam30dFunil,                                                   cor: CORES.azul     },
                 { nome: 'Em Conversa',    valor: emAtendimento,                                                         cor: CORES.ciano    },
                 { nome: 'Fatura Enviada', valor: leads?.filter(l => l.status === 'waiting_analysis').length || 0,       cor: CORES.amarelo  },
                 { nome: 'Agendados',      valor: agendados,                                                             cor: CORES.verde    },
