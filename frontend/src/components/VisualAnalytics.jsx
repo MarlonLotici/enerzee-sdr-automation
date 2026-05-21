@@ -397,7 +397,7 @@ export default function VisualAnalytics() {
             const uid = s?.user?.id
             if (!uid) { setLoading(false); return }
 
-            const { data: instData } = await supabase.from('instances').select('id, name, whatsapp_status').eq('user_id', uid)
+            const { data: instData } = await supabase.from('instances').select('id, name, whatsapp_status').or(`user_id.eq.${uid},user_id.is.null`)
             const instIds = instData?.map(i => i.id) || []
             if (!instIds.length) { setLoading(false); return }
 
@@ -533,7 +533,12 @@ export default function VisualAnalytics() {
                 />
                 <KpiCard
                     icon={Activity} label="Conversão Total"
-                    value={(totalAbordados > 0 ? (totalAgendados / totalAbordados * 100).toFixed(1) : 0).toString().replace('.', ',') + '%'}
+                    value={(() => {
+                        if (!totalAbordados || totalAbordados <= 0) return '—'
+                        const taxa = (totalAgendados / totalAbordados * 100)
+                        if (!isFinite(taxa)) return '—'
+                        return taxa.toFixed(1).replace('.', ',') + '%'
+                    })()}
                     sub="agendamentos ÷ abordados"
                     delta={null} color={NEON.emerald}
                     info="Percentual de leads abordados que chegaram ao agendamento. Mede a eficiência geral do funil: de quem recebeu mensagem, quantos converteram."

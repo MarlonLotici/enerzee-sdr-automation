@@ -241,11 +241,12 @@ const getHotLeads = () => filteredLeads.filter(l =>
     !['booked', 'dead', 'invalid', 'blacklisted'].includes(l.status)
 );
 
-// 📭 Aguardando Resposta: status=contact mas sem nenhuma resposta do lead ainda
-// Detecta pelo current_stage: se IA mandou saudação mas lead não engajou, current_stage continua 0
-const getAwaitingReply = () => filteredLeads.filter(l => 
-    l.status === 'contact' && 
-    (!l.current_stage || l.current_stage === 0)
+// 📭 Aguardando Resposta: IA enviou abertura mas lead ainda não avançou nem recebeu follow-up
+// followup_count = 0 E stage = 0 = genuinamente aguardando primeira resposta
+const getAwaitingReply = () => filteredLeads.filter(l =>
+    l.status === 'contact' &&
+    (!l.current_stage || l.current_stage === 0) &&
+    (!l.followup_count || l.followup_count === 0)
 );
 
    
@@ -395,11 +396,11 @@ if (session?.user?.id) checkBriefing()
         const userId = currentSession?.user?.id;
         if (!userId) return;
 
-        // 1. Busca apenas os chips do usuário logado
+        // 1. Busca chips do usuário — inclui chips sem user_id ainda (migração pendente)
         const { data: userInstances } = await supabase
             .from('instances')
             .select('id')
-            .eq('user_id', userId);
+            .or(`user_id.eq.${userId},user_id.is.null`);
         const instanceIds = userInstances?.map(i => i.id) || [];
         if (instanceIds.length === 0) { setLeads([]); setRealTotalLeads(0); return; }
 

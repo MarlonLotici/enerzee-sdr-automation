@@ -70,7 +70,7 @@ export default function AuditorDashboard() {
             const uid = s?.user?.id
             if (!uid) { setLoading(false); return }
 
-            const { data: instData } = await supabase.from('instances').select('id').eq('user_id', uid)
+            const { data: instData } = await supabase.from('instances').select('id').or(`user_id.eq.${uid},user_id.is.null`)
             const instIds = instData?.map(i => i.id) || []
             if (!instIds.length) { setLoading(false); return }
 

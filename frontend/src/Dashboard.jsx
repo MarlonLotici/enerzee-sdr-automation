@@ -168,7 +168,7 @@ const carregarDados = useCallback(async () => {
             const { data: instancias } = await supabase
                 .from('instances')
                 .select('id, name, whatsapp_status, daily_limit')
-                .eq('user_id', uid)
+                .or(`user_id.eq.${uid},user_id.is.null`)
 
             const instanceIds = instancias?.map(i => i.id) || []
             if (!instanceIds.length) { setCarregando(false); return }
@@ -248,18 +248,17 @@ const carregarDados = useCallback(async () => {
                 m.role === 'user' && !m.content?.startsWith('[AUTORESPOSTA]')
             ) || []
 
-            // Leads que responderam (30d via mensagens — para o KPI de taxa de resposta)
+            // Leads únicos que enviaram mensagem real nos últimos 30 dias (fonte: tabela messages)
             const leadsQueResponderam30d = new Set(mensagensDoCliente.map(m => m.whatsapp_id)).size
-            // Leads que avançaram no funil (histórico total — para o funil de conversão)
-            const leadsQueResponderamTotal = leads?.filter(l => (l.current_stage || 0) > 0 && l.last_contact_at).length || 0
+            // Taxa de resposta real: leads com mensagem real ÷ disparados no período
             const taxaResposta = totalDisparados > 0
-                ? Math.round((leadsQueResponderamTotal / totalDisparados) * 100)
+                ? Math.round((leadsQueResponderam30d / totalDisparados) * 100)
                 : 0
 
             // === FUNIL DE CONVERSÃO — todos históricos, períodos consistentes ===
             const funil = [
                 { nome: 'Disparados',     valor: totalDisparados,                                                       cor: CORES.slate    },
-                { nome: 'Responderam',    valor: leadsQueResponderamTotal,                                              cor: CORES.azul     },
+                { nome: 'Responderam',    valor: leadsQueResponderam30d,                                                cor: CORES.azul     },
                 { nome: 'Em Conversa',    valor: emAtendimento,                                                         cor: CORES.ciano    },
                 { nome: 'Fatura Enviada', valor: leads?.filter(l => l.status === 'waiting_analysis').length || 0,       cor: CORES.amarelo  },
                 { nome: 'Agendados',      valor: agendados,                                                             cor: CORES.verde    },
@@ -298,9 +297,12 @@ const carregarDados = useCallback(async () => {
                 return { dia: diaStr, Disparos: count, Respostas: respostas }
             })
 
-            // === RESPOSTAS POR HORA DO DIA ===
+            // === RESPOSTAS POR HORA DO DIA (em horário BRT = UTC-3) ===
             const respostasPorHora = Array.from({ length: 24 }, (_, h) => {
-                const count = mensagensDoCliente.filter(m => new Date(m.created_at).getHours() === h).length
+                const count = mensagensDoCliente.filter(m => {
+                    const horaBRT = (new Date(m.created_at).getUTCHours() - 3 + 24) % 24
+                    return horaBRT === h
+                }).length
                 return { hora: `${h}h`, Respostas: count }
             })
 
