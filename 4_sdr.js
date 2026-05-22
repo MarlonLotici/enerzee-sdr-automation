@@ -545,6 +545,20 @@ async function getRegrasEmCache(instanceId) {
         }
     }
 
+    // Sobrescreve calendly_link com o da conta (profile) — todos os chips da mesma
+    // empresa compartilham o mesmo link, independente do que estiver no chip individual
+    if (regrasDoBanco?.user_id) {
+        const { data: profile } = await supabase
+            .from('profiles')
+            .select('calendly_link')
+            .eq('id', regrasDoBanco.user_id)
+            .maybeSingle();
+
+        if (profile?.calendly_link) {
+            regrasDoBanco.calendly_link = profile.calendly_link;
+        }
+    }
+
     if (regrasDoBanco) {
         cacheRegrasInstancia.set(instanceId, { dados: regrasDoBanco, timestamp: agora });
     }
@@ -770,7 +784,9 @@ const concessionariaLocal = (MAPA_CONCESSIONARIAS[contextoLead.estado] || 'conce
         .replaceAll('${perfilEmocional}', perfilEmocional)
         .replaceAll('${economiaMensal}', economiaMensalFormatada)
         .replaceAll('${economiaAnual}', economiaAnualFormatada)
-        .replaceAll('${calendlyLink}', instanceData?.calendly_link || '');
+        .replaceAll('${calendlyLink}', instanceData?.calendly_link || instanceData?.owner_phone
+            ? `https://wa.me/55${(instanceData.owner_phone || '').replace(/\D/g, '')}`
+            : 'https://antix.com.br/agendar');
         
          
 
@@ -2732,13 +2748,11 @@ if (!promptResolvido) {
 } else if (intencao === 'COMPRA') {
     // ... resto do código igual
     console.log(`💰 [WORKER-IA] Sinal de COMPRA! Acionando Closer em modo fechamento para ${lead.name}...`);
-    resposta = await closerAgent.gerarRespostaCloser(historico, lead, promptResolvido, 'COMPRA', { calendlyLink: instanceData?.calendly_link });
+    resposta = await closerAgent.gerarRespostaCloser(historico, lead, promptResolvido, 'COMPRA', { calendlyLink: instanceData?.calendly_link, instanceType: instanceData?.product_type || 'solar' });
 
 } else if (intencao === 'DUVIDA' || intencao === 'CONTINUAR') {
-    // 🎯 Aqui garantimos que o "Sim, sou eu" ou perguntas sobre o serviço
-    // acionem o modo de qualificação do CloserAgent.
     console.log(`🔍 [WORKER-IA] Fluxo de CONTINUIDADE/DÚVIDA. Acionando Closer para ${lead.name}...`);
-    resposta = await closerAgent.gerarRespostaCloser(historico, lead, promptResolvido, 'DUVIDA', { calendlyLink: instanceData?.calendly_link });
+    resposta = await closerAgent.gerarRespostaCloser(historico, lead, promptResolvido, 'DUVIDA', { calendlyLink: instanceData?.calendly_link, instanceType: instanceData?.product_type || 'solar' });
 
 } else if (intencao === 'OBJECAO') {
     console.log(`🛡️ [WORKER-IA] OBJEÇÃO detectada! Acionando The Tank para ${lead.name}...`);
@@ -2778,12 +2792,11 @@ if (!promptResolvido) {
         }
     }
 
-    resposta = await closerAgent.gerarRespostaCloser(historico, lead, promptResolvido, 'REPASSE', { calendlyLink: instanceData?.calendly_link });
+    resposta = await closerAgent.gerarRespostaCloser(historico, lead, promptResolvido, 'REPASSE', { calendlyLink: instanceData?.calendly_link, instanceType: instanceData?.product_type || 'solar' });
 
 } else {
-    // LIXO — "oi", "opa", "ok", "sim" solto
     console.log(`🧹 [WORKER-IA] Mensagem LIXO. Closer seguirá estágio atual da Constituição...`);
-    resposta = await closerAgent.gerarRespostaCloser(historico, lead, promptResolvido, 'LIXO', { calendlyLink: instanceData?.calendly_link });
+    resposta = await closerAgent.gerarRespostaCloser(historico, lead, promptResolvido, 'LIXO', { calendlyLink: instanceData?.calendly_link, instanceType: instanceData?.product_type || 'solar' });
 }
 
 // 🛡️ Blindagem final: se todos os agentes falharam, avisa o log
@@ -3021,7 +3034,21 @@ enviarAlerta("🎊 REUNIÃO AGENDADA!", `Lead: ${lead.name}\nData: ${new Date(da
         console.log(`🔌 [SDR] Sessão ${instanceId} completamente encerrada e limpa.`);
     },
     criarNovaInstancia: async (n, t, userId) => {
-        const { data } = await supabase.from('instances').insert([{ name: n, owner_phone: t, user_id: userId }]).select().single();
+        // Deduz o product_type do perfil do usuário — zero fricção no frontend
+        const { data: profile } = await supabase
+            .from('profiles')
+            .select('default_product_type')
+            .eq('id', userId)
+            .maybeSingle();
+
+        const productType = profile?.default_product_type || 'solar';
+        console.log(`🏷️ [INSTÂNCIA] Criando chip "${n}" para user ${userId} com product_type="${productType}"`);
+
+        const { data } = await supabase
+            .from('instances')
+            .insert([{ name: n, owner_phone: t, user_id: userId, product_type: productType }])
+            .select()
+            .single();
 
         if (data) {
             await startInstance(data.id, data.name);

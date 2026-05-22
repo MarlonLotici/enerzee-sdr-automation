@@ -41,7 +41,8 @@ const db = {
                 system_prompt,
                 daily_limit,
                 calendly_link,
-                opening_templates
+                opening_templates,
+                product_type
             `)
             .eq('id', instanceId)
             .single();

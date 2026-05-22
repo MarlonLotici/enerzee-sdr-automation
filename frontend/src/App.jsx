@@ -205,6 +205,9 @@ const [botLogs, setBotLogs] = useState([]);
     const [isSearchingCity, setIsSearchingCity] = useState(false);
     const [citySuggestions, setCitySuggestions] = useState([]);
     const [showNotes, setShowNotes] = useState(false);
+    const [showSettings, setShowSettings] = useState(false);
+    const [settingsForm, setSettingsForm] = useState({ calendly_link: '' });
+    const [savingSettings, setSavingSettings] = useState(false);
     const [notesContent, setNotesContent] = useState(() => localStorage.getItem('radar_notes') ?? '');
     const [showExportMenu, setShowExportMenu] = useState(false);
 
@@ -404,10 +407,10 @@ if (session?.user?.id) checkBriefing()
         const instanceIds = userInstances?.map(i => i.id) || [];
         if (instanceIds.length === 0) { setLeads([]); setRealTotalLeads(0); return; }
 
-        // 2. Baixa apenas leads dos chips deste usuário
+        // 2. Baixa leads: por instance_id OU por user_id (captura órfãos de chips removidos)
         const { data } = await supabase.from('leads')
             .select('id, name, phone, status, niche, dono, cnpj, bairro, cep, porte, capital_social_numeric, whatsapp_id, instance_id, lat, lng, created_at, last_contact_at, is_paused, manual_pause, current_stage, lead_temperature, followup_count, opening_template')
-            .in('instance_id', instanceIds)
+            .or(`instance_id.in.(${instanceIds.join(',')}),user_id.eq.${userId}`)
             .order('created_at', { ascending: false })
             .limit(10000);
         if (data) setLeads(data);
@@ -415,7 +418,7 @@ if (session?.user?.id) checkBriefing()
         // 3. Total real filtrado por usuário
         const { count } = await supabase.from('leads')
             .select('*', { count: 'exact', head: true })
-            .in('instance_id', instanceIds);
+            .or(`instance_id.in.(${instanceIds.join(',')}),user_id.eq.${userId}`);
         if (count !== null) setRealTotalLeads(count);
     };
 
@@ -490,6 +493,24 @@ if (session?.user?.id) checkBriefing()
         const n = new Set(selectedLeadIds);
         n.has(id) ? n.delete(id) : n.add(id);
         setSelectedLeadIds(n);
+    };
+
+    const openSettings = async () => {
+        const { data: { session: s } } = await supabase.auth.getSession();
+        if (!s?.user?.id) return;
+        const { data } = await supabase.from('profiles').select('calendly_link').eq('id', s.user.id).maybeSingle();
+        setSettingsForm({ calendly_link: data?.calendly_link || '' });
+        setShowSettings(true);
+    };
+
+    const saveSettings = async () => {
+        setSavingSettings(true);
+        const { data: { session: s } } = await supabase.auth.getSession();
+        if (s?.user?.id) {
+            await supabase.from('profiles').update({ calendly_link: settingsForm.calendly_link }).eq('id', s.user.id);
+        }
+        setSavingSettings(false);
+        setShowSettings(false);
     };
 
     const exportLeadsExcel = async (limit) => {
@@ -632,6 +653,45 @@ if (session?.user?.id) checkBriefing()
 return (
     <div className="h-screen w-full flex relative bg-[#0A0A0A] overflow-hidden">
 
+    {/* MODAL DE CONFIGURAÇÕES DA CONTA */}
+    {showSettings && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/70 backdrop-blur-sm" onClick={() => setShowSettings(false)}>
+            <div className="bg-[#111] border border-white/10 rounded-2xl p-6 w-full max-w-md shadow-2xl" onClick={e => e.stopPropagation()}>
+                <div className="flex items-center justify-between mb-5">
+                    <div>
+                        <h2 className="text-sm font-black text-white uppercase tracking-widest">Configurações da Conta</h2>
+                        <p className="text-[10px] text-slate-500 mt-0.5">{session?.user?.email}</p>
+                    </div>
+                    <button onClick={() => setShowSettings(false)} className="h-7 w-7 rounded-lg bg-white/5 flex items-center justify-center hover:bg-white/10 transition-colors">
+                        <X className="h-3.5 w-3.5 text-slate-400" />
+                    </button>
+                </div>
+
+                <div className="space-y-4">
+                    <div>
+                        <label className="text-[10px] font-black text-amber-300/80 uppercase tracking-widest block mb-1.5">Link Calendly</label>
+                        <Input
+                            value={settingsForm.calendly_link}
+                            onChange={e => setSettingsForm(f => ({ ...f, calendly_link: e.target.value }))}
+                            placeholder="https://calendly.com/seu-usuario/30min"
+                            className="bg-black/30 border-white/10 text-white text-sm h-10 focus:border-amber-500"
+                        />
+                        <p className="text-[9px] text-slate-600 mt-1">Compartilhado por todos os chips da sua conta</p>
+                    </div>
+                </div>
+
+                <div className="flex gap-3 mt-6">
+                    <Button onClick={() => setShowSettings(false)} className="flex-1 h-9 bg-transparent border border-white/10 text-slate-400 hover:bg-white/5 text-xs">
+                        Cancelar
+                    </Button>
+                    <Button onClick={saveSettings} disabled={savingSettings} className="flex-1 h-9 bg-amber-500 hover:bg-amber-400 text-black font-black text-xs">
+                        {savingSettings ? 'Salvando...' : 'Salvar'}
+                    </Button>
+                </div>
+            </div>
+        </div>
+    )}
+
     {/* SIDEBAR */}
     <AppSidebar
         activeTab={activeTab}
@@ -685,16 +745,19 @@ return (
     </div>
 
     <div className="flex items-center gap-3">
-        {/* Usuário logado */}
-        <div className="hidden md:flex items-center gap-2 px-3 py-1.5 rounded-lg bg-white/[0.03] border border-white/5">
+        {/* Usuário logado + botão de configurações */}
+        <div className="hidden md:flex items-center gap-1.5 px-3 py-1.5 rounded-lg bg-white/[0.03] border border-white/5">
             <div className="h-5 w-5 rounded-full bg-amber-500/20 flex items-center justify-center">
                 <span className="text-[8px] font-black text-amber-400 uppercase">
                     {session?.user?.email?.[0]}
                 </span>
             </div>
-            <span className="text-[9px] text-slate-400 font-bold truncate max-w-[140px]">
+            <span className="text-[9px] text-slate-400 font-bold truncate max-w-[120px]">
                 {session?.user?.email}
             </span>
+            <button onClick={openSettings} className="ml-1 h-5 w-5 rounded flex items-center justify-center hover:bg-white/10 transition-colors" title="Configurações da conta">
+                <Settings className="h-3 w-3 text-slate-500 hover:text-amber-400 transition-colors" />
+            </button>
         </div>
         {/* Chips online indicator */}
         <div className="flex items-center gap-2 px-3 py-1.5 rounded-lg bg-white/[0.03] border border-white/5">
