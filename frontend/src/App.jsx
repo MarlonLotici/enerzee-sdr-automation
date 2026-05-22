@@ -193,6 +193,7 @@ const [qrCodeData, setQrCodeData] = useState(null); // Agora guarda { qr, instan
 const [instances, setInstances] = useState([]); // Lista de chips no banco
 const [selectedInstanceId, setSelectedInstanceId] = useState(null); 
 const [isBotRunning, setIsBotRunning] = useState(false);
+const [scraperLeadsCount, setScraperLeadsCount] = useState(0);
 const [botProgress, setBotProgress] = useState(0);
 const [botLogs, setBotLogs] = useState([]);
 
@@ -366,17 +367,17 @@ if (session?.user?.id) checkBriefing()
             playNotificationSound();
         });
 
-        socket.on('notification', (m) => setBotLogs(prev => [...prev, `[IA] ${m}`]));
-        socket.on('scraping_stopped', () => setIsBotRunning(false));
-
-            // 👇 ADICIONE ESTES LISTENERS 👇
+        socket.on('notification', (m) => {
+            setBotLogs(prev => [...prev, m]);
+            if (m.includes('extraído') || m.includes('Lead ')) setScraperLeadsCount(c => c + 1);
+        });
+        socket.on('scraping_stopped', () => { setIsBotRunning(false); });
         socket.on('scraper_status', (statusData) => {
             setIsBotRunning(statusData.isRunning);
             if (statusData.isRunning) {
-                // Se estava rodando, puxa os logs recentes para a tela não ficar vazia
-                setBotLogs(statusData.recentLogs || ["[SISTEMA] Conexão restabelecida. Monitorando motor..."]);
-                // Muda pra aba CRM pra pessoa ver o War Room
-                setActiveTab("crm"); 
+                setBotLogs(statusData.recentLogs || []);
+            } else {
+                setScraperLeadsCount(0);
             }
         });
 
@@ -466,13 +467,15 @@ if (session?.user?.id) checkBriefing()
     
     setIsBotRunning(!isBotRunning);
     if (!isBotRunning) {
-        socket.emit('start_scraping', { 
-            niche: selectedNiche?.keywords, 
-            radius: searchRadius, 
-            city: locationName, 
-            lat: mapCenter[0], 
+        setScraperLeadsCount(0);
+        setBotLogs([]);
+        socket.emit('start_scraping', {
+            niche: selectedNiche?.keywords,
+            radius: searchRadius,
+            city: locationName,
+            lat: mapCenter[0],
             lng: mapCenter[1],
-            instanceId: selectedInstanceId // <--- ENVIANDO O ID DO CHIP
+            instanceId: selectedInstanceId
         });
         setActiveTab("crm");
     } else socket.emit('stop_scraping');
@@ -727,19 +730,32 @@ return (
             </div>
         </div>
 
-        {/* Motor ativo badge */}
+        {/* Indicador de scraping ativo */}
         {isBotRunning && (
-            <div className="flex items-center gap-2 px-3 py-1.5 rounded-lg bg-amber-500/10 border border-amber-500/20">
-                <div className="relative">
-                    <div className="h-2 w-2 rounded-full bg-amber-500 animate-pulse" />
-                    <div className="absolute inset-0 h-2 w-2 rounded-full bg-amber-500 animate-ping opacity-30" />
+            <div className="flex items-center gap-3 px-4 py-1.5 rounded-xl bg-amber-500/8 border border-amber-500/20" style={{ backdropFilter: 'blur(8px)' }}>
+                {/* Pulso animado */}
+                <div className="relative flex-shrink-0">
+                    <div className="h-2 w-2 rounded-full bg-amber-400 animate-pulse" />
+                    <div className="absolute inset-0 h-2 w-2 rounded-full bg-amber-400 animate-ping opacity-40" />
                 </div>
-                <span className="text-[9px] font-black text-amber-400 uppercase tracking-widest">Motor Ativo</span>
-                {botLogs.length > 0 && (
-                    <span className="text-[9px] text-amber-300/60 font-bold truncate max-w-[250px]">
-                        — {botLogs[botLogs.length - 1]?.replace('[IA] ', '').replace('[SISTEMA] ', '')}
+                {/* Texto principal */}
+                <div className="flex flex-col leading-none gap-0.5">
+                    <span className="text-[9px] font-black text-amber-400 uppercase tracking-widest">
+                        Radar Ativo
+                        {scraperLeadsCount > 0 && (
+                            <span className="ml-2 text-emerald-400">· {scraperLeadsCount} lead{scraperLeadsCount !== 1 ? 's' : ''}</span>
+                        )}
                     </span>
-                )}
+                    {botLogs.length > 0 && (() => {
+                        const ultimo = botLogs[botLogs.length - 1] || '';
+                        const limpo = ultimo.replace(/^[\u{1F300}-\u{1FFFF}]\s*/u, '').replace(/\[.*?\]/g, '').trim();
+                        return limpo ? (
+                            <span className="text-[8px] text-amber-300/40 font-medium truncate max-w-[280px]">
+                                {limpo}
+                            </span>
+                        ) : null;
+                    })()}
+                </div>
             </div>
         )}
     </div>

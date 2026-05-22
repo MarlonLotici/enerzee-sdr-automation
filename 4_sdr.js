@@ -784,9 +784,11 @@ const concessionariaLocal = (MAPA_CONCESSIONARIAS[contextoLead.estado] || 'conce
         .replaceAll('${perfilEmocional}', perfilEmocional)
         .replaceAll('${economiaMensal}', economiaMensalFormatada)
         .replaceAll('${economiaAnual}', economiaAnualFormatada)
-        .replaceAll('${calendlyLink}', instanceData?.calendly_link || instanceData?.owner_phone
-            ? `https://wa.me/55${(instanceData.owner_phone || '').replace(/\D/g, '')}`
-            : 'https://antix.com.br/agendar');
+        .replaceAll('${calendlyLink}',
+            instanceData?.calendly_link ||
+            (instanceData?.owner_phone
+                ? `https://wa.me/55${(instanceData.owner_phone || '').replace(/\D/g, '')}`
+                : 'https://antix.com.br/agendar'));
         
          
 
