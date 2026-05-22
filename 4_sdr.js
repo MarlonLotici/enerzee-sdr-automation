@@ -270,26 +270,25 @@ function setBaseVazia(instanceId, val) { baseEstaVaziaMap.set(instanceId, val); 
  * 🎚️ Retorna o modo operacional atual do sistema baseado em hora + estado da base
  * Returns: 'SAUDACAO' | 'FOLLOWUP' | 'DESCANSO'
  */
-function getModoOperacional() {
+function getModoOperacional(instanceId = null) {
     const agora = getHoraBrasil();
-    
+
     // 🛑 Domingo: descanso total
     if (agora.diaSemana === 0) return 'DESCANSO';
-    
-    // 🛑 Sábado: só até 14h, e só saudação (sem follow-up no fim de semana)
+
+    // 🛑 Sábado: só até 14h, e só saudação
     if (agora.diaSemana === 6) {
         const t = agora.horas * 60 + agora.minutos;
         if (t >= 480 && t <= 840) return 'SAUDACAO';
         return 'DESCANSO';
     }
-    
-    // 🔄 FALLBACK INTELIGENTE: se a base está vazia, vira FOLLOWUP independente da janela
-    if ([...baseEstaVaziaMap.values()].some(v => v)) {
+
+    // 🔄 FALLBACK INTELIGENTE: só comuta pra FOLLOWUP se a fila deste chip específico
+    // estiver vazia — impede que um chip sem leads bloqueie outros que têm leads
+    const baseVazia = instanceId ? isBaseVazia(instanceId) : [...baseEstaVaziaMap.values()].some(v => v);
+    if (baseVazia) {
         const t = agora.horas * 60 + agora.minutos;
-        // Mas respeita o expediente (8h-18h)
-        if (t >= 480 && t <= 1080) {
-            return 'FOLLOWUP';
-        }
+        if (t >= 480 && t <= 1080) return 'FOLLOWUP';
         return 'DESCANSO';
     }
     
@@ -407,9 +406,8 @@ function dentroDoExpediente() {
 }
 
 
-function dentroDaJanelaDeDisparo() {
-    // 🎚️ Agora delega ao modo operacional dinâmico
-    const modo = getModoOperacional();
+function dentroDaJanelaDeDisparo(instanceId = null) {
+    const modo = getModoOperacional(instanceId);
     
     if (modo === 'SAUDACAO') return true;
     
@@ -1857,7 +1855,7 @@ async function processarFilaDeAtaque(instanceId) {
             }
 
             try {
-                if (!dentroDaJanelaDeDisparo()) {
+                if (!dentroDaJanelaDeDisparo(instanceId)) {
                     console.log(`💤 [ECONOMIA] Fora da janela de disparo. Motor pausado.`);
                     break; // 🛑 HÍBRIDO: Morre aqui e libera memória
                 }
@@ -2733,6 +2731,16 @@ if (!promptResolvido) {
         let resposta;
         
         // 4.2. Delegação aos Especialistas (Elite Squad)
+        if (intencao === 'ROBO') {
+    console.log(`🤖 [WORKER-IA] Robô/autoresposta detectado para ${lead.name}. Pausando lead sem responder.`);
+    await supabase.from('leads').update({
+        status: 'invalid',
+        is_paused: true,
+        internal_notes: `Autoresposta/robô detectado em ${new Date().toLocaleString('pt-BR')}. Sem resposta enviada.`
+    }).eq('id', lead.id);
+    return; // Não envia nada, não chama nenhum agente
+}
+
         if (intencao === 'ENCERRAMENTO') {
     console.log(`👋 [WORKER-IA] ENCERRAMENTO detectado. Finalizando conversa educadamente e pausando o lead...`);
     

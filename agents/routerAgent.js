@@ -11,7 +11,19 @@ async function classificarMensagem(ultimaMensagemLead) {
         return 'LIXO';
     }
 
-    // 🛡️ NÍVEL 2: Deteção de Repasse Direto (Regex — custo zero, latência zero)
+    // 🛡️ NÍVEL 2: Detecção de Robô/Autoresposta (Regex — custo zero, latência zero)
+    const padraoRobo = (
+        /^(olá|oi|hello|bom dia|boa tarde|boa noite)[,!.\s]*\s*(como posso (ajudar|te atender)|em que posso|no que posso)/i.test(ultimaMensagemLead) ||
+        /\b(atendimento automático|assistente virtual|chatbot|robô|este é um serviço automático|resposta automática|fora do horário de atendimento|horário de funcionamento)\b/i.test(ultimaMensagemLead) ||
+        /^\s*\d+[\s\-–\.]\s*.{2,40}(\n\s*\d+[\s\-–\.]\s*.{2,40}){2,}/m.test(ultimaMensagemLead) || // menu numerado com 3+ itens
+        /begin:vcard/i.test(ultimaMensagemLead) === false && /\[AUTORESPOSTA\]/.test(ultimaMensagemLead)
+    );
+    if (padraoRobo) {
+        console.log("🤖 [ROTEADOR] Autoresposta/robô detectado. Bypass para ROBO.");
+        return 'ROBO';
+    }
+
+    // 🛡️ NÍVEL 2b: Deteção de Repasse Direto (Regex — custo zero, latência zero)
 
     // 2a. Número de telefone isolado
     const textoLimpo = ultimaMensagemLead.replace(/[\s\-\(\)\+]/g, '');
