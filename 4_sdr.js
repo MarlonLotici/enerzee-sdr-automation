@@ -983,64 +983,63 @@ process.on('unhandledRejection', (reason) => {
             if (ioSocket) ioSocket.emit('whatsapp_status', { status: 'CONNECTED', instanceId });
         }
 
-        if (connection === 'close') {
-            // 👇 ENTRA AQUI: A barreira de silêncio
+       if (connection === 'close') {
+            // 👇 A barreira de silêncio (Encerramento Manual)
             if (instanciasEncerrandoManualmente.has(instanceId)) {
                 console.log(`🔇 [SHUTDOWN SILENCIOSO] Chip ${instanceName} removido pelo painel. Alerta abortado.`);
-                instanciasEncerrandoManualmente.delete(instanceId); // Limpa a flag
-                return; // 🛑 Mata a execução aqui! Não manda pro Discord, não tenta religar.
+                instanciasEncerrandoManualmente.delete(instanceId);
+                return; // 🛑 Mata a execução aqui!
             }
-            // 👆 FIM DA BARREIRA
 
             sessions.set(instanceId, { sock, ready: false });
             instanciasLigando.delete(instanceId);
             const reason = (lastDisconnect?.error)?.output?.statusCode;
         
-    // Avisa no Discord, exceto se foi você que clicou em deslogar manualmente
-    if (reason !== DisconnectReason.loggedOut) {
-        enviarAlerta("🔴 CHIP OFF-LINE", `O chip ${instanceName} caiu. Código do erro: ${reason}`, 15158332);
-    }
+            // Avisa no Discord (exceto se for deslogado/rejeitado pela Meta)
+            if (reason !== DisconnectReason.loggedOut && reason !== 403 && reason !== 401) {
+                enviarAlerta("🔴 CHIP OFF-LINE", `O chip ${instanceName} caiu. Código do erro: ${reason}`, 15158332);
+            }
 
-    // 🔴 Sessão corrompida (Bad Session) → limpa chaves e força novo QR
-    if (reason === DisconnectReason.badSession) {
-        console.log(`🔴 [BAD SESSION] ${instanceName} com chaves corrompidas. Limpando e pedindo novo QR...`);
-        await supabase.from('whatsapp_sessions').delete().eq('id', instanceId);
-        await supabase.from('whatsapp_keys').delete().eq('instance_id', instanceId);
-        await db.updateInstanceStatus(instanceId, 'DISCONNECTED');
-        setTimeout(() => startInstance(instanceId, instanceName), 3000);
-        return;
-    }
+            // 🔴 ERROS FATAIS (Deslogado, Banido, ou Rejeitado pela Meta)
+            if (reason === DisconnectReason.loggedOut || reason === 403 || reason === 401) {
+                console.log(`🔴 [FATAL ${reason}] ${instanceName} foi rejeitado ou deslogado. Limpando sessão Redis para novo QR...`);
+                await clearRedisSession(redisConnection, instanceId);
+                await db.updateInstanceStatus(instanceId, 'DISCONNECTED');
+                return; // 🛑 MATA O LOOP AQUI! Sem setTimeout, sem insistir.
+            }
 
-    // 🔴 Deslogou (ban, logout no celular) → limpa sessão e aguarda QR manual
-    if (reason === DisconnectReason.loggedOut) {
-        console.log(`🔴 [LOGOUT] ${instanceName} foi deslogado. Limpando sessão Redis para permitir novo QR...`);
-        await clearRedisSession(redisConnection, instanceId);
-        await db.updateInstanceStatus(instanceId, 'DISCONNECTED');
-        return;
-    }
+            // 🔴 Sessão corrompida localmente (Bad Session)
+            if (reason === DisconnectReason.badSession) {
+                console.log(`🔴 [BAD SESSION] ${instanceName} com chaves corrompidas. Limpando e pedindo novo QR...`);
+                await supabase.from('whatsapp_sessions').delete().eq('id', instanceId);
+                await supabase.from('whatsapp_keys').delete().eq('instance_id', instanceId);
+                await db.updateInstanceStatus(instanceId, 'DISCONNECTED');
+                setTimeout(() => startInstance(instanceId, instanceName), 3000);
+                return;
+            }
 
-    // 🔴 Conflito (logou em outro lugar) → limpa e aguarda intervenção
-    if (reason === DisconnectReason.connectionReplaced) {
-        console.log(`⚠️ [CONFLITO] ${instanceName} foi conectado em outro lugar. Pausando.`);
-        await db.updateInstanceStatus(instanceId, 'DISCONNECTED');
-        return;
-    }
+            // 🔴 Conflito (logou em outro lugar)
+            if (reason === DisconnectReason.connectionReplaced) {
+                console.log(`⚠️ [CONFLITO] ${instanceName} foi conectado em outro lugar. Pausando.`);
+                await db.updateInstanceStatus(instanceId, 'DISCONNECTED');
+                return;
+            }
 
-    // Timeout de conexão → reconecta com backoff
-    if (reason === DisconnectReason.timedOut || reason === DisconnectReason.connectionLost) {
-        const delay = Math.min(5000 * (2 ** (instanciasLigando.size || 1)), 60000); // backoff: 10s → 20s → 40s → 60s (max)
-        console.log(`⏱️ [TIMEOUT] ${instanceName} perdeu conexão. Reconectando em ${delay/1000}s...`);
-        await db.updateInstanceStatus(instanceId, 'DISCONNECTED');
-        setTimeout(() => startInstance(instanceId, instanceName), delay);
-        return;
-    }
+            // Timeout de conexão → reconecta com backoff
+            if (reason === DisconnectReason.timedOut || reason === DisconnectReason.connectionLost) {
+                const delay = Math.min(5000 * (2 ** (instanciasLigando.size || 1)), 60000); // backoff: 10s → 20s → max 60s
+                console.log(`⏱️ [TIMEOUT] ${instanceName} perdeu conexão. Reconectando em ${delay/1000}s...`);
+                await db.updateInstanceStatus(instanceId, 'DISCONNECTED');
+                setTimeout(() => startInstance(instanceId, instanceName), delay);
+                return;
+            }
 
-    // Demais casos → reconecta com backoff leve
-    const delayMs = reason === undefined ? 15000 : 5000; // reason indefinido = provável ban/rate-limit → espera mais
-    console.log(`🔄 [SDR] Conexão instável em ${instanceName} (reason: ${reason ?? 'desconhecido'}). Reiniciando em ${delayMs/1000}s...`);
-    await db.updateInstanceStatus(instanceId, 'DISCONNECTED');
-    setTimeout(() => startInstance(instanceId, instanceName), delayMs);
-}
+            // Demais casos → reconecta com backoff leve
+            const delayMs = reason === undefined ? 15000 : 5000;
+            console.log(`🔄 [SDR] Conexão instável em ${instanceName} (reason: ${reason ?? 'desconhecido'}). Reiniciando em ${delayMs/1000}s...`);
+            await db.updateInstanceStatus(instanceId, 'DISCONNECTED');
+            setTimeout(() => startInstance(instanceId, instanceName), delayMs);
+        }
     });
     
     sock.ev.on('contacts.upsert', async (contacts) => {
@@ -2840,15 +2839,16 @@ workerIA.on('error', err => console.error('❌ [REDIS WORKER ERROR]:', err));
 let loopIniciado = false;
 
 // ============================================================================
-// ♻️ REDISTRIBUIÇÃO DE LEADS ÓRFÃOS
+// ♻️ REDISTRIBUIÇÃO DE LEADS ÓRFÃOS (BLINDADA MULTI-TENANT)
 // Roda a cada varredura do VIGIA. Move leads 'new' de chips desconectados
-// para chips conectados via round-robin. Não toca em leads 'contact'.
+// para chips conectados estritamente da mesma conta (user_id).
 // ============================================================================
 async function redistribuirLeadsOrfaos() {
     try {
+        // 1. Busca instâncias trazendo também o DONO (user_id)
         const { data: instancias } = await supabase
             .from('instances')
-            .select('id, name, whatsapp_status');
+            .select('id, name, whatsapp_status, user_id');
         if (!instancias?.length) return;
 
         const conectados = instancias.filter(i => i.whatsapp_status === 'CONNECTED');
@@ -2859,30 +2859,66 @@ async function redistribuirLeadsOrfaos() {
             .map(i => i.id);
         if (!idsDesconectados.length) return;
 
+        // 2. Agrupa os chips conectados por usuário (O "Muro" entre empresas)
+        const chipsPorUsuario = {};
+        for (const chip of conectados) {
+            if (!chipsPorUsuario[chip.user_id]) {
+                chipsPorUsuario[chip.user_id] = [];
+            }
+            chipsPorUsuario[chip.user_id].push(chip);
+        }
+
+        // Contador independente por usuário para o Round-Robin justo
+        const contadoresPorUsuario = {};
+
+        // 3. Busca os leads órfãos trazendo o DONO (user_id)
         const { data: orfaos } = await supabase
             .from('leads')
-            .select('id')
+            .select('id, user_id')
             .eq('status', 'new')
             .in('instance_id', idsDesconectados);
 
         if (!orfaos?.length) return;
 
-        console.log(`♻️ [REDISTRIBUIÇÃO] ${orfaos.length} leads órfãos detectados. Distribuindo entre ${conectados.length} chips conectados...`);
+        console.log(`♻️ [REDISTRIBUIÇÃO] ${orfaos.length} leads órfãos detectados. Isolando por Tenant...`);
 
-        let counter = 0;
+        let redistribuidosCount = 0;
         const chipsAcordados = new Set();
+
+        // 4. Distribuição Cirúrgica
         for (const lead of orfaos) {
-            const chip = conectados[counter % conectados.length];
-            counter++;
-            await supabase.from('leads').update({ instance_id: chip.id }).eq('id', lead.id);
-            chipsAcordados.add(chip.id);
+            const chipsDoDono = chipsPorUsuario[lead.user_id];
+            
+            // Se a empresa desse lead não tem NENHUM chip online agora, ignora. 
+            // O lead fica seguro aguardando algum chip dele mesmo voltar.
+            if (!chipsDoDono || chipsDoDono.length === 0) continue;
+
+            // Inicializa o contador desse dono se for o primeiro lead
+            if (contadoresPorUsuario[lead.user_id] === undefined) {
+                contadoresPorUsuario[lead.user_id] = 0;
+            }
+
+            // Sorteia apenas entre os chips DESTE usuário
+            const indiceSorteado = contadoresPorUsuario[lead.user_id] % chipsDoDono.length;
+            const chipSorteado = chipsDoDono[indiceSorteado];
+            
+            contadoresPorUsuario[lead.user_id]++; // Avança a fila deste usuário
+
+            // Salva no banco com o novo chip
+            await supabase.from('leads').update({ instance_id: chipSorteado.id }).eq('id', lead.id);
+            chipsAcordados.add(chipSorteado.id);
+            redistribuidosCount++;
         }
 
-        console.log(`✅ [REDISTRIBUIÇÃO] ${orfaos.length} leads redistribuídos com sucesso.`);
-
-        for (const chipId of chipsAcordados) {
-            sdrEvents?.emit('NOVO_LEAD_DISPONIVEL', chipId);
+        if (redistribuidosCount > 0) {
+            console.log(`✅ [REDISTRIBUIÇÃO] ${redistribuidosCount} leads redistribuídos com segurança.`);
+            for (const chipId of chipsAcordados) {
+                sdrEventsGlobal?.emit('NOVO_LEAD_DISPONIVEL', chipId); // Usando a variável global corrigida
+            }
+        } else {
+            console.log(`⏸️ [REDISTRIBUIÇÃO] Órfãos mantidos. (Nenhuma conta dona possui chips online no momento).`);
         }
+
     } catch (err) {
         console.error('❌ [REDISTRIBUIÇÃO] Erro:', err.message);
     }
