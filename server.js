@@ -157,21 +157,30 @@ io.on('connection', (socket) => {
         const userState = getScraperState(userId);
         userState.shouldStop = false;
         
-        const allChips = await db.getActiveInstances();
-        const activeChips = allChips.filter(c => c.whatsapp_status === 'CONNECTED' && c.user_id === socket.user.id);
-        let chipCounter = 0;
+        // 🧱 1. O MURO DE ISOLAMENTO: Descobre qual é o produto desta conta
+        const { data: profile } = await supabase
+            .from('profiles')
+            .select('default_product_type')
+            .eq('id', socket.user.id)
+            .maybeSingle();
+        const userProductType = profile?.default_product_type || 'solar';
 
-        if (activeChips.length === 0) {
-            return socket.emit('notification', '❌ Erro: Nenhum chip CONECTADO encontrado. Verifique o status dos chips antes de raspar.');
-        }
+        // 🧱 2. FILTRO BLINDADO: Só pega chips deste usuário E que vendam este produto
+        const allChips = await db.getActiveInstances();
+        const activeChips = allChips.filter(c => 
+            c.whatsapp_status === 'CONNECTED' && 
+            c.user_id === socket.user.id && 
+            c.product_type === userProductType
+        );
+        let chipCounter = 0;
 
         if (!params.niche || (Array.isArray(params.niche) && params.niche.length === 0)) {
             params.niche = ["Comércio"];
         }
 
         const isMapMode = params.city && params.city.startsWith('📍');
-
         let cidadeResolvida = params.city;
+        
         if (isMapMode && params.lat && params.lng) {
             try {
                 const geoRes = await fetch(
@@ -179,10 +188,7 @@ io.on('connection', (socket) => {
                     { headers: { 'User-Agent': 'EnerzeeBot/1.0' } }
                 );
                 const geoData = await geoRes.json();
-                cidadeResolvida = geoData.address?.city
-                    || geoData.address?.town
-                    || geoData.address?.municipality
-                    || params.city;
+                cidadeResolvida = geoData.address?.city || geoData.address?.town || geoData.address?.municipality || params.city;
                 console.log(`🗺️ [GEO] Coordenada resolvida: ${cidadeResolvida}`);
             } catch(e) {
                 console.log(`⚠️ [GEO] Falha ao resolver cidade, usando coordenada`);
@@ -192,12 +198,17 @@ io.on('connection', (socket) => {
         const payloadCorrigido = { ...params, city: cidadeResolvida, mode: isMapMode ? 'map' : 'city' };
 
         console.log(`🚀 [RADAR] Modo: ${payloadCorrigido.mode.toUpperCase()}`);
-        console.log(`📍 Alvo: ${params.city} | 🎲 Distribuindo entre ${activeChips.length} chips conectados.`);
+        console.log(`📍 Alvo: ${params.city} | 🎲 Distribuindo entre ${activeChips.length} chips (${userProductType}).`);
         
         userState.running = true;
         userState.logs = [];
 
-        emitLog(`📡 Radar ativado em ${params.city}! O motor está rodando na nuvem. Pode fechar a página se quiser.`);
+        if (activeChips.length === 0) {
+            emitLog(`⚠️ Aviso: Nenhum chip conectado para o produto '${userProductType}'. Os leads serão raspados e guardados na fila de espera.`);
+        } else {
+            emitLog(`📡 Radar ativado em ${params.city}! O motor está rodando na nuvem. Pode fechar a página se quiser.`);
+        }
+        
         socket.emit('scraper_status', { isRunning: true, recentLogs: userState.logs });
 
         try {
@@ -221,12 +232,21 @@ io.on('connection', (socket) => {
                             console.log(`⚠️ Silenciando erro de API no lead: ${leadFinal.name}`);
                         }
 
-                        const chipSorteado = activeChips[chipCounter % activeChips.length];
-                        chipCounter++; 
+                        // 🧱 3. FALLBACK DE ÓRFÃOS: Se não tem chip, salva como null
+                        let chipSorteadoId = null;
+                        let chipSorteadoName = "Fila de Espera (Nenhum chip online)";
 
-                        emitLog(`🎲 Lead ${leadFinal.name} extraído e entregue para o chip: ${chipSorteado.name}`);
+                        if (activeChips.length > 0) {
+                            const chipSorteado = activeChips[chipCounter % activeChips.length];
+                            chipSorteadoId = chipSorteado.id;
+                            chipSorteadoName = chipSorteado.name;
+                            chipCounter++; 
+                        }
 
-                        const { error: dbError } = await db.saveLead(leadFinal, chipSorteado.id, chipSorteado.user_id);
+                        emitLog(`🎲 Lead ${leadFinal.name} extraído. Destino: ${chipSorteadoName}`);
+
+                        // Salva o lead amarrado ao usuário, mesmo que o chip seja null
+                        const { error: dbError } = await db.saveLead(leadFinal, chipSorteadoId, socket.user.id);
                         
                         if (dbError) {
                             console.error(`❌ Erro DB (${leadFinal.name}):`, dbError.message);
@@ -236,7 +256,9 @@ io.on('connection', (socket) => {
                         } else {
                             socket.emit('new_lead', leadFinal);
                             socket.emit('background_lead_saved');
-                            sdrEvents.emit('NOVO_LEAD_DISPONIVEL', chipSorteado.id);
+                            if (chipSorteadoId) {
+                                sdrEvents.emit('NOVO_LEAD_DISPONIVEL', chipSorteadoId);
+                            }
                         }
                     }
                 }

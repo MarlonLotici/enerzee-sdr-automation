@@ -2876,8 +2876,7 @@ async function redistribuirLeadsOrfaos() {
             .from('leads')
             .select('id, user_id')
             .eq('status', 'new')
-            .in('instance_id', idsDesconectados);
-
+            .or(`instance_id.in.(${idsDesconectados.join(',')}),instance_id.is.null`);
         if (!orfaos?.length) return;
 
         console.log(`♻️ [REDISTRIBUIÇÃO] ${orfaos.length} leads órfãos detectados. Isolando por Tenant...`);
