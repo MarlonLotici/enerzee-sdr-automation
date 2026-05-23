@@ -24,6 +24,7 @@ const handoffAgent = require('./agents/handoffAgent');
 const motoresEmExecucao = new Set(); // 🛡️ Impede que o mesmo chip ligue dois loops infinitos
 const { useRedisAuthState, clearRedisSession } = require('./auth_redis_adapter');
 const { enviarAlerta } = require('./notifier');
+const { getNicheData, inicializarCache } = require('./nicheCache');
 const instanciasEncerrandoManualmente = new Set(); // 🛑 Flag para silenciar alertas no Discord ao remover chip
 const MAPA_CONCESSIONARIAS = {
     'MT': 'Energisa', 'MS': 'Energisa', 'SC': 'Celesc', 'PR': 'Copel',
@@ -708,8 +709,11 @@ const concessionariaLocal = (MAPA_CONCESSIONARIAS[contextoLead.estado] || 'conce
     const economiaAnualFormatada = `R$ ${economiaAnual.toLocaleString('pt-BR')}`;
     if (valorRealDaConta) console.log(`💡 [ECONOMIA REAL] Lead informou conta de R$${valorRealDaConta} → economia ${percentualTexto}%: ${economiaMensalFormatada}/mês, ${economiaAnualFormatada}/ano`);
     
-    const nicheContext = gerarContextoNicho(contextoLead.niche);
+    const nicheContext = gerarContextoNicho(contextoLead.niche); // mantido para compat com ${nicheContext} no promptBase
     const estagioAtual = String(contextoLead.current_stage || 0);
+
+    // Inteligência de nicho dinâmica — Redis → Supabase → LLM (aprende on-the-fly)
+    const dadosNicho = await getNicheData(contextoLead.niche).catch(() => null);
 
     // --- 4. Reversão de objeção ---
     const reversaoJaTentada = contextoLead.objection_reversed
@@ -761,8 +765,54 @@ const concessionariaLocal = (MAPA_CONCESSIONARIAS[contextoLead.estado] || 'conce
         }
     }
 
-    // --- 9. Substituição universal ---
-    const promptFinal = promptBase
+    // ─────────────────────────────────────────────────────────────────────
+    // --- 9. ARQUITETURA MODULAR — 4 seções estruturadas + Constituição ---
+    // ─────────────────────────────────────────────────────────────────────
+
+    const calendlyResolvido =
+        instanceData?.calendly_link ||
+        (instanceData?.owner_phone
+            ? `https://wa.me/55${(instanceData.owner_phone || '').replace(/\D/g, '')}`
+            : 'https://antix.com.br/agendar');
+
+    const secaoIdentidade = `[IDENTIDADE]
+Você é ${agentName}, especialista em eficiência energética da ${companyName}.
+Seu objetivo é qualificar o interesse do lead e levá-lo a agendar uma consultoria gratuita.
+Você se comunica como um ser humano no WhatsApp — direto, sem formalidade excessiva, sem robótica.`;
+
+    const secaoDiretrizes = `[DIRETRIZES DE FECHAMENTO]
+- Mensagens curtas: máximo 2 balões por resposta, 15-35 palavras cada. Balões separados por [QUEBRA].
+- Simule digitação humana: uma ideia por vez, sem listas numeradas ou marcadores.
+- Faça APENAS UMA pergunta por mensagem. Nunca duas.
+- Foco absoluto em converter para agendamento: ${calendlyResolvido}
+- Nunca revele que é uma IA antes do REVEAL programado.
+- Texto puro: sem asteriscos, sem markdown.
+- Termine SEMPRE com uma pergunta ("?"), exceto em REPASSE e REVEAL.
+- Tags obrigatórias no final de toda resposta: [ESTAGIO:N] e [CLIMA:X].`;
+
+    const secaoRegional = `[INTELIGÊNCIA REGIONAL]
+- Concessionária local do lead: ${concessionariaLocal}
+- Redução esperada na fatura: ${percentualTexto}%
+- Economia estimada: ${economiaMensalFormatada}/mês | ${economiaAnualFormatada}/ano
+- Contexto regional: ${contextoBairro}
+- ${perfilComportamental}`;
+
+    const secaoNicho = dadosNicho
+        ? `[ESTRATEGIA DO NICHO]
+- Nicho identificado: ${contextoLead.niche || 'empresa comercial'}
+- Equipamentos de alto consumo: ${dadosNicho.equipamentos}
+- Dor principal do negócio: ${dadosNicho.dor_principal}
+- Ângulo de abordagem comercial: ${dadosNicho.angulo_venda}`
+        : `[ESTRATEGIA DO NICHO]
+- Nicho identificado: ${contextoLead.niche || 'empresa comercial'}
+- Equipamentos de alto consumo: ar condicionado, iluminação, equipamentos industriais.
+- Dor principal do negócio: conta de energia elevada reduzindo margem do negócio.
+- Ângulo de abordagem comercial: redução imediata da maior despesa fixa da empresa.`;
+
+    const secaoModular = [secaoIdentidade, secaoDiretrizes, secaoRegional, secaoNicho].join('\n\n');
+
+    // --- Constituição do agente (regras customizadas do cliente, com variáveis resolvidas) ---
+    const constituicaoResolvida = promptBase
         .replaceAll('${agentName}', agentName)
         .replaceAll('${companyName}', companyName)
         .replaceAll('${nomeLead}', nomeLead)
@@ -782,15 +832,9 @@ const concessionariaLocal = (MAPA_CONCESSIONARIAS[contextoLead.estado] || 'conce
         .replaceAll('${perfilEmocional}', perfilEmocional)
         .replaceAll('${economiaMensal}', economiaMensalFormatada)
         .replaceAll('${economiaAnual}', economiaAnualFormatada)
-        .replaceAll('${calendlyLink}',
-            instanceData?.calendly_link ||
-            (instanceData?.owner_phone
-                ? `https://wa.me/55${(instanceData.owner_phone || '').replace(/\D/g, '')}`
-                : 'https://antix.com.br/agendar'));
-        
-         
+        .replaceAll('${calendlyLink}', calendlyResolvido);
 
-    return promptFinal;
+    return `${secaoModular}\n\n${constituicaoResolvida}`;
 }
 // ============================================================================
 // 🧠 NÚCLEO IA: "THE ARCHITECT" - STATE OF THE ART SDR V3.0 (MULTI-TENANT REAL)
@@ -2537,28 +2581,62 @@ async function loopAuditor() {
             .limit(5);
 
         if (leadsParaAuditar && leadsParaAuditar.length > 0) {
-            console.log(`📋 [QA AUDITOR] Encontrados ${leadsParaAuditar.length} leads finalizados. Iniciando análise crítica...`);
+            console.log(`📋 [QA AUDITOR] ${leadsParaAuditar.length} leads na fila. Iniciando análise...`);
+
+            let auditadosComSucesso = 0;
+            let errosCriticosEncontrados = [];
 
             for (const lead of leadsParaAuditar) {
                 const histRaw = await db.getHistory(lead.whatsapp_id, lead.instance_id);
-                
-                // Só audita se tiver havido conversa real (evita auditar leads que nem responderam)
-                if (histRaw && histRaw.length > 2) {
-                    const historico = histRaw.map(m => ({ role: m.role, content: m.content }));
-                    
-                    const relatorio = await auditorAgent.gerarAuditoria(historico, lead);
-                    
-                    await supabase.from('leads').update({ 
-                        audit_report: relatorio, 
-                        is_audited: true 
-                    }).eq('id', lead.id);
 
-                    console.log(`✅ [QA AUDITOR] Relatório gerado para ${lead.name}.`);
-                    enviarAlerta("📋 AUDITORIA SALVA", `Relatório de "${lead.name}" finalizado no banco de dados.`, 15844367);
-                } else {
-                    // Sem conversa suficiente, apenas marca como auditado para sair da fila
-                    await supabase.from('leads').update({ is_audited: true, audit_report: "Sem interação suficiente." }).eq('id', lead.id);
+                if (!histRaw || histRaw.length <= 2) {
+                    // Sem conversa suficiente: sai da fila sem gastar tokens
+                    await supabase.from('leads').update({
+                        is_audited:   true,
+                        audit_report: { desfecho: 'PERDIDO_SILENCIO', nota_ia: null, erro_critico_ia: null, resumo_executivo: 'Sem interação suficiente para auditoria.' }
+                    }).eq('id', lead.id);
+                    continue;
                 }
+
+                const historico = histRaw.map(m => ({ role: m.role, content: m.content }));
+                const relatorio = await auditorAgent.gerarAuditoria(historico, lead);
+
+                if (!relatorio) continue; // LLM falhou — tenta na próxima rodada
+
+                await supabase.from('leads').update({
+                    audit_report: relatorio,
+                    is_audited:   true,
+                }).eq('id', lead.id);
+
+                auditadosComSucesso++;
+                console.log(`✅ [QA AUDITOR] ${lead.name} — desfecho: ${relatorio.desfecho} | nota: ${relatorio.nota_ia}`);
+
+                // Emite para o dashboard em tempo real
+                if (ioSocket) {
+                    ioSocket.emit('audit_complete', {
+                        leadId:   lead.id,
+                        leadName: lead.name,
+                        relatorio,
+                    });
+                }
+
+                // Discord só para erros críticos (nota < 6 ou erro explícito) — sem spam
+                if (relatorio.nota_ia < 6 || relatorio.erro_critico_ia) {
+                    errosCriticosEncontrados.push(`*${lead.name}* (${relatorio.desfecho}) — nota ${relatorio.nota_ia}: ${relatorio.erro_critico_ia || 'sem detalhe'}`);
+                }
+            }
+
+            // Um único alerta consolidado por ciclo, somente se houver erros graves
+            if (errosCriticosEncontrados.length > 0) {
+                enviarAlerta(
+                    `⚠️ QA — ${errosCriticosEncontrados.length} conversa(s) com nota baixa`,
+                    errosCriticosEncontrados.join('\n'),
+                    15158332
+                );
+            }
+
+            if (auditadosComSucesso > 0) {
+                console.log(`📊 [QA AUDITOR] Ciclo encerrado: ${auditadosComSucesso} relatórios gerados.`);
             }
         }
     } catch (erroAuditor) {
@@ -2780,28 +2858,39 @@ if (!promptResolvido) {
     resposta = await objectionAgent.quebrarObjecao(historico, promptResolvido, lead.current_stage);
 
 } else if (intencao === 'REPASSE') {
-    console.log(`🔄 [WORKER-IA] REPASSE detectado para ${lead.name}. Extraindo contato...`);
+    console.log(`🔄 [WORKER-IA] REPASSE detectado para ${lead.name}. Acionando extrator de decisor...`);
 
-    // Extrai telefone do texto — cobre formatos: (85)99999-9999, 85 9 9999-9999, 5585999999999, número puro
-    const regexTel = /(?<![a-zA-Z])(\+?55\s?)?(\(?\d{2}\)?\s?)(?:9\s?)?\d{4}[-\s]?\d{4}(?!\d)/g;
-    const numerosEncontrados = [...ultimaMsg.matchAll(regexTel)].map(m => m[0]) || [];
+    const { nomeDecisor, telefoneDecisor } = await handoffAgent.extrairDadosDecisor(ultimaMsg, historico);
+    console.log(`🔍 [REPASSE] Extração → nome: "${nomeDecisor}", fone: "${telefoneDecisor}"`);
 
-    if (numerosEncontrados.length > 0) {
-        // Tenta capturar nome mencionado junto ao número: "fala com o João no 9...", "é a Maria 9..."
-        const nomeMencionado = ultimaMsg.match(
-            /(?:fala\s+com\s+[oa]?\s*|chama\s+[oa]?\s*|é\s+[oa]?\s*|contato\s+(?:do|da)\s*)([A-ZÀ-Ú][a-zà-ú]{2,})/
-        )?.[1] || null;
+    if (telefoneDecisor) {
+        try {
+            await db.atualizarLeadParaDecisor({
+                leadId:            lead.id,
+                novoNomeDecisor:   nomeDecisor,
+                novoPhone:         telefoneDecisor,
+                labelNumeroAntigo: 'recepcao',
+            });
 
-        const decisorSalvo = await salvarDecisor(numerosEncontrados[0], lead, instanceId);
-        if (decisorSalvo) {
-            if (nomeMencionado) {
-                await supabase.from('leads').update({ dono: nomeMencionado }).eq('id', decisorSalvo.id);
-            }
-            console.log(`✅ [REPASSE] Decisor salvo: ${decisorSalvo.name}. Motor vai contatá-lo automaticamente.`);
+            // Acorda o motor para o novo número imediatamente
+            sdrEventsGlobal?.emit('NOVO_LEAD_DISPONIVEL', lead.instance_id);
+
+            const tratamento = nomeDecisor && nomeDecisor !== 'Responsável'
+                ? `o ${nomeDecisor}`
+                : 'o responsável';
+            resposta = `Perfeito, vou entrar em contato com ${tratamento} por lá. Obrigado pela indicação! 🙏`;
+
+            console.log(`✅ [REPASSE] Lead ${lead.id} atualizado → decisor: "${nomeDecisor}", fone: ${telefoneDecisor}`);
+        } catch (erroRepasse) {
+            console.error(`❌ [REPASSE] Falha ao atualizar lead ${lead.id}:`, erroRepasse.message);
+            // Fallback: closer tenta extrair o contato via conversa
+            resposta = await closerAgent.gerarRespostaCloser(historico, lead, promptResolvido, 'REPASSE', { calendlyLink: instanceData?.calendly_link, instanceType: instanceData?.product_type || 'solar' });
         }
+    } else {
+        // Nenhum telefone na mensagem — closer pergunta pelo contato do decisor
+        console.log(`⚠️ [REPASSE] Nenhum telefone extraído para ${lead.name}. Closer assumindo para solicitar o contato...`);
+        resposta = await closerAgent.gerarRespostaCloser(historico, lead, promptResolvido, 'REPASSE', { calendlyLink: instanceData?.calendly_link, instanceType: instanceData?.product_type || 'solar' });
     }
-
-    resposta = await closerAgent.gerarRespostaCloser(historico, lead, promptResolvido, 'REPASSE', { calendlyLink: instanceData?.calendly_link, instanceType: instanceData?.product_type || 'solar' });
 
 } else {
     console.log(`🧹 [WORKER-IA] Mensagem LIXO. Closer seguirá estágio atual da Constituição...`);
@@ -2944,7 +3033,10 @@ module.exports = {
 
         ioSocket = io;
         sdrEventsGlobal = sdrEvents;
-        
+
+        // Aquece o cache Redis com os nichos já aprendidos antes do SDR ligar
+        await inicializarCache();
+
          // 🎯 BUG #2 FIX: Destravar leads que ficaram presos como "reservado" após crash/restart
         const { data: travados } = await supabase.from('leads').select('id').eq('status', 'reservado');
         if (travados && travados.length > 0) {

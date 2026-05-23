@@ -1,5 +1,7 @@
 // agents/closerAgent.js
 const { OpenAI } = require('openai');
+const { getNicheData } = require('../nicheCache');
+
 const together = new OpenAI({
     apiKey: process.env.TOGETHER_API_KEY,
     baseURL: 'https://api.together.xyz/v1',
@@ -21,6 +23,10 @@ async function gerarRespostaCloser(historico, lead, promptPersonalidade, intenca
     const instanceType   = opcoes.instanceType   || 'solar';
     const isSolar        = instanceType === 'solar';
     const isAntix        = instanceType === 'antix';
+
+    // Resolve inteligência de nicho dinamicamente — só para produto solar
+    // getNicheData faz Redis → Supabase → LLM (aprende on-the-fly se necessário)
+    const dadosNicho = isSolar ? await getNicheData(lead?.niche).catch(() => null) : null;
 
     let overrideTatico = '';
 
@@ -115,13 +121,20 @@ PROIBIDO:
 `;
 
         // Bloco adicional exclusivo para produto solar
+        const blocoNicho = dadosNicho
+            ? `  * Nicho: ${lead?.niche || 'empresa'}
+  * Equipamentos típicos: ${dadosNicho.equipamentos}
+  * Dor principal: ${dadosNicho.dor_principal}
+  * Ângulo de abertura: ${dadosNicho.angulo_venda}`
+            : `  * Mercado/Sorveteria: freezers ou câmaras frias ligados 24h.
+  * Pousada/Hotel: ar-condicionado dos quartos.
+  * Oficina/Indústria: compressores, elevadores, motores.`;
+
         const blocoSolar = isSolar ? `
 ⚠️ REGRA SOLAR — DESQUALIFICAÇÃO RÁPIDA: Se o lead mencionar EXPLICITAMENTE um valor de conta de luz abaixo de R$300/mês, encerre: "Faz sentido — esse benefício compensa pra contas acima de R$300. Valeu pelo papo!" e adicione [ESTAGIO:ENCERRADO].
 
-⚠️ REGRA SOLAR — DEDUZA O MAQUINÁRIO (ESTÁGIO 1): Leia o nicho e faça UMA pergunta sobre equipamentos pesados:
-  * Mercado/Sorveteria: freezers ou câmaras frias ligados 24h.
-  * Pousada/Hotel: ar-condicionado dos quartos.
-  * Oficina/Indústria: compressores, elevadores, motores.
+⚠️ REGRA SOLAR — DEDUZA O MAQUINÁRIO (ESTÁGIO 1): Faça UMA pergunta sobre os equipamentos pesados deste nicho:
+${blocoNicho}
   * SÓ DEPOIS do lead admitir equipamentos pesados (ESTÁGIO 2), use a DOR para pedir o valor da fatura.
 
 PROIBIDO SOLAR: Usar "ANEEL", "compensação", "geração distribuída" antes do lead pedir.

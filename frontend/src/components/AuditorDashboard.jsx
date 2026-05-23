@@ -48,7 +48,7 @@ function KpiCard({ icon: Icon, label, value, sub, color }) {
 
 function NotaBadge({ nota }) {
     const n = parseFloat(nota) || 0
-    const cor = n >= 8 ? CORES.verde : n >= 6 ? CORES.amarelo : CORES.vermelho
+    const cor = n >= 7 ? CORES.verde : n >= 5 ? CORES.amarelo : CORES.vermelho
     return (
         <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-[10px] font-black"
               style={{ background: `${cor}20`, color: cor, border: `1px solid ${cor}40` }}>
@@ -57,7 +57,7 @@ function NotaBadge({ nota }) {
     )
 }
 
-export default function AuditorDashboard() {
+export default function AuditorDashboard({ socket }) {
     const [leads, setLeads]       = useState([])
     const [loading, setLoading]   = useState(true)
     const [lastSync, setLastSync] = useState(null)
@@ -109,9 +109,15 @@ export default function AuditorDashboard() {
 
     useEffect(() => {
         fetchData()
-        const interval = setInterval(fetchData, 120000) // auto-refresh a cada 2 min
+        const interval = setInterval(fetchData, 120000)
         return () => clearInterval(interval)
     }, [])
+
+    useEffect(() => {
+        if (!socket) return
+        socket.on('audit_complete', fetchData)
+        return () => socket.off('audit_complete', fetchData)
+    }, [socket])
 
     const metrics = useMemo(() => {
         if (!leads.length) return null
@@ -140,14 +146,14 @@ export default function AuditorDashboard() {
         // Notas por faixa
         const faixas = { alta: 0, media: 0, baixa: 0 }
         notas.forEach(n => {
-            if (n >= 8) faixas.alta++
-            else if (n >= 6) faixas.media++
+            if (n >= 7) faixas.alta++
+            else if (n >= 5) faixas.media++
             else faixas.baixa++
         })
         const notasDist = [
-            { name: '8-10 Ótima', value: faixas.alta,  fill: CORES.verde },
-            { name: '6-7 Ok',     value: faixas.media, fill: CORES.amarelo },
-            { name: '0-5 Ruim',   value: faixas.baixa, fill: CORES.vermelho },
+            { name: '7-10 Ótima', value: faixas.alta,  fill: CORES.verde },
+            { name: '5-6 Ok',     value: faixas.media, fill: CORES.amarelo },
+            { name: '0-4 Ruim',   value: faixas.baixa, fill: CORES.vermelho },
         ].filter(d => d.value > 0)
 
         // Erros mais frequentes
@@ -167,15 +173,15 @@ export default function AuditorDashboard() {
 
         // Leads com nota baixa para revisão
         const pararevisao = leads
-            .filter(l => (parseFloat(l.report.nota_ia) || 0) < 6 && l.report.erro_critico_ia)
+            .filter(l => (parseFloat(l.report.nota_ia) || 0) < 5 && l.report.erro_critico_ia)
             .slice(0, 10)
 
         return { total, agendados, notaMedia, comErro, distribuicao, notasDist, errosTop, pararevisao }
     }, [leads])
 
     const leadsFiltrados = useMemo(() => {
-        if (filtroNota === 'baixa') return leads.filter(l => (parseFloat(l.report?.nota_ia) || 0) < 6)
-        if (filtroNota === 'alta')  return leads.filter(l => (parseFloat(l.report?.nota_ia) || 0) >= 8)
+        if (filtroNota === 'baixa') return leads.filter(l => (parseFloat(l.report?.nota_ia) || 0) < 5)
+        if (filtroNota === 'alta')  return leads.filter(l => (parseFloat(l.report?.nota_ia) || 0) >= 7)
         return leads
     }, [leads, filtroNota])
 
@@ -279,8 +285,8 @@ export default function AuditorDashboard() {
                     <div className="flex gap-2">
                         {[
                             { key: 'todos', label: 'Todas' },
-                            { key: 'baixa', label: '⚠️ Nota < 6' },
-                            { key: 'alta',  label: '✅ Nota ≥ 8' },
+                            { key: 'baixa', label: '⚠️ Nota < 5' },
+                            { key: 'alta',  label: '✅ Nota ≥ 7' },
                         ].map(f => (
                             <button key={f.key} onClick={() => setFiltroNota(f.key)}
                                 className={`px-3 py-1 rounded-lg text-[10px] font-black uppercase tracking-wider transition-all ${

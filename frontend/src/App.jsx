@@ -410,7 +410,7 @@ if (session?.user?.id) checkBriefing()
 
         // 2. Baixa leads: por instance_id OU por user_id (captura órfãos de chips removidos)
         const { data } = await supabase.from('leads')
-            .select('id, name, phone, status, niche, dono, cnpj, bairro, cep, porte, capital_social_numeric, whatsapp_id, instance_id, lat, lng, created_at, last_contact_at, is_paused, manual_pause, current_stage, lead_temperature, followup_count, opening_template')
+            .select('id, name, phone, status, niche, dono, cnpj, bairro, cep, porte, capital_social_numeric, whatsapp_id, instance_id, lat, lng, created_at, last_contact_at, is_paused, manual_pause, current_stage, lead_temperature, followup_count, opening_template, backup_phones')
             .or(`instance_id.in.(${instanceIds.join(',')}),user_id.eq.${userId}`)
             .order('created_at', { ascending: false })
             .limit(10000);
@@ -1371,7 +1371,7 @@ return (
 
     {/* Conteúdo */}
     <div className="flex-1 overflow-auto">
-        {analyticsView === 'overview' ? <VisualAnalytics /> : analyticsView === 'operations' ? <Dashboard /> : <AuditorDashboard />}
+        {analyticsView === 'overview' ? <VisualAnalytics /> : analyticsView === 'operations' ? <Dashboard /> : <AuditorDashboard socket={socket} />}
     </div>
 </TabsContent>
 
@@ -1765,8 +1765,14 @@ function LeadCard({ lead, isSelected, onSelect, onView, onEdit, onChat }) {
             {/* LINHA 4: DECISOR E EDIT */}
             <div className="flex items-center justify-between">
                 <div className="flex items-center gap-1.5">
-                    <div className="h-5 w-5 rounded-full bg-slate-800 flex items-center justify-center text-[8px] text-white border border-white/10 font-bold uppercase">{lead?.dono?.[0] || 'G'}</div>
-                    <span className="text-[10px] font-bold text-slate-400 uppercase truncate max-w-[140px]">{lead?.dono || 'Gestor Identificado'}</span>
+                    <div className={`h-5 w-5 rounded-full flex items-center justify-center text-[8px] text-white font-bold uppercase border ${lead?.dono ? 'bg-amber-600/30 border-amber-500/40' : 'bg-slate-800 border-white/10'}`}>{lead?.dono?.[0] || 'G'}</div>
+                    <span className={`text-[10px] font-bold uppercase truncate max-w-[110px] ${lead?.dono ? 'text-amber-400' : 'text-slate-400'}`}>{lead?.dono || 'Gestor Identificado'}</span>
+                    {lead?.backup_phones?.length > 0 && (
+                        <span className="flex items-center gap-0.5 px-1.5 py-0.5 rounded bg-purple-900/40 border border-purple-500/20 text-[8px] text-purple-400 font-bold shrink-0" title={`Repasse: ${lead.backup_phones.length} número(s) anterior(es)`}>
+                            <Phone className="h-2.5 w-2.5" />
+                            {lead.backup_phones.length}
+                        </span>
+                    )}
                 </div>
                 <div className="flex items-center gap-1 opacity-0 group-hover:opacity-100 transition-all">
                     {onChat && (

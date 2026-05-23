@@ -1,39 +1,76 @@
-const { OpenAI } = require('openai');
-const together = new OpenAI({
-    apiKey: process.env.TOGETHER_API_KEY,
-    baseURL: 'https://api.together.xyz/v1',
-});
+const Groq = require('groq-sdk');
 
-const MODELO_CEREBRO = "meta-llama/Llama-3.3-70B-Instruct-Turbo";
+const groq  = new Groq({ apiKey: process.env.GROQ_API_KEY });
+const MODELO = 'llama-3.1-70b-versatile';
 
+/**
+ * Audita uma conversa encerrada e retorna um relatório estruturado.
+ * Atua como gerente de vendas sênior: avalia tom, oportunidades perdidas e desfecho.
+ *
+ * @returns {{ desfecho, nota_ia, erro_critico_ia, resumo_executivo }} | null
+ */
 async function gerarAuditoria(historico, lead) {
-    const prompt = `Você é um Analista de Qualidade Sênior (QA) de Vendas B2B.
-    Sua missão é ler o histórico de uma conversa encerrada pelo nosso SDR de IA e extrair dados cruciais para o nosso dashboard de métricas.
-    
-    Analise a conversa e retorne ESTRITAMENTE um objeto JSON válido (sem markdown, sem texto antes ou depois) com a seguinte estrutura:
-    {
-      "desfecho": "AGENDADO" | "PERDIDO_SOLAR" | "PERDIDO_CARO" | "PERDIDO_SILENCIO" | "PERDIDO_ROBO" | "PERDIDO_OUTRO",
-      "nota_ia": <numero de 0 a 10 avaliando o quão bem a IA seguiu o script e soou humana>,
-      "erro_critico_ia": "<Se a IA errou (ex: foi repetitiva, alucinou), descreva em 1 frase. Se foi perfeita, retorne nulo>",
-      "resumo_executivo": "<1 frase resumindo o que aconteceu>"
-    }`;
+    if (!historico || historico.length < 2) return null;
+
+    const transcricao = historico
+        .map(m => `[${m.role === 'assistant' ? 'IA' : 'LEAD'}]: ${m.content}`)
+        .join('\n');
+
+    const prompt = `Você é um gerente de vendas sênior avaliando uma conversa do SDR de IA da empresa.
+Leia a conversa abaixo e retorne SOMENTE um JSON válido, sem markdown, sem texto extra.
+
+NICHO DA EMPRESA: ${lead.niche || 'não informado'}
+
+CONVERSA:
+${transcricao}
+
+CAMPOS DO JSON:
+- "desfecho": exatamente uma das opções: "AGENDADO" | "PERDIDO_SOLAR" | "PERDIDO_CARO" | "PERDIDO_SILENCIO" | "PERDIDO_ROBO" | "PERDIDO_OUTRO"
+  * AGENDADO: lead agendou ou confirmou reunião
+  * PERDIDO_SOLAR: lead já possui energia solar
+  * PERDIDO_CARO: lead reclamou de preço ou conta abaixo de R$300
+  * PERDIDO_SILENCIO: lead parou de responder
+  * PERDIDO_ROBO: era URA, autoresposta ou robô
+  * PERDIDO_OUTRO: qualquer outro motivo
+
+- "nota_ia": número inteiro de 0 a 10 avaliando a performance da IA:
+  * 9-10: execução perfeita, soou humana, seguiu o funil
+  * 7-8: bom mas com pequenos desvios
+  * 5-6: oportunidades perdidas, tom inadequado
+  * 0-4: erros graves (repetição, alucinação, queimou o lead)
+
+- "erro_critico_ia": string de 1 frase descrevendo o pior erro cometido pela IA.
+  Se não houve erro relevante, retorne null.
+
+- "resumo_executivo": string de 1 frase resumindo o resultado da conversa para o gestor.
+
+Exemplo de saída válida:
+{"desfecho":"PERDIDO_CARO","nota_ia":7,"erro_critico_ia":"A IA perguntou o valor da conta antes de qualificar o equipamento.","resumo_executivo":"Lead descartado por conta abaixo do mínimo após qualificação incompleta."}`;
 
     try {
-        const res = await together.chat.completions.create({
-            messages: [
-                { role: 'system', content: prompt },
-                ...historico.map(m => ({ role: m.role, content: m.content }))
-            ],
-            model: MODELO_CEREBRO,
-            temperature: 0.1, // Temperatura quase zero para JSON estrito
-            max_tokens: 150,
-            response_format: { type: "json_object" } // Força a saída JSON na API da Together
+        const res = await groq.chat.completions.create({
+            messages: [{ role: 'user', content: prompt }],
+            model:       MODELO,
+            temperature: 0.0,
+            max_tokens:  200,
         });
 
-        const resposta = res.choices[0]?.message?.content;
-        return JSON.parse(resposta); // Retorna um objeto JavaScript pronto para o banco
-    } catch (error) {
-        console.error(`❌ [QA AUDITOR] Falha ao auditar ${lead.name}:`, error.message);
+        const raw = res.choices[0]?.message?.content?.trim() || '{}';
+        const parsed = JSON.parse(raw);
+
+        // Valida estrutura mínima antes de retornar
+        if (!parsed.desfecho || parsed.nota_ia === undefined) {
+            throw new Error('Campos obrigatórios ausentes no JSON retornado.');
+        }
+
+        return {
+            desfecho:          parsed.desfecho,
+            nota_ia:           Number(parsed.nota_ia),
+            erro_critico_ia:   parsed.erro_critico_ia || null,
+            resumo_executivo:  parsed.resumo_executivo || '',
+        };
+    } catch (err) {
+        console.error(`❌ [AUDITOR] Falha ao auditar ${lead.name}:`, err.message);
         return null;
     }
 }

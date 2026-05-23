@@ -207,7 +207,114 @@ if (!estadoFinal && phonePuro) {
         return data && data.length > 0;
     },
 
-   removeInstance: async (instanceId) => {
+    // ========================================================================
+    // 🧠 INTELIGÊNCIA DE NICHO (DYNAMIC RAG)
+    // ========================================================================
+
+    obterTodosNichos: async () => {
+        const { data, error } = await supabase
+            .from('niche_intelligence')
+            .select('niche_name, equipamentos, dor_principal, angulo_venda');
+
+        if (error) {
+            console.error('[DB] obterTodosNichos — erro ao carregar cache:', error.message);
+            return [];
+        }
+        return data || [];
+    },
+
+    salvarInteligenciaNicho: async ({ niche_name, equipamentos, dor_principal, angulo_venda }) => {
+        if (!niche_name?.trim()) {
+            throw new Error('salvarInteligenciaNicho: niche_name é obrigatório.');
+        }
+
+        // Normaliza a PK: minúsculas + remove acentos + trim
+        const slug = niche_name
+            .toLowerCase()
+            .normalize('NFD')
+            .replace(/[̀-ͯ]/g, '')
+            .trim();
+
+        const { data, error } = await supabase
+            .from('niche_intelligence')
+            .upsert(
+                { niche_name: slug, equipamentos, dor_principal, angulo_venda, updated_at: new Date().toISOString() },
+                { onConflict: 'niche_name' }
+            )
+            .select()
+            .single();
+
+        if (error) {
+            console.error(`[DB] salvarInteligenciaNicho — erro ao salvar nicho "${slug}":`, error.message);
+            throw new Error(`Falha ao salvar nicho: ${error.message}`);
+        }
+
+        console.log(`✅ [DB] Inteligência de nicho salva: "${slug}"`);
+        return data;
+    },
+
+    // ========================================================================
+    // 🔄 REPASSE — ATUALIZA LEAD EXISTENTE PARA O DECISOR
+    // ========================================================================
+
+    atualizarLeadParaDecisor: async ({ leadId, novoNomeDecisor, novoPhone, labelNumeroAntigo = 'recepcao' }) => {
+        // 1. Busca o lead atual para capturar phone e backup_phones existentes
+        const { data: leadAtual, error: erroBusca } = await supabase
+            .from('leads')
+            .select('id, phone, backup_phones')
+            .eq('id', leadId)
+            .single();
+
+        if (erroBusca || !leadAtual) {
+            const msg = erroBusca?.message || 'Lead não encontrado';
+            console.error(`[DB] atualizarLeadParaDecisor — erro ao buscar lead ${leadId}: ${msg}`);
+            throw new Error(`Lead não encontrado: ${msg}`);
+        }
+
+        // 2. Normaliza o novo número: só dígitos + garante DDI 55 + gera JID Baileys
+        const digitosNovos = String(novoPhone).replace(/\D/g, '');
+        if (digitosNovos.length < 10) {
+            throw new Error(`Número inválido para decisor: "${novoPhone}"`);
+        }
+        const phoneNormalizado = digitosNovos.startsWith('55') ? digitosNovos : `55${digitosNovos}`;
+        const novoJID = `${phoneNormalizado}@s.whatsapp.net`;
+
+        // 3. Constrói o novo histórico de backups
+        const backupsAtuais = Array.isArray(leadAtual.backup_phones) ? leadAtual.backup_phones : [];
+        const novoBackup = {
+            phone:    leadAtual.phone,
+            label:    labelNumeroAntigo,
+            moved_at: new Date().toISOString(),
+        };
+        const backupsAtualizados = [...backupsAtuais, novoBackup];
+
+        // 4. UPDATE atômico — reinicia o lead para o motor SDR como contato novo
+        const { data: leadAtualizado, error: erroUpdate } = await supabase
+            .from('leads')
+            .update({
+                phone:          phoneNormalizado,
+                whatsapp_id:    novoJID,
+                dono:           novoNomeDecisor || leadAtual.dono,
+                backup_phones:  backupsAtualizados,
+                status:         'new',
+                is_paused:      false,
+                followup_count: 0,
+                updated_at:     new Date().toISOString(),
+            })
+            .eq('id', leadId)
+            .select()
+            .single();
+
+        if (erroUpdate) {
+            console.error(`[DB] atualizarLeadParaDecisor — erro ao atualizar lead ${leadId}:`, erroUpdate.message);
+            throw new Error(`Falha ao atualizar lead: ${erroUpdate.message}`);
+        }
+
+        console.log(`✅ [DB] Lead ${leadId} atualizado para decisor "${novoNomeDecisor}" → ${novoJID}`);
+        return leadAtualizado;
+    },
+
+    removeInstance: async (instanceId) => {
         // Primeiro desvincula os leads deste chip (seta instance_id para null)
         await supabase
             .from('leads')
