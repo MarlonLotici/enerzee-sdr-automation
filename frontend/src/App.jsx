@@ -1410,7 +1410,7 @@ return (
 </Dialog>
 
 {/* MODAL DE CONEXÃO MULTI-CHIP (POSIÇÃO CORRETA) */}
-            <Dialog open={!!qrCodeData} onOpenChange={() => setQrCodeData(null)}>
+            <Dialog open={!!qrCodeData && qrCodeData.instanceId === selectedInstanceId} onOpenChange={() => setQrCodeData(null)}>
                 <DialogContent className="glass-panel border-white/20 text-white max-w-sm rounded-[2.5rem] p-10 bg-[#0A0A0A]/98 shadow-2xl flex flex-col items-center">
                     <div className="bg-amber-600/20 p-4 rounded-full mb-6 border border-amber-500/30" style={{boxShadow:'0 0 20px rgba(245,158,11,0.2)'}}>
                             <MessageSquare className="h-10 w-10 text-amber-400" />

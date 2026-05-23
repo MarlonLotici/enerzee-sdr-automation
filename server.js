@@ -291,64 +291,92 @@ io.on('connection', (socket) => {
     });
 });
 // ============================================================================
-// 📅 WEBHOOK CALENDLY — ÚNICA VERSÃO OFICIAL (INTEGRADA AO SDR V12)
+// 📅 WEBHOOK CALENDLY — FASE 2 (TRAVA ATÔMICA + NORMALIZAÇÃO BR)
 // ============================================================================
+
+// Retorna JIDs do WhatsApp com ambas as variações do 9º dígito (salvo/não-salvo no banco).
+function normalizarTelefoneBR(raw) {
+    const digits = raw.replace(/\D/g, '');
+    const base = digits.startsWith('55') ? digits : '55' + digits;
+
+    const variacoes = new Set([base]);
+
+    if (base.length === 12) {
+        // 55+DDD+8 dígitos → variação COM 9º dígito inserido após o DDD
+        variacoes.add(base.slice(0, 4) + '9' + base.slice(4));
+    } else if (base.length === 13) {
+        // 55+DDD+9+8 dígitos → variação SEM 9º dígito
+        variacoes.add(base.slice(0, 4) + base.slice(5));
+    }
+
+    return Array.from(variacoes).map(n => `${n}@s.whatsapp.net`);
+}
+
 app.post('/webhook/calendly', express.json(), async (req, res) => {
     try {
         const evento = req.body;
 
-        // Filtra apenas agendamentos criados
         if (evento?.event !== 'invitee.created') {
             return res.status(200).json({ ok: true, ignorado: true });
         }
 
-        const payload = evento.payload;
-        const emailConvidado = payload?.email?.toLowerCase()?.trim();
-        const telefoneRaw    = payload?.text_reminder_number || '';
-        const dataEvento     = payload?.scheduled_event?.start_time || new Date().toISOString();
-        const nomeEvento     = payload?.event_type?.name || 'Consultoria';
-        const telefoneLimpo  = telefoneRaw.replace(/\D/g, '');
+        // Extração defensiva do payload — falha aqui não deve derrubar a rota
+        let emailConvidado, telefoneRaw, dataEvento, nomeEvento;
+        try {
+            const payload  = evento.payload ?? {};
+            emailConvidado = payload.email?.toLowerCase?.()?.trim() ?? null;
+            telefoneRaw    = payload.text_reminder_number ?? '';
+            dataEvento     = payload.scheduled_event?.start_time ?? new Date().toISOString();
+            nomeEvento     = payload.event_type?.name ?? 'Consultoria';
+        } catch (parseErr) {
+            console.error('❌ [CALENDLY] Erro ao parsear payload:', parseErr.message);
+            return res.status(200).json({ ok: true, erro: 'payload_invalido' });
+        }
 
-        console.log(`📅 [CALENDLY] Agendamento recebido — fone: ${telefoneLimpo}`);
+        console.log(`📅 [CALENDLY] Agendamento recebido — fone: ${telefoneRaw}, email: ${emailConvidado}`);
 
         let lead = null;
 
-        // 1. Busca pelo WhatsApp ID (JID)
-        if (telefoneLimpo.length >= 10) {
-            const variacoes = [
-                `${telefoneLimpo}@s.whatsapp.net`,
-                `55${telefoneLimpo}@s.whatsapp.net`,
-                telefoneLimpo.length === 11 ? `55${telefoneLimpo.slice(0,2)}${telefoneLimpo.slice(3)}@s.whatsapp.net` : null
-            ].filter(Boolean);
-
-            for (const jid of variacoes) {
-                const { data } = await supabase.from('leads').select('id, name, whatsapp_id, instance_id, dono').eq('whatsapp_id', jid).maybeSingle();
+        // 1. Busca pelo JID do WhatsApp cobrindo as duas variações do 9º dígito
+        if (telefoneRaw.replace(/\D/g, '').length >= 10) {
+            const jids = normalizarTelefoneBR(telefoneRaw);
+            for (const jid of jids) {
+                const { data } = await supabase
+                    .from('leads')
+                    .select('id, name, whatsapp_id, instance_id, dono')
+                    .eq('whatsapp_id', jid)
+                    .maybeSingle();
                 if (data) { lead = data; break; }
             }
         }
 
-        // 2. Fallback por Email
+        // 2. Fallback por e-mail
         if (!lead && emailConvidado) {
-            const { data } = await supabase.from('leads').select('id, name, whatsapp_id, instance_id, dono').eq('email', emailConvidado).maybeSingle();
+            const { data } = await supabase
+                .from('leads')
+                .select('id, name, whatsapp_id, instance_id, dono')
+                .eq('email', emailConvidado)
+                .maybeSingle();
             if (data) lead = data;
         }
 
         if (!lead) {
-            console.log(`⚠️ [CALENDLY] Lead não encontrado no banco.`);
+            console.warn(`⚠️ [CALENDLY] Lead não encontrado — fone: ${telefoneRaw}, email: ${emailConvidado}`);
             return res.status(200).json({ ok: true, encontrado: false });
         }
 
-        // 3. Atualiza o banco (Garante que o SDR saiba que agendou)
+        // 3. Trava atômica: desliga o motor de follow-up e registra o agendamento
         await supabase.from('leads').update({
-            calendly_booked: true,
-            calendly_event_at: dataEvento,
+            status:              'closed',
+            calendly_booked:     true,
+            calendly_event_at:   dataEvento,
             calendly_event_name: nomeEvento,
-            status: 'closed' 
+            is_paused:           true,
         }).eq('id', lead.id);
 
-        console.log(`✅ [CALENDLY] Lead ${lead.name} atualizado.`);
-        
-        // 🔔 ACORDA O SDR PARA O FEEDBACK
+        console.log(`✅ [CALENDLY] Lead ${lead.name} travado — is_paused=true, status=closed.`);
+
+        // 4. Acorda o SDR para enviar o feedback humanizado ao lead
         sdrEvents.emit('AGENDAMENTO_CONFIRMADO', { lead, dataEvento, instanceId: lead.instance_id });
 
         return res.status(200).json({ ok: true, lead: lead.name });
