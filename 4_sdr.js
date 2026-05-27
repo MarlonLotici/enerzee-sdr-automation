@@ -984,6 +984,11 @@ async function startInstance(instanceId, instanceName) {
     instanciasLigando.add(instanceId);
 
     console.log(`[MANAGER] 🚀 Ligando SDR: ${instanceName}`);
+
+    // Busca o dono da instância para emitir eventos apenas para ele
+    const { data: instData } = await supabase.from('instances').select('user_id').eq('id', instanceId).maybeSingle();
+    const instanceUserId = instData?.user_id || null;
+
     //const { state, saveCreds } = await useMultiFileAuthState(`wpp_sessions/${instanceId}`);
     // Agora as chaves do WhatsApp vivem no Supabase, protegidas contra restarts
     const { state, saveCreds } = await useRedisAuthState(redisConnection, instanceId);
@@ -1002,7 +1007,7 @@ async function startInstance(instanceId, instanceName) {
     });
 
     // Guardamos o socket com uma flag 'ready' falsa inicialmente
-    sessions.set(instanceId, { sock, ready: false }); 
+    sessions.set(instanceId, { sock, ready: false, userId: instanceUserId });
     sock.ev.on('creds.update', saveCreds);
  
     // 🛡️ Captura erros de descriptografia (Bad MAC) sem travar o chip
@@ -1017,14 +1022,14 @@ process.on('unhandledRejection', (reason) => {
 });
     sock.ev.on('connection.update', async (update) => {
         const { connection, lastDisconnect, qr } = update;
-        if (qr && ioSocket) ioSocket.emit('qr_code', { qr, instanceId, name: instanceName })
-        
+        if (qr && ioSocket && instanceUserId) ioSocket.to(`user:${instanceUserId}`).emit('qr_code', { qr, instanceId, name: instanceName })
+
         if (connection === 'open') {
             console.log(`✅ [SDR] Canal Pronto e Estável: ${instanceName}`);
-            sessions.set(instanceId, { sock, ready: true }); // <--- LIBERADO PARA ENVIO
+            sessions.set(instanceId, { sock, ready: true, userId: instanceUserId }); // <--- LIBERADO PARA ENVIO
             instanciasLigando.delete(instanceId);
             await db.updateInstanceStatus(instanceId, 'CONNECTED');
-            if (ioSocket) ioSocket.emit('whatsapp_status', { status: 'CONNECTED', instanceId });
+            if (ioSocket && instanceUserId) ioSocket.to(`user:${instanceUserId}`).emit('whatsapp_status', { status: 'CONNECTED', instanceId });
         }
 
        if (connection === 'close') {
@@ -1035,7 +1040,7 @@ process.on('unhandledRejection', (reason) => {
                 return; // 🛑 Mata a execução aqui!
             }
 
-            sessions.set(instanceId, { sock, ready: false });
+            sessions.set(instanceId, { sock, ready: false, userId: instanceUserId });
             instanciasLigando.delete(instanceId);
             const reason = (lastDisconnect?.error)?.output?.statusCode;
         
@@ -1151,11 +1156,13 @@ process.on('unhandledRejection', (reason) => {
             if (!texto) continue;
 
             // 🗄️ LÓGICA DA GAVETA (OUVIDO PACIENTE)
-            if (!gavetaDeMensagens.has(remoteJid)) {
-                gavetaDeMensagens.set(remoteJid, { textos: [], timer: null, ultimaMsg: null });
+            // Chave composta instance:jid para nunca misturar mensagens de chips diferentes
+            const gavetaKey = `${instanceId}:${remoteJid}`;
+            if (!gavetaDeMensagens.has(gavetaKey)) {
+                gavetaDeMensagens.set(gavetaKey, { textos: [], timer: null, ultimaMsg: null });
             }
 
-            const gaveta = gavetaDeMensagens.get(remoteJid);
+            const gaveta = gavetaDeMensagens.get(gavetaKey);
             gaveta.textos.push(texto); // Guarda o texto na gaveta
             gaveta.ultimaMsg = msg; // Guarda a estrutura do Baileys para conseguir responder depois
 
@@ -1164,20 +1171,20 @@ process.on('unhandledRejection', (reason) => {
             console.log(`⏳ [OUVIDO PACIENTE] Lead ${remoteJid.split('@')[0]} enviou mensagem. Aguardando 15s para ver se ele manda mais...`);
 
             // Inicia o cronômetro de 15 segundos
-            
+
             gaveta.timer = setTimeout(async () => {
                 try {
                     const textoConsolidado = gaveta.textos.join(' \n');
                     const msgFinal = gaveta.ultimaMsg;
-                    
-                    gavetaDeMensagens.delete(remoteJid);
-                    
+
+                    gavetaDeMensagens.delete(gavetaKey);
+
                     console.log(`🧠 [OUVIDO PACIENTE] Lead concluiu raciocínio. Processando bloco: "${textoConsolidado}"`);
-                    
+
                     await processarMensagem(sock, msgFinal, instanceId, textoConsolidado);
                 } catch (errGaveta) {
                     console.error(`❌ [GAVETA] Erro ao processar bloco consolidado:`, errGaveta.message);
-                    gavetaDeMensagens.delete(remoteJid); // Limpa mesmo com erro
+                    gavetaDeMensagens.delete(gavetaKey); // Limpa mesmo com erro
                 }
             }, 15000);// <-- 15 segundos de paciência
         }
@@ -1436,13 +1443,13 @@ async function processarMensagem(sock, msg, instanceId, textoConsolidado = null)
   // ========================================================================
 // 🌟 TÓPICO 1: FILTRO ANTI-FANTASMA E TRADUTOR DE LID (VIA BANCO DE DADOS)
 // ========================================================================
-// 1. Busca normal pelo JID
-let { data: lead } = await supabase.from('leads').select('*').eq('whatsapp_id', cleanJid).single();
+// 1. Busca normal pelo JID — sempre filtrada pela instância que recebeu a mensagem
+let { data: lead } = await supabase.from('leads').select('*').eq('whatsapp_id', cleanJid).eq('instance_id', instanceId).maybeSingle();
 
 // 2. Se for um fantasma (@lid), pergunta ao banco quem ele é!
 if (!lead && cleanJid.includes('@lid')) {
     console.log(`⚠️ [LID SOLTO] Mensagem de ${cleanJid}. Buscando no banco de dados...`);
-    const { data: leadLid } = await supabase.from('leads').select('*').eq('whatsapp_lid', cleanJid).single();
+    const { data: leadLid } = await supabase.from('leads').select('*').eq('whatsapp_lid', cleanJid).eq('instance_id', instanceId).maybeSingle();
     
     if (leadLid) {
         console.log(`✅ [ARIADNE INFALÍVEL] O banco dedurou: É a ${leadLid.name}`);
@@ -1456,11 +1463,11 @@ if (!lead && cleanJid.includes('@lid')) {
 
         let originalLead = null;
 
-        // 🥷 RESGATE NINJA 1: Ele citou a nossa mensagem? 
+        // 🥷 RESGATE NINJA 1: Ele citou a nossa mensagem?
         if (quotedMsgId && mapaRastreioLID.has(quotedMsgId)) {
             const memoryJid = mapaRastreioLID.get(quotedMsgId);
             console.log(`🥷 [RESGATE NINJA 1] Lead descoberto através da mensagem citada!`);
-            const { data } = await supabase.from('leads').select('*').eq('whatsapp_id', memoryJid).single();
+            const { data } = await supabase.from('leads').select('*').eq('whatsapp_id', memoryJid).eq('instance_id', instanceId).maybeSingle();
             originalLead = data;
         }
 
@@ -1468,7 +1475,7 @@ if (!lead && cleanJid.includes('@lid')) {
         if (!originalLead && realJidRescue) {
             const cleanRescue = realJidRescue.split(':')[0].split('@')[0] + '@s.whatsapp.net';
             console.log(`🥷 [RESGATE NINJA 2] Analisando bolso secreto da Meta: ${cleanRescue}`);
-            const { data } = await supabase.from('leads').select('*').eq('whatsapp_id', cleanRescue).single();
+            const { data } = await supabase.from('leads').select('*').eq('whatsapp_id', cleanRescue).eq('instance_id', instanceId).maybeSingle();
             originalLead = data;
         }
 
@@ -2611,13 +2618,16 @@ async function loopAuditor() {
                 auditadosComSucesso++;
                 console.log(`✅ [QA AUDITOR] ${lead.name} — desfecho: ${relatorio.desfecho} | nota: ${relatorio.nota_ia}`);
 
-                // Emite para o dashboard em tempo real
+                // Emite para o dashboard em tempo real — apenas para o dono da instância
                 if (ioSocket) {
-                    ioSocket.emit('audit_complete', {
-                        leadId:   lead.id,
-                        leadName: lead.name,
-                        relatorio,
-                    });
+                    const auditUserId = sessions.get(lead.instance_id)?.userId;
+                    if (auditUserId) {
+                        ioSocket.to(`user:${auditUserId}`).emit('audit_complete', {
+                            leadId:   lead.id,
+                            leadName: lead.name,
+                            relatorio,
+                        });
+                    }
                 }
 
                 // Discord só para erros críticos (nota < 6 ou erro explícito) — sem spam

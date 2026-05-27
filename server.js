@@ -112,6 +112,7 @@ io.use(async (socket, next) => {
 
 io.on('connection', (socket) => {
     const userId = socket.user.id;
+    socket.join(`user:${userId}`); // garante que eventos do SDR cheguem só ao dono
     console.log(`🔐 Acesso autorizado para: ${socket.user.email}`);
 
     // emitLog isolado por socket — nunca vaza entre usuários

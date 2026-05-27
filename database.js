@@ -32,6 +32,7 @@ const db = {
             .from('instances')
             .select(`
                 id,
+                user_id,
                 name,
                 owner_phone,
                 whatsapp_status,
