@@ -207,10 +207,26 @@ const [botLogs, setBotLogs] = useState([]);
     const [citySuggestions, setCitySuggestions] = useState([]);
     const [showNotes, setShowNotes] = useState(false);
     const [showSettings, setShowSettings] = useState(false);
-    const [settingsForm, setSettingsForm] = useState({ calendly_link: '' });
+    const [settingsForm, setSettingsForm] = useState({ calendly_link: '', default_agent_name: '', default_company_name: '', default_daily_limit: '', opening_a: '', opening_b: '', opening_c: '' });
     const [savingSettings, setSavingSettings] = useState(false);
+    const [copiedVar, setCopiedVar] = useState(null);
     const [notesContent, setNotesContent] = useState(() => localStorage.getItem('radar_notes') ?? '');
     const [showExportMenu, setShowExportMenu] = useState(false);
+
+    // --- MÉTRICAS A/B/C DE ABERTURA ---
+    const openingStats = useMemo(() => {
+        const LABELS = { abertura_v1: 'A', abertura_v2: 'B', abertura_v3: 'C' };
+        const stats = {};
+        leads.forEach(lead => {
+            if (!lead.opening_template) return;
+            const base = lead.opening_template.replace('_decisor', '');
+            if (!stats[base]) stats[base] = { label: LABELS[base] || base, total: 0, engaged: 0, booked: 0 };
+            stats[base].total++;
+            if (!['new', 'invalid', 'error'].includes(lead.status)) stats[base].engaged++;
+            if (lead.status === 'booked' || lead.status === 'closed') stats[base].booked++;
+        });
+        return Object.values(stats).sort((a, b) => a.label.localeCompare(b.label));
+    }, [leads]);
 
     // --- PERFORMANCE: FILTRO MEMOIZADO ---
     const filteredLeads = useMemo(() => {
@@ -501,8 +517,18 @@ if (session?.user?.id) checkBriefing()
     const openSettings = async () => {
         const { data: { session: s } } = await supabase.auth.getSession();
         if (!s?.user?.id) return;
-        const { data } = await supabase.from('profiles').select('calendly_link').eq('id', s.user.id).maybeSingle();
-        setSettingsForm({ calendly_link: data?.calendly_link || '' });
+        const { data } = await supabase.from('profiles')
+            .select('calendly_link, default_agent_name, default_company_name, default_daily_limit, opening_templates')
+            .eq('id', s.user.id).maybeSingle();
+        setSettingsForm({
+            calendly_link: data?.calendly_link || '',
+            default_agent_name: data?.default_agent_name || '',
+            default_company_name: data?.default_company_name || '',
+            default_daily_limit: data?.default_daily_limit || '',
+            opening_a: data?.opening_templates?.padrao?.[0] || '',
+            opening_b: data?.opening_templates?.padrao?.[1] || '',
+            opening_c: data?.opening_templates?.padrao?.[2] || '',
+        });
         setShowSettings(true);
     };
 
@@ -510,7 +536,14 @@ if (session?.user?.id) checkBriefing()
         setSavingSettings(true);
         const { data: { session: s } } = await supabase.auth.getSession();
         if (s?.user?.id) {
-            await supabase.from('profiles').update({ calendly_link: settingsForm.calendly_link }).eq('id', s.user.id);
+            const padrao = [settingsForm.opening_a, settingsForm.opening_b, settingsForm.opening_c].filter(Boolean);
+            await supabase.from('profiles').update({
+                calendly_link: settingsForm.calendly_link || null,
+                default_agent_name: settingsForm.default_agent_name || null,
+                default_company_name: settingsForm.default_company_name || null,
+                default_daily_limit: settingsForm.default_daily_limit ? Number(settingsForm.default_daily_limit) : null,
+                opening_templates: padrao.length > 0 ? { padrao } : null,
+            }).eq('id', s.user.id);
         }
         setSavingSettings(false);
         setShowSettings(false);
@@ -659,8 +692,8 @@ return (
     {/* MODAL DE CONFIGURAÇÕES DA CONTA */}
     {showSettings && (
         <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/70 backdrop-blur-sm" onClick={() => setShowSettings(false)}>
-            <div className="bg-[#111] border border-white/10 rounded-2xl p-6 w-full max-w-md shadow-2xl" onClick={e => e.stopPropagation()}>
-                <div className="flex items-center justify-between mb-5">
+            <div className="bg-[#111] border border-white/10 rounded-2xl p-6 w-full max-w-2xl shadow-2xl max-h-[90vh] flex flex-col" onClick={e => e.stopPropagation()}>
+                <div className="flex items-center justify-between mb-5 shrink-0">
                     <div>
                         <h2 className="text-sm font-black text-white uppercase tracking-widest">Configurações da Conta</h2>
                         <p className="text-[10px] text-slate-500 mt-0.5">{session?.user?.email}</p>
@@ -670,20 +703,113 @@ return (
                     </button>
                 </div>
 
-                <div className="space-y-4">
+                <div className="overflow-y-auto flex-1 space-y-5 pr-1">
+
+                    {/* — Identidade do SDR — */}
                     <div>
-                        <label className="text-[10px] font-black text-amber-300/80 uppercase tracking-widest block mb-1.5">Link Calendly</label>
-                        <Input
-                            value={settingsForm.calendly_link}
-                            onChange={e => setSettingsForm(f => ({ ...f, calendly_link: e.target.value }))}
-                            placeholder="https://calendly.com/seu-usuario/30min"
-                            className="bg-black/30 border-white/10 text-white text-sm h-10 focus:border-amber-500"
-                        />
-                        <p className="text-[9px] text-slate-600 mt-1">Compartilhado por todos os chips da sua conta</p>
+                        <p className="text-[9px] font-black text-amber-500/60 uppercase tracking-widest mb-3">Identidade do SDR</p>
+                        <div className="grid grid-cols-2 gap-3">
+                            <div>
+                                <label className="text-[10px] font-black text-amber-300/80 uppercase tracking-widest block mb-1.5">Nome do SDR</label>
+                                <Input
+                                    value={settingsForm.default_agent_name}
+                                    onChange={e => setSettingsForm(f => ({ ...f, default_agent_name: e.target.value }))}
+                                    placeholder="Ex: Sofia, Luna, Pedro"
+                                    className="bg-black/30 border-white/10 text-white text-sm h-10 focus:border-amber-500"
+                                />
+                            </div>
+                            <div>
+                                <label className="text-[10px] font-black text-amber-300/80 uppercase tracking-widest block mb-1.5">Nome da Empresa</label>
+                                <Input
+                                    value={settingsForm.default_company_name}
+                                    onChange={e => setSettingsForm(f => ({ ...f, default_company_name: e.target.value }))}
+                                    placeholder="Ex: Lince, Enerzee, Antix"
+                                    className="bg-black/30 border-white/10 text-white text-sm h-10 focus:border-amber-500"
+                                />
+                            </div>
+                        </div>
                     </div>
+
+                    {/* — Limites e Agendamento — */}
+                    <div>
+                        <p className="text-[9px] font-black text-amber-500/60 uppercase tracking-widest mb-3">Limites e Agendamento</p>
+                        <div className="grid grid-cols-2 gap-3">
+                            <div>
+                                <label className="text-[10px] font-black text-amber-300/80 uppercase tracking-widest block mb-1.5">Limite Diário (leads/dia)</label>
+                                <Input
+                                    type="number"
+                                    value={settingsForm.default_daily_limit}
+                                    onChange={e => setSettingsForm(f => ({ ...f, default_daily_limit: e.target.value }))}
+                                    placeholder="Ex: 50"
+                                    className="bg-black/30 border-white/10 text-white text-sm h-10 focus:border-amber-500"
+                                />
+                            </div>
+                            <div>
+                                <label className="text-[10px] font-black text-amber-300/80 uppercase tracking-widest block mb-1.5">Link Calendly</label>
+                                <Input
+                                    value={settingsForm.calendly_link}
+                                    onChange={e => setSettingsForm(f => ({ ...f, calendly_link: e.target.value }))}
+                                    placeholder="https://calendly.com/..."
+                                    className="bg-black/30 border-white/10 text-white text-sm h-10 focus:border-amber-500"
+                                />
+                            </div>
+                        </div>
+                    </div>
+
+                    {/* — Aberturas A/B/C — */}
+                    <div>
+                        <p className="text-[9px] font-black text-amber-500/60 uppercase tracking-widest mb-1">Aberturas A / B / C</p>
+                        <div className="grid grid-cols-3 gap-1.5 mb-3">
+                            {[
+                                { key: '${saudacao}',           desc: 'Saudação completa',          ex: 'Oi João'          },
+                                { key: '${nomeDono}',           desc: 'Só o primeiro nome',          ex: 'João'             },
+                                { key: '${nomeEmpresa}',        desc: 'Nome da empresa (CNPJ)',      ex: 'Padaria Central'  },
+                                { key: '${bairroLead}',         desc: 'Bairro ou cidade',            ex: 'Vila Madalena'    },
+                                { key: '${concessionariaLocal}',desc: 'Concessionária de energia',   ex: 'Celesc'           },
+                                { key: '${origem}',             desc: 'Empresa que indicou',         ex: 'Empresa XYZ'      },
+                            ].map(({ key, desc, ex }) => (
+                                <button
+                                    key={key}
+                                    type="button"
+                                    onClick={() => {
+                                        navigator.clipboard.writeText(key);
+                                        setCopiedVar(key);
+                                        setTimeout(() => setCopiedVar(null), 1500);
+                                    }}
+                                    className="text-left p-2 rounded-lg border transition-all bg-amber-500/5 border-amber-500/15 hover:bg-amber-500/15 hover:border-amber-500/30"
+                                >
+                                    <p className="font-mono text-[9px] font-black text-amber-400 leading-none mb-1">
+                                        {copiedVar === key ? '✓ copiado!' : key}
+                                    </p>
+                                    <p className="text-[8px] text-slate-500 leading-none">{desc}</p>
+                                    <p className="text-[8px] text-slate-700 leading-none mt-0.5">ex: {ex}</p>
+                                </button>
+                            ))}
+                        </div>
+                        <div className="space-y-3">
+                            {[
+                                { key: 'opening_a', label: 'Abertura A' },
+                                { key: 'opening_b', label: 'Abertura B' },
+                                { key: 'opening_c', label: 'Abertura C' },
+                            ].map(({ key, label }) => (
+                                <div key={key}>
+                                    <label className="text-[10px] font-black text-amber-300/80 uppercase tracking-widest block mb-1.5">{label}</label>
+                                    <textarea
+                                        value={settingsForm[key]}
+                                        onChange={e => setSettingsForm(f => ({ ...f, [key]: e.target.value }))}
+                                        placeholder={`${label}: escreva a mensagem de abertura. Use \${saudacao} para cumprimentar pelo nome.`}
+                                        rows={3}
+                                        className="w-full bg-black/30 border border-white/10 text-white text-sm rounded-md px-3 py-2 focus:outline-none focus:border-amber-500 resize-none placeholder:text-slate-700"
+                                    />
+                                </div>
+                            ))}
+                        </div>
+                        <p className="text-[9px] text-slate-600 mt-2">O SDR sorteia uma das aberturas preenchidas a cada novo lead. Chips novos herdam essas mensagens automaticamente.</p>
+                    </div>
+
                 </div>
 
-                <div className="flex gap-3 mt-6">
+                <div className="flex gap-3 mt-5 shrink-0">
                     <Button onClick={() => setShowSettings(false)} className="flex-1 h-9 bg-transparent border border-white/10 text-slate-400 hover:bg-white/5 text-xs">
                         Cancelar
                     </Button>
@@ -1125,6 +1251,31 @@ return (
         })}
     </div>
 </div>
+    {/* === MÉTRICAS A/B/C DE ABERTURA === */}
+    {openingStats.length > 0 && (
+        <div className="shrink-0 px-3 py-2.5 border-b border-white/5 space-y-1.5">
+            <p className="text-[8px] font-black text-amber-500/50 uppercase tracking-widest mb-2">Aberturas — Taxa de Engajamento</p>
+            {openingStats.map(s => {
+                const pct = s.total > 0 ? Math.round((s.engaged / s.total) * 100) : 0;
+                const isLeading = openingStats.length > 1 && pct === Math.max(...openingStats.map(x => x.total > 0 ? Math.round((x.engaged/x.total)*100) : 0)) && s.total > 0;
+                return (
+                    <div key={s.label} className="flex items-center gap-2">
+                        <span className={`text-[8px] font-black w-4 shrink-0 ${isLeading ? 'text-amber-400' : 'text-slate-600'}`}>{s.label}</span>
+                        <div className="flex-1 h-1.5 bg-white/5 rounded-full overflow-hidden">
+                            <div
+                                className={`h-full rounded-full transition-all ${isLeading ? 'bg-amber-400' : 'bg-slate-600'}`}
+                                style={{ width: `${pct}%` }}
+                            />
+                        </div>
+                        <span className={`text-[8px] font-black w-6 text-right shrink-0 ${isLeading ? 'text-amber-400' : 'text-slate-600'}`}>{pct}%</span>
+                        <span className="text-[7px] text-slate-700 w-14 shrink-0">{s.engaged}/{s.total} leads</span>
+                        {s.booked > 0 && <span className="text-[7px] text-emerald-600 font-black">{s.booked} ag.</span>}
+                    </div>
+                );
+            })}
+        </div>
+    )}
+
     {/* === WAR ROOM — flex:1 = todo o espaço restante === */}
     <div className="flex-1 flex flex-col overflow-hidden min-h-0">
 <ConversaList

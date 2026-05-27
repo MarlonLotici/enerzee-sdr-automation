@@ -544,18 +544,20 @@ async function getRegrasEmCache(instanceId) {
         }
     }
 
-    // Sobrescreve calendly_link com o da conta (profile) — todos os chips da mesma
-    // empresa compartilham o mesmo link, independente do que estiver no chip individual
+    // Herda config da conta (profile) — campos não preenchidos no chip usam o padrão da conta
     if (regrasDoBanco?.user_id) {
         const { data: profile } = await supabase
             .from('profiles')
-            .select('calendly_link')
+            .select('calendly_link, opening_templates, default_agent_name, default_company_name, default_daily_limit')
             .eq('id', regrasDoBanco.user_id)
             .maybeSingle();
 
-        if (profile?.calendly_link) {
-            regrasDoBanco.calendly_link = profile.calendly_link;
-        }
+        if (profile?.calendly_link) regrasDoBanco.calendly_link = profile.calendly_link;
+        // opening_templates sempre vem do profile — é a fonte única da verdade para A/B/C
+        if (profile?.opening_templates) regrasDoBanco.opening_templates = profile.opening_templates;
+        if (!regrasDoBanco.agent_name && profile?.default_agent_name) regrasDoBanco.agent_name = profile.default_agent_name;
+        if (!regrasDoBanco.company_name && profile?.default_company_name) regrasDoBanco.company_name = profile.default_company_name;
+        if (!regrasDoBanco.daily_limit && profile?.default_daily_limit) regrasDoBanco.daily_limit = profile.default_daily_limit;
     }
 
     if (regrasDoBanco) {
@@ -2077,6 +2079,7 @@ const bairroLead = lead.bairro || lead.cidade || 'sua região';
 // Substitui variáveis nos templates vindos do Supabase
 const substituirVarsAbertura = (tpl) => tpl
     .replace(/\$\{saudacao\}/g, saudacao)
+    .replace(/\$\{nomeDono\}/g, primeiroNomeDono || 'você')
     .replace(/\$\{nomeEmpresa\}/g, nomeEmpresa)
     .replace(/\$\{concessionariaLocal\}/g, concessionariaLocal)
     .replace(/\$\{bairroLead\}/g, bairroLead)
@@ -3184,7 +3187,7 @@ enviarAlerta("🎊 REUNIÃO AGENDADA!", `Lead: ${lead.name}\nData: ${new Date(da
         // Deduz o product_type do perfil do usuário — zero fricção no frontend
         const { data: profile } = await supabase
             .from('profiles')
-            .select('default_product_type')
+            .select('default_product_type, opening_templates, default_agent_name, default_company_name, default_daily_limit')
             .eq('id', userId)
             .maybeSingle();
 
@@ -3193,7 +3196,13 @@ enviarAlerta("🎊 REUNIÃO AGENDADA!", `Lead: ${lead.name}\nData: ${new Date(da
 
         const { data } = await supabase
             .from('instances')
-            .insert([{ name: n, owner_phone: t, user_id: userId, product_type: productType }])
+            .insert([{
+                name: n, owner_phone: t, user_id: userId, product_type: productType,
+                opening_templates: profile?.opening_templates || null,
+                agent_name: profile?.default_agent_name || null,
+                company_name: profile?.default_company_name || null,
+                daily_limit: profile?.default_daily_limit || null,
+            }])
             .select()
             .single();
 
