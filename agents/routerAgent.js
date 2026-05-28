@@ -15,8 +15,18 @@ async function classificarMensagem(ultimaMensagemLead) {
     const padraoRobo = (
         /^(olá|oi|hello|bom dia|boa tarde|boa noite)[,!.\s]*\s*(como posso (ajudar|te atender)|em que posso|no que posso)/i.test(ultimaMensagemLead) ||
         /\b(atendimento automático|assistente virtual|chatbot|robô|este é um serviço automático|resposta automática|fora do horário de atendimento|horário de funcionamento)\b/i.test(ultimaMensagemLead) ||
-        /^\s*\d+[\s\-–\.]\s*.{2,40}(\n\s*\d+[\s\-–\.]\s*.{2,40}){2,}/m.test(ultimaMensagemLead) || // menu numerado com 3+ itens
-        /begin:vcard/i.test(ultimaMensagemLead) === false && /\[AUTORESPOSTA\]/.test(ultimaMensagemLead)
+        /^\s*\d+[\s\-–\.]\s*.{2,40}(\n\s*\d+[\s\-–\.]\s*.{2,40}){2,}/m.test(ultimaMensagemLead) ||
+        /begin:vcard/i.test(ultimaMensagemLead) === false && /\[AUTORESPOSTA\]/.test(ultimaMensagemLead) ||
+        // Expanded bot patterns
+        /\b(mensagem automática|sistema automático|bot de atendimento|atendente virtual|agente virtual|resposta gerada automaticamente)\b/i.test(ultimaMensagemLead) ||
+        /\b(para falar com (um atendente|nossa equipe|um humano)|pressione \d|digite \d|selecione (uma opção|abaixo))\b/i.test(ultimaMensagemLead) ||
+        /\b(ticket (aberto|criado|gerado)|protocolo n[oº°]?\.?\s*\d+|número do chamado)\b/i.test(ultimaMensagemLead) ||
+        /\b(nosso horário de atendimento|estamos (disponíveis|online) (de|das|entre)|atendemos (de|das))\b/i.test(ultimaMensagemLead) ||
+        /\b(obrigad[oa] por entrar em contato|sua mensagem foi recebida|em breve retornaremos|retornaremos em até)\b/i.test(ultimaMensagemLead) ||
+        /\b(para (suporte|dúvidas|informações|compras|vendas|financeiro|cancelamento), (acesse|clique|vá|visite))\b/i.test(ultimaMensagemLead) ||
+        /\b(este (número|canal|contato) (não recebe|não aceita) (respostas|mensagens))\b/i.test(ultimaMensagemLead) ||
+        /\b(powered by|via (zendesk|intercom|freshdesk|hubspot|salesforce|rdstation))\b/i.test(ultimaMensagemLead) ||
+        /\u{1F916}|\u{1F4AC}/u.test(ultimaMensagemLead) && /\b(automático|bot|virtual)\b/i.test(ultimaMensagemLead)
     );
     if (padraoRobo) {
         console.log("🤖 [ROTEADOR] Autoresposta/robô detectado. Bypass para ROBO.");

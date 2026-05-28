@@ -454,64 +454,122 @@ async function verificarLoopZumbi(whatsappId, instanceId, textoAtual) {
     }
 }
 
-// 🎯 FIX #7: Detector de robô por REGEX (custo zero, latência zero)
-// Substitui a chamada LLM que custava ~$0.002 por mensagem recebida
+// Retorna true quando há sinais positivos de que quem escreveu é humano
+function detectarSinalHumano(texto) {
+    if (!texto) return false;
+    const t = texto.trim();
+    return (
+        /\b(eu|minha?|meu|noss[ao]|nossa\s+empresa|minha\s+empresa|aqui\s+(?:na|é))\b/i.test(t) ||
+        /\b(tô|tá|num|tava|tamo|né|cara|ó|oxe|poxa|caramba|rapaz|véi)\b/i.test(t) || // gírias BR
+        /R\$\s*[\d.,]+/.test(t) ||           // menciona valor monetário
+        /\d{3,}/.test(t) ||                  // número concreto (consumo kWh, CNPJ parcial etc.)
+        t.split(/\s+/).length >= 8 ||        // resposta longa — humanos explicam
+        (/[!?]/.test(t) && t.length > 25)    // emoção com substância
+    );
+}
+
+// Analisa o padrão do histórico e detecta bot que passou pelo regex
+// Só ativa após o SDR já ter enviado mensagens suficientes para haver padrão
+async function avaliarRiscoRoboComHistorico(historico) {
+    const respostasSdr = historico.filter(m => m.role === 'assistant').length;
+    if (respostasSdr < 3) return false; // cedo demais para detectar padrão
+
+    const mensagensLead = historico.filter(m => m.role === 'user')
+        .filter(m => !m.content.startsWith('[AUTORESPOSTA]') && !m.content.startsWith('[SUSPEITA_BOT]'));
+
+    if (mensagensLead.length === 0) return false;
+
+    // Nenhuma mensagem do lead mostrou sinal humano após 4+ respostas do SDR → bot silencioso
+    const algumSinalHumano = mensagensLead.some(m => detectarSinalHumano(m.content));
+    if (respostasSdr >= 4 && !algumSinalHumano) return true;
+
+    // Últimas 3 mensagens do lead: todas curtas (< 25 chars) e sem sinal humano
+    const ultimas3 = mensagensLead.slice(-3);
+    if (ultimas3.length >= 3 && ultimas3.every(m =>
+        m.content.trim().length < 25 && !detectarSinalHumano(m.content)
+    )) return true;
+
+    return false;
+}
+
+// 🎯 Detector de robô por REGEX (custo zero, latência zero)
+// Padrões HARD: nunca são fala humana natural → ROBO imediato
+// Padrões SOFT: podem aparecer em fala humana → só ROBO se não houver sinal humano
 function analisarIntencaoRegex(texto) {
     if (!texto || texto.trim().length === 0) return "[HUMANO]";
     const t = texto.toLowerCase().trim();
-    
-    const PADROES_ROBO = [
-        // 1. Padrões de Menu e Digitação
+
+    // HARD: estruturas impossíveis em conversa humana espontânea
+    const PADROES_HARD = [
+        // Menus numerados / URA
         /(?:digite|opcao|opção|selecione|escolha)\s*(?:a|uma)?\s*(?:opção|alternativa)?\s*\d/i,
-        /^\s*\d\s*[-–—\.)]\s*.+/m,
+        /^\s*\d\s*[-–—\.)]\s*.+(\n\s*\d\s*[-–—\.)]\s*.+){1,}/m,  // 2+ linhas numeradas
         /(?:1\s*[-–]\s*.+\n\s*2\s*[-–])/,
+        /\*\s*\d+\s*\*/,
+        /confirme\s+(?:digitando|enviando|respondendo)\s+(?:com\s+)?\d/i,
+        /(?:responda|digite|envie)\s+(?:sim|1|s)\s+para\s+confirmar/i,
 
-        // 2. Mensagens de Ausência e Horário
-        /agradec\w+\s+(?:o\s+)?(?:seu|sua)\s+contato/i,   // "agradece o seu contato" e "agradece seu contato"
-        /agradec\w+\s+o\s+contato/i,                       // "agradece o contato"
-        /(?:retornaremos|em\s+breve\s+retorn|entraremos\s+em\s+contato)/i,
-        /(?:em\s+)?hor[aá]rio\s+comercial/i,
-        /hor[aá]rio\s+de\s+atendimento/i,                  // "horário de atendimento" (não pegava antes)
+        // Protocolo / ticket automático
+        /protocolo\s*[:#n°\s]\s*\d+/i,
+        /n[°º]\s*(?:do\s+)?atendimento\s*:?\s*\d+/i,
+        /ticket\s*(?:aberto|criado|registrado|n[°º]?)/i,
+        /sua\s+solicita[çc][ãa]o\s+foi\s+registrada/i,
         /sua\s+mensagem\s+foi\s+recebida/i,
-        /bem[- ]?vind[oa]\s+(?:ao?|à)/i,
-        /atendimento\s+(?:das|de)\s+\d/i,
-        /^(?:seg\s+[aà]\s+sex|segunda\s+[aà]|funciona\w+\s+das?\s+\d)/i,
 
-        // 3. Formulários / coleta de dados (URAs que pedem nome, data, produto)
-        /(?:informe|deixe|envie|mande)\s+(?:seu|sua|o)\s+(?:nome|cpf|data|pedido|produto)/i,
-        /⚠️\s*seu\s+nome/i,                                // "⚠️ Seu nome:" — padrão comum de bots
-        /para\s+iniciar\s+(?:o\s+)?atendimento/i,          // "para iniciar o atendimento"
-        /atendimento\s+por\s+ordem\s+de/i,                 // "atendimento por ordem de envio"
-
-        // 4. Links de Cardápios e Catálogos
-        /(?:cardapio|card[áa]pio|menu|catalogo|catálogo)\s*(?:digital|online|aqui)/i,
-        /(?:acesse|confira|veja)\s+(?:nosso|o)\s+(?:cardápio|menu|catálogo)/i,
-        /https?:\/\/(?:instadelivery|menudino|goomer|ola\.click|linktr\.ee|instagram\.com)/i,
-
-        // 5. Frases típicas de Chatbots Business
-        /(?:n[ãa]o\s+(?:é|e)\s+poss[ií]vel\s+atend|fora\s+do\s+hor[aá]rio)/i,
+        // Transferência e fila
+        /transferindo\s+(?:sua\s+)?(?:chamada|mensagem|atendimento)/i,
+        /voc[êe]\s+est[áa]\s+na\s+fila/i,
+        /conectando\s+(?:você\s+)?(?:com|ao?)\s+(?:um\s+)?atendente/i,
+        /aguarde[,.]?\s*(?:um\s+momento|seu\s+atendimento|transferindo)/i,
+        /(?:em\s+breve\s+)?(?:um\s+)?atendente\s+(?:ir[aá]|vai|estará)/i,
         /(?:para\s+falar\s+com\s+(?:um|nosso)\s+atendente)/i,
         /atendimento\s+autom[áa]tico/i,
-        /voc[êe]\s+est[áa]\s+na\s+fila/i,
-        /n[ãa]o\s+atendemos\s+liga[çc][õo]es/i,            // "não atendemos ligações"
+        /n[ãa]o\s+atendemos\s+liga[çc][õo]es/i,
 
-        // 6. URAs modernas sem menu numerado
-        /hor[aá]rio\s+de\s+funcionamento/i,
-        /(?:em\s+breve\s+)?(?:um\s+)?atendente\s+(?:ir[aá]|vai|estará)/i,
-        /aguarde\s+(?:um\s+momento|seu\s+atendimento)/i,
-        /transferindo\s+(?:sua\s+)?(?:chamada|mensagem|atendimento)/i,
-        /n[ãa]o\s+(?:estamos\s+)?(?:conseguindo\s+)?(?:atender|te\s+atender)\s+no\s+momento/i,
+        // Coleta de dados / formulário
+        /(?:informe|deixe|envie|mande)\s+(?:seu|sua|o)\s+(?:nome|cpf|data|pedido|produto)/i,
+        /⚠️\s*seu\s+nome/i,
+        /para\s+iniciar\s+(?:o\s+)?atendimento/i,
+        /atendimento\s+por\s+ordem\s+de/i,
+
+        // Links de sistemas de pedido
+        /https?:\/\/(?:instadelivery|menudino|goomer|ola\.click)/i,
+        /(?:acesse|confira|veja)\s+(?:nosso|o)\s+(?:cardápio|menu|catálogo)/i,
+
+        // Horários corporativos formatados (blocos de texto de bot)
+        /^(?:seg\s+[aà]\s+sex|segunda\s+[aà]|funciona\w+\s+das?\s+\d)/i,
         /(?:segunda\s+[aà]\s+sexta|seg\s+[aà]\s+sex)[^.]{0,40}\d{1,2}h/i,
-        /segunda\s+a\s+s[aá]bado[^.]{0,40}\d{1,2}[:h]/i,  // "segunda a sábado 09:00"
+        /segunda\s+a\s+s[aá]bado[^.]{0,40}\d{1,2}[:h]/i,
+        /hor[aá]rio\s+de\s+(?:atendimento|funcionamento)/i,
+        /atendimento\s+(?:das|de)\s+\d/i,
 
-        // 7. Listas por letras
+        // Listas por letras A) B) C)
         /^\s*(?:\*?[A-Z]\)\*?|\*?[A-Z]\.\*?)\s+\S+/m,
+
+        // Fora do horário
+        /(?:n[ãa]o\s+(?:é|e)\s+poss[ií]vel\s+atend|fora\s+do\s+hor[aá]rio)/i,
+        /n[ãa]o\s+(?:estamos\s+)?(?:conseguindo\s+)?(?:atender|te\s+atender)\s+no\s+momento/i,
     ];
 
-    for (const padrao of PADROES_ROBO) {
+    for (const padrao of PADROES_HARD) {
         if (padrao.test(t)) return "[ROBO]";
     }
-    
+
+    // SOFT: frases que bots usam mas humanos também podem usar em contexto
+    // Só classifica como ROBO se NÃO houver sinal humano na mensagem
+    const PADROES_SOFT = [
+        /(?:retornaremos|em\s+breve\s+retorn|entraremos\s+em\s+contato)/i,  // "entraremos em contato" — humanos prometem isso
+        /agradec\w+\s+(?:o\s+)?(?:seu|sua\s+)?contato/i,                    // "agradecemos o contato"
+        /bem[- ]?vind[oa]/i,                                                  // "seja bem-vindo(a)"
+        /(?:em\s+)?hor[aá]rio\s+comercial/i,                                 // "horário comercial"
+        /(?:cardapio|card[áa]pio|menu|catalogo|catálogo)\s*(?:digital|online|aqui)/i,
+    ];
+
+    const temSinalHumano = detectarSinalHumano(t);
+    for (const padrao of PADROES_SOFT) {
+        if (padrao.test(t) && !temSinalHumano) return "[ROBO]";
+    }
+
     return "[HUMANO]";
 }
 
@@ -795,7 +853,7 @@ Você se comunica como um ser humano no WhatsApp — direto, sem formalidade exc
     const secaoRegional = `[INTELIGÊNCIA REGIONAL]
 - Concessionária local do lead: ${concessionariaLocal}
 - Redução esperada na fatura: ${percentualTexto}%
-- Economia estimada: ${economiaMensalFormatada}/mês | ${economiaAnualFormatada}/ano
+- Economia anual estimada: ${economiaAnualFormatada}/ano (use APENAS este valor — nunca mencione o valor mensal)
 - Contexto regional: ${contextoBairro}
 - ${perfilComportamental}`;
 
@@ -1387,8 +1445,10 @@ if (matchClima) updates.sentiment = matchClima[1].toLowerCase();
     const leadEnviouAudio = ultimaMsgUser?.content?.startsWith('(Áudio)');
     const audiosJaEnviados = historico.filter(m => m.content?.includes('[AUDIO_TTS]')).length;
     const temCalendly = textoLimpo.includes('calendly.com');
-    // Dispara TTS se: lead mandou áudio OU chance aleatória de 25%, máx 2 por conversa, sem links
-    const usarTTS = audiosJaEnviados < 2 && !temCalendly && (leadEnviouAudio || Math.random() < 0.25);
+    // Nos estágios 2-3 (revelação da economia) o áudio reforça o impacto emocional
+    const estagioEmocional = (lead.current_stage === 2 || lead.current_stage === 3);
+    // Estágio 2/3 → sempre áudio (máx 2 por conversa). Outros: lead enviou áudio OU 25% aleatório.
+    const usarTTS = audiosJaEnviados < 2 && !temCalendly && (leadEnviouAudio || estagioEmocional || Math.random() < 0.25);
 
     for (let i = 0; i < mensagensSplit.length; i++) {
         const trecho = mensagensSplit[i];
@@ -1625,8 +1685,18 @@ if (fromMe) {
       if (intencao === "[ROBO]") {
             console.log(`🤖 [SILÊNCIO] Autoresposta detectada para ${lead.name}. Bot aguardando humano silenciosamente...`);
             await db.saveMessage(lead.whatsapp_id, 'user', `[AUTORESPOSTA] ${texto}`, instanceId);
-            await supabase.from('leads').update({ is_paused: true }).eq('id', lead.id); // BLINDAGEM EXTRA: Pausa o lead
-            return; // Silêncio total — não arquiva, não responde, apenas aguarda
+            await supabase.from('leads').update({ is_paused: true }).eq('id', lead.id);
+            return;
+        }
+
+        // 🧠 CAMADA 2: padrão histórico de bot (muitas msgs do SDR, zero sinal humano)
+        const histParaBot = await db.getHistory(lead.whatsapp_id, instanceId);
+        if (await avaliarRiscoRoboComHistorico(histParaBot)) {
+            console.log(`🤖 [SILÊNCIO POR PADRÃO] Histórico indica bot para ${lead.name}. Pausando.`);
+            await db.saveMessage(lead.whatsapp_id, 'user', `[SUSPEITA_BOT] ${texto}`, instanceId);
+            await supabase.from('leads').update({ is_paused: true }).eq('id', lead.id);
+            await enviarAlerta(`🤖 *Bot por Padrão Histórico*\n*Lead:* ${lead.name}\n*Chip:* ${instanceId}\nSDR enviou várias msgs sem resposta humana. Lead pausado.`);
+            return;
         }
         }
     }
@@ -1747,7 +1817,7 @@ if (fromMe) {
             const intencaoDespertador = analisarIntencaoRegex(texto);
             
             // O lead falou, é humano, mas a pausa foi por intervenção manual do Marlon?
-            if (intencaoDespertador === "[HUMANO]" && !lead.manual_pause) {
+            if (intencaoDespertador === "[HUMANO]" && detectarSinalHumano(texto) && !lead.manual_pause) {
                 // Aqui é o pulo do gato: A IA só "acorda" sozinha se você NUNCA tiver interagido 
                 // OU se a sua última interação manual foi há mais de 20 minutos.
                 const ultimaInteracaoMs = lead.last_human_interaction ? new Date(lead.last_human_interaction).getTime() : 0;
