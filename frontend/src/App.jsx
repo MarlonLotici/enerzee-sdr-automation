@@ -220,9 +220,10 @@ const [botLogs, setBotLogs] = useState([]);
         leads.forEach(lead => {
             if (!lead.opening_template) return;
             const base = lead.opening_template.replace('_decisor', '');
-            if (!stats[base]) stats[base] = { label: LABELS[base] || base, total: 0, engaged: 0, booked: 0 };
+            if (!LABELS[base]) return; // ignora templates fora do padrão A/B/C
+            if (!stats[base]) stats[base] = { label: LABELS[base], total: 0, responded: 0, booked: 0 };
             stats[base].total++;
-            if (!['new', 'invalid', 'error'].includes(lead.status)) stats[base].engaged++;
+            if (['contact', 'booked', 'closed', 'waiting_analysis'].includes(lead.status)) stats[base].responded++;
             if (lead.status === 'booked' || lead.status === 'closed') stats[base].booked++;
         });
         return Object.values(stats).sort((a, b) => a.label.localeCompare(b.label));
@@ -1256,8 +1257,8 @@ return (
         <div className="shrink-0 px-3 py-2.5 border-b border-white/5 space-y-1.5">
             <p className="text-[8px] font-black text-amber-500/50 uppercase tracking-widest mb-2">Aberturas — Taxa de Engajamento</p>
             {openingStats.map(s => {
-                const pct = s.total > 0 ? Math.round((s.engaged / s.total) * 100) : 0;
-                const isLeading = openingStats.length > 1 && pct === Math.max(...openingStats.map(x => x.total > 0 ? Math.round((x.engaged/x.total)*100) : 0)) && s.total > 0;
+                const pct = s.total > 0 ? Math.round((s.responded / s.total) * 100) : 0;
+                const isLeading = openingStats.length > 1 && pct === Math.max(...openingStats.map(x => x.total > 0 ? Math.round((x.responded/x.total)*100) : 0)) && s.total > 0;
                 return (
                     <div key={s.label} className="flex items-center gap-2">
                         <span className={`text-[8px] font-black w-4 shrink-0 ${isLeading ? 'text-amber-400' : 'text-slate-600'}`}>{s.label}</span>
@@ -1268,7 +1269,7 @@ return (
                             />
                         </div>
                         <span className={`text-[8px] font-black w-6 text-right shrink-0 ${isLeading ? 'text-amber-400' : 'text-slate-600'}`}>{pct}%</span>
-                        <span className="text-[7px] text-slate-700 w-14 shrink-0">{s.engaged}/{s.total} leads</span>
+                        <span className="text-[7px] text-slate-700 w-14 shrink-0">{s.responded}/{s.total} leads</span>
                         {s.booked > 0 && <span className="text-[7px] text-emerald-600 font-black">{s.booked} ag.</span>}
                     </div>
                 );

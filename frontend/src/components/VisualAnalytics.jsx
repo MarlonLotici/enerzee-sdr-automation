@@ -842,54 +842,6 @@ export default function VisualAnalytics() {
     </ChartCard>
 </div>
 
-{/* ── ROW 5: PERFORMANCE GEOGRÁFICA (A MÁGICA DA RECEITA FEDERAL) ── */}
-            <div style={{ display: 'grid', gridTemplateColumns: '1fr', gap: 16, marginTop: 16 }}>
-                <ChartCard>
-                    <SectionTitle accent={NEON.emerald}>
-                        <MapPin size={12} color={NEON.emerald} style={{ display: 'inline', marginRight: 6 }} />
-                        Performance de Conversão por Estado (Concessionária)
-                    </SectionTitle>
-                    
-                    {geoData && geoData.length > 0 ? (
-                        <ResponsiveContainer width="100%" height={220}>
-                            <BarChart data={geoData} margin={{ top: 10, right: 10, bottom: 0, left: -20 }}>
-                                <CartesianGrid stroke={NEON.grid} vertical={false} />
-                                <XAxis dataKey="uf" tick={{ fill: NEON.muted, fontSize: 12, fontWeight: 900 }} axisLine={false} tickLine={false} />
-                                <YAxis tick={{ fill: NEON.muted, fontSize: 10, fontWeight: 700 }} axisLine={false} tickLine={false} />
-                                <Tooltip content={<NeonTooltip suffix="%" prefix="Taxa de Agendamento: " />} cursor={{ fill: 'rgba(255,255,255,0.03)' }} />
-                                
-                                <Bar dataKey="taxa" name="Taxa de Conversão" radius={[6, 6, 0, 0]}>
-                                    {geoData.map((d, i) => (
-                                        <Cell 
-                                            key={i} 
-                                            fill={d.taxa >= 10 ? NEON.emerald : d.taxa >= 5 ? NEON.amber : NEON.rose} 
-                                            style={{ filter: `drop-shadow(0 0 8px ${d.taxa >= 10 ? NEON.emerald : d.taxa >= 5 ? NEON.amber : NEON.rose}80)` }}
-                                        />
-                                    ))}
-                                </Bar>
-                            </BarChart>
-                        </ResponsiveContainer>
-                    ) : (
-                        <div style={{ height: 220, display: 'flex', alignItems: 'center', justifyContent: 'center', color: 'rgba(255,255,255,0.2)', fontSize: 11, fontWeight: 700 }}>
-                            Aguardando validações de estado do motor...
-                        </div>
-                    )}
-                    
-                    {/* Legenda Dinâmica de Performance */}
-                    <div style={{ display: 'flex', gap: 14, marginTop: 14, justifyContent: 'center' }}>
-                        {[
-                            { c: NEON.emerald, l: 'Excelente (≥10%)' }, 
-                            { c: NEON.amber, l: 'Média (≥5%)' }, 
-                            { c: NEON.rose, l: 'Baixa (<5%)' }
-                        ].map(({ c, l }) => (
-                            <div key={l} style={{ display: 'flex', alignItems: 'center', gap: 5 }}>
-                                <div style={{ width: 8, height: 8, borderRadius: 2, background: c, boxShadow: `0 0 5px ${c}` }} />
-                                <span style={{ fontSize: 10, fontWeight: 700, color: 'rgba(255,255,255,0.4)' }}>{l}</span>
-                            </div>
-                        ))}
-                    </div>
-                </ChartCard>
-            </div>
 
 
 

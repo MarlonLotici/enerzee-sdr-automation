@@ -275,14 +275,21 @@ async function iniciarVarredura(params, onProgress, shouldStop = () => false) {
     const sendStatus = (msg) => onProgress({ type: 'status', message: msg });
 
     // ── 1. Montar termos de busca (máx 3 por nicho) ──
+    // normaliza acento e plural para acertar o lookup de sinônimos
+    const normalizarChave = (s) => s
+        .toLowerCase().trim()
+        .normalize('NFD').replace(/[̀-ͯ]/g, '') // remove acentos
+        .replace(/s$/, '');                                // remove plural final
+
     let termos = [];
     const listaNichos = Array.isArray(niche) ? niche : [niche || "comércio"];
     listaNichos.forEach(n => {
         let val = (typeof n === 'object' && n.keywords) ? n.keywords : n;
         if (typeof val === 'string') {
             const chave = val.toLowerCase().trim();
-            termos.push(chave);
-            if (SINONIMOS[chave]) termos.push(...SINONIMOS[chave].slice(0, 2));
+            termos.push(chave); // mantém o termo original na busca
+            const chaveNorm = normalizarChave(chave);
+            if (SINONIMOS[chaveNorm]) termos.push(...SINONIMOS[chaveNorm].slice(0, 2));
         }
     });
     termos = [...new Set(termos)];

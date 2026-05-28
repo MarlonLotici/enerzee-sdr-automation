@@ -2586,7 +2586,7 @@ async function loopAuditor() {
             .from('leads')
             .select('id, name, whatsapp_id, instance_id, status, niche')
             .in('status', ['booked', 'dead', 'invalid'])
-            .eq('is_audited', false)
+            .or('is_audited.eq.false,is_audited.is.null')
             .in('instance_id', chipsAudit)
             .limit(5);
 
