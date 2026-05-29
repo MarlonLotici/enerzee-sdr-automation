@@ -1,7 +1,7 @@
 const Groq = require('groq-sdk');
 
 const groq  = new Groq({ apiKey: process.env.GROQ_API_KEY });
-const MODELO = 'llama-3.1-70b-versatile';
+const MODELO = 'llama-3.3-70b-versatile';
 
 /**
  * Audita uma conversa encerrada e retorna um relatório estruturado.

@@ -27,6 +27,14 @@ const { useRedisAuthState, clearRedisSession } = require('./auth_redis_adapter')
 const { enviarAlerta } = require('./notifier');
 const { getNicheData, inicializarCache } = require('./nicheCache');
 const instanciasEncerrandoManualmente = new Set(); // 🛑 Flag para silenciar alertas no Discord ao remover chip
+
+// Registrado uma única vez no nível do módulo — evita MaxListeners leak ao reconectar chips
+process.on('unhandledRejection', (reason) => {
+    const msg = String(reason?.message || reason);
+    if (msg.includes('Bad MAC') || msg.includes('Failed to decrypt')) return;
+    console.error('⚠️ [UNHANDLED]:', reason);
+});
+
 const MAPA_CONCESSIONARIAS = {
     'MT': 'Energisa', 'MS': 'Energisa', 'SC': 'Celesc', 'PR': 'Copel',
     'RS': 'RGE/Ceee', 'BA': 'Coelba', 'PE': 'Neoenergia', 'MG': 'Cemig',
@@ -1093,16 +1101,6 @@ async function startInstance(instanceId, instanceName) {
     sessions.set(instanceId, { sock, ready: false, userId: instanceUserId });
     sock.ev.on('creds.update', saveCreds);
  
-    // 🛡️ Captura erros de descriptografia (Bad MAC) sem travar o chip
-sock.ev.on('messages.upsert', async () => {}); // fallback silencioso
-process.on('unhandledRejection', (reason) => {
-    const msg = String(reason?.message || reason);
-    if (msg.includes('Bad MAC') || msg.includes('Failed to decrypt')) {
-        // Silencia o spam do libsignal — não é erro fatal, só mensagem perdida
-        return;
-    }
-    console.error('⚠️ [UNHANDLED]:', reason);
-});
     sock.ev.on('connection.update', async (update) => {
         const { connection, lastDisconnect, qr } = update;
         if (qr) {

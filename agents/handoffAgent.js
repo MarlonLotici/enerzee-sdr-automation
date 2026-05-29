@@ -8,7 +8,7 @@ const together = new OpenAI({
 const groq = new Groq({ apiKey: process.env.GROQ_API_KEY });
 
 const MODELO_LEVE    = "meta-llama/Llama-3.3-70B-Instruct-Turbo";
-const MODELO_DECISOR = "llama-3.1-70b-versatile";
+const MODELO_DECISOR = "llama-3.3-70b-versatile";
 
 // ─────────────────────────────────────────────────────────────────────────────
 // EXTRAÇÃO DE DADOS DO DECISOR

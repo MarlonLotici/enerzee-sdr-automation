@@ -16,7 +16,11 @@
       "Bash(npm list *)",
       "Bash(git check-ignore *)",
       "Bash(node -e \"const fs=require\\('fs'\\); const c=fs.readFileSync\\('database.js','utf8'\\); const i=c.indexOf\\('zapId = phonePuro'\\); console.log\\(JSON.stringify\\(c.slice\\(i-5, i+200\\)\\)\\);\")",
-      "Bash(node -e ' *)"
+      "Bash(node -e ' *)",
+      "Bash(node -e \"const fs=require\\('fs'\\); const lines=fs.readFileSync\\('c:/dev/enerzee-sdr-automation/frontend/src/App.jsx','utf8'\\).split\\('\\\\n'\\); lines.slice\\(1617,1638\\).forEach\\(\\(l,i\\)=>console.log\\(1618+i+': '+JSON.stringify\\(l\\)\\)\\)\")",
+      "Bash(npx vite *)",
+      "Bash(node -e \"const fs=require\\('fs'\\); const content=fs.readFileSync\\('c:/dev/enerzee-sdr-automation/frontend/src/App.jsx','utf8'\\); console.log\\('total lines:', content.split\\('\\\\n'\\).length\\); console.log\\('last 5 lines:'\\); content.split\\('\\\\n'\\).slice\\(-5\\).forEach\\(\\(l,i\\)=>console.log\\(l\\)\\);\")",
+      "Bash(git push *)"
     ]
   }
 }
