@@ -548,6 +548,7 @@ if (session?.user?.id) checkBriefing()
                 default_daily_limit: settingsForm.default_daily_limit ? Number(settingsForm.default_daily_limit) : null,
                 opening_templates: padrao.length > 0 ? { padrao } : null,
             }, { onConflict: 'id' });
+        }
         setSavingSettings(false);
         setShowSettings(false);
     };
@@ -1619,9 +1620,8 @@ return (
                     <button
                         key={tag}
                         onClick={async () => {
-                            const newVal = notesContent + (notesContent && !notesContent.endsWith('
-') ? '
-' : '') + tag;
+                            const sep = notesContent && !notesContent.endsWith('\n') ? '\n' : '';
+                            const newVal = notesContent + sep + tag;
                             setNotesContent(newVal);
                             localStorage.setItem('radar_notes', newVal);
                             if (notesTimerRef.current) clearTimeout(notesTimerRef.current);
@@ -1629,7 +1629,7 @@ return (
                                 const { data: { session: s } } = await supabase.auth.getSession();
                                 if (s?.user?.id) await supabase.from('profiles').update({ notes: newVal }).eq('id', s.user.id);
                             }, 1500);
-                        className="text-[9px] font-black px-2.5 py-1 rounded-full border border-white/10 text-slate-400 hover:border-amber-500/40 hover:text-amber-400 transition-all bg-white/[0.02] hover:bg-amber-500/10"
+                        }}
                     >{tag.trim()}</button>
                 ))}
             </div>
