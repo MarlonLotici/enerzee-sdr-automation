@@ -47,6 +47,7 @@
     "express": "^5.2.1",
     "framer-motion": "^12.36.0",
     "groq-sdk": "^0.3.3",
+    "https-proxy-agent": "^7.0.6",
     "helmet": "^8.1.0",
     "ioredis": "^5.10.1",
     "leaflet": "^1.9.4",

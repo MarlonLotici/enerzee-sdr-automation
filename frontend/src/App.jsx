@@ -172,6 +172,7 @@ function AppSidebar({ activeTab, setActiveTab, leadsCount, onLogout }) {
    const kanbanRef = useRef(null);
     const logsEndRef = useRef(null);
     const chatEndRef = useRef(null);
+    const notesTimerRef = useRef(null);
 
     // --- ESTADOS DE NAVEGAÇÃO E DADOS ---
     const [activeTab, setActiveTab] = useState("search");
@@ -519,7 +520,7 @@ if (session?.user?.id) checkBriefing()
         const { data: { session: s } } = await supabase.auth.getSession();
         if (!s?.user?.id) return;
         const { data } = await supabase.from('profiles')
-            .select('calendly_link, default_agent_name, default_company_name, default_daily_limit, opening_templates')
+            .select('calendly_link, default_agent_name, default_company_name, default_daily_limit, opening_templates, notes')
             .eq('id', s.user.id).maybeSingle();
         setSettingsForm({
             calendly_link: data?.calendly_link || '',
@@ -530,6 +531,7 @@ if (session?.user?.id) checkBriefing()
             opening_b: data?.opening_templates?.padrao?.[1] || '',
             opening_c: data?.opening_templates?.padrao?.[2] || '',
         });
+        if (data?.notes != null) setNotesContent(data.notes);
         setShowSettings(true);
     };
 
@@ -538,14 +540,14 @@ if (session?.user?.id) checkBriefing()
         const { data: { session: s } } = await supabase.auth.getSession();
         if (s?.user?.id) {
             const padrao = [settingsForm.opening_a, settingsForm.opening_b, settingsForm.opening_c].filter(Boolean);
-            await supabase.from('profiles').update({
+            await supabase.from('profiles').upsert({
+                id: s.user.id,
                 calendly_link: settingsForm.calendly_link || null,
                 default_agent_name: settingsForm.default_agent_name || null,
                 default_company_name: settingsForm.default_company_name || null,
                 default_daily_limit: settingsForm.default_daily_limit ? Number(settingsForm.default_daily_limit) : null,
                 opening_templates: padrao.length > 0 ? { padrao } : null,
-            }).eq('id', s.user.id);
-        }
+            }, { onConflict: 'id' });
         setSavingSettings(false);
         setShowSettings(false);
     };
@@ -1605,7 +1607,7 @@ return (
                 </div>
                 <div className="flex items-center gap-2">
                     <button
-                        onClick={() => { if (confirm('Limpar tudo?')) { setNotesContent(''); localStorage.setItem('radar_notes', ''); } }}
+                        onClick={async () => { if (confirm('Limpar tudo?')) { setNotesContent(''); localStorage.setItem('radar_notes', ''); const { data: { session: s } } = await supabase.auth.getSession(); if (s?.user?.id) await supabase.from('profiles').update({ notes: '' }).eq('id', s.user.id); } }}
                         className="text-[9px] font-black uppercase tracking-widest text-slate-600 hover:text-red-400 transition-colors px-3 py-1.5 rounded-lg hover:bg-red-500/10"
                     >Limpar</button>
                 </div>
@@ -1616,11 +1618,17 @@ return (
                 {['📍 Cidade: ', '🎯 Nicho: ', '✅ Feito: ', '❌ Evitar: ', '📝 Obs: '].map(tag => (
                     <button
                         key={tag}
-                        onClick={() => {
-                            const newVal = notesContent + (notesContent && !notesContent.endsWith('\n') ? '\n' : '') + tag;
+                        onClick={async () => {
+                            const newVal = notesContent + (notesContent && !notesContent.endsWith('
+') ? '
+' : '') + tag;
                             setNotesContent(newVal);
                             localStorage.setItem('radar_notes', newVal);
-                        }}
+                            if (notesTimerRef.current) clearTimeout(notesTimerRef.current);
+                            notesTimerRef.current = setTimeout(async () => {
+                                const { data: { session: s } } = await supabase.auth.getSession();
+                                if (s?.user?.id) await supabase.from('profiles').update({ notes: newVal }).eq('id', s.user.id);
+                            }, 1500);
                         className="text-[9px] font-black px-2.5 py-1 rounded-full border border-white/10 text-slate-400 hover:border-amber-500/40 hover:text-amber-400 transition-all bg-white/[0.02] hover:bg-amber-500/10"
                     >{tag.trim()}</button>
                 ))}
@@ -1629,7 +1637,16 @@ return (
             {/* Textarea */}
             <textarea
                 value={notesContent}
-                onChange={e => { setNotesContent(e.target.value); localStorage.setItem('radar_notes', e.target.value); }}
+                onChange={e => {
+                const val = e.target.value;
+                setNotesContent(val);
+                localStorage.setItem('radar_notes', val);
+                if (notesTimerRef.current) clearTimeout(notesTimerRef.current);
+                notesTimerRef.current = setTimeout(async () => {
+                    const { data: { session: s } } = await supabase.auth.getSession();
+                    if (s?.user?.id) await supabase.from('profiles').update({ notes: val }).eq('id', s.user.id);
+                }, 1500);
+            }}
                 placeholder={"📍 Cidade: Fortaleza CE\n🎯 Nicho: Padarias\n✅ Feito: Centro, Aldeota\n❌ Evitar: Messejana (saturado)\n📝 Obs: Segunda-feira tem mais respostas..."}
                 className="flex-1 resize-none bg-transparent text-sm text-slate-300 font-mono leading-relaxed p-6 focus:outline-none placeholder:text-slate-700"
                 autoFocus

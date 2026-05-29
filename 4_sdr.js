@@ -8,6 +8,7 @@ let makeWASocket, useMultiFileAuthState, DisconnectReason, delay, fetchLatestBai
 
 const pino = require('pino');
 const fs = require('fs');
+const { HttpsProxyAgent } = require('https-proxy-agent');
 const Groq = require('groq-sdk');
 const pdf = require('pdf-parse');
 const db = require('./database');
@@ -1064,8 +1065,11 @@ async function startInstance(instanceId, instanceName) {
     console.log(`[MANAGER] 🚀 Ligando SDR: ${instanceName}`);
 
     // Busca o dono da instância para emitir eventos apenas para ele
-    const { data: instData } = await supabase.from('instances').select('user_id').eq('id', instanceId).maybeSingle();
+    const { data: instData } = await supabase.from('instances').select('user_id, proxy_url').eq('id', instanceId).maybeSingle();
     const instanceUserId = instData?.user_id || null;
+    const proxyUrl = instData?.proxy_url || process.env.PROXY_URL || null;
+    const agent = proxyUrl ? new HttpsProxyAgent(proxyUrl) : undefined;
+    if (proxyUrl) console.log(`🌐 [PROXY] ${instanceName} conectando via proxy: ${proxyUrl.replace(/:[^:@]+@/, ':***@')}`);
 
     //const { state, saveCreds } = await useMultiFileAuthState(`wpp_sessions/${instanceId}`);
     // Agora as chaves do WhatsApp vivem no Supabase, protegidas contra restarts
@@ -1082,6 +1086,7 @@ async function startInstance(instanceId, instanceName) {
         connectTimeoutMs: 60000,      // desiste da conexão em 60s se não responder
         markOnlineOnConnect: false,   // não anuncia presença — menos suspeito pro WhatsApp
         retryRequestDelayMs: 2000,    // aguarda 2s antes de reenviar requisições falhas
+        ...(agent ? { agent } : {}),  // proxy por chip (ou global via PROXY_URL)
     });
 
     // Guardamos o socket com uma flag 'ready' falsa inicialmente
@@ -1439,6 +1444,7 @@ if (matchClima) updates.sentiment = matchClima[1].toLowerCase();
     if (matchManual) {
         updates.calendly_booked = true;
         updates.status = 'booked';
+        updates.current_stage = 5;
     }
     if (Object.keys(updates).length > 0) {
         await supabase.from('leads').update(updates).eq('id', lead.id);

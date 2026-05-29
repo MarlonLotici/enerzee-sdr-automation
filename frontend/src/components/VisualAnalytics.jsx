@@ -171,12 +171,13 @@ function computeMetrics(leads, instances, realTotalLeads, realAgendados = 0, rea
     const templateStats = {}
     leadsValidos.forEach(l => {
         if (!l.opening_template || !l.last_contact_at) return
-        if (!templateStats[l.opening_template]) {
-            templateStats[l.opening_template] = { enviados: 0, responderam: 0 }
+        const baseTemplate = l.opening_template.replace('_decisor', '') // merge variantes decisor/não-decisor
+        if (!templateStats[baseTemplate]) {
+            templateStats[baseTemplate] = { enviados: 0, responderam: 0 }
         }
-        templateStats[l.opening_template].enviados++
+        templateStats[baseTemplate].enviados++
         if ((l.current_stage || 0) > 0) {
-            templateStats[l.opening_template].responderam++
+            templateStats[baseTemplate].responderam++
         }
     })
     const abTestData = Object.entries(templateStats)

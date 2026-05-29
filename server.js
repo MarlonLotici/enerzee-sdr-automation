@@ -373,6 +373,7 @@ app.post('/webhook/calendly', express.json(), async (req, res) => {
             calendly_event_at:   dataEvento,
             calendly_event_name: nomeEvento,
             is_paused:           true,
+            current_stage:       5,
         }).eq('id', lead.id);
 
         console.log(`✅ [CALENDLY] Lead ${lead.name} travado — is_paused=true, status=closed.`);
