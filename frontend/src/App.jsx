@@ -1209,7 +1209,7 @@ return (
                     const inst = instances.find(i => i.id === selectedInstanceId);
                     if (!confirm(`Remover o chip "${inst?.name}"? Isso desconecta o WhatsApp vinculado.`)) return;
                     socket.emit('remove_instance', selectedInstanceId);
-                    if (qrCodeData?.instanceId === selectedInstanceId) setQrCodeData(null);
+                    if (qrCodeData) setQrCodeData(null);
                     setSelectedInstanceId(null);
                     setInstances(prev => prev.filter(i => i.id !== selectedInstanceId));
                 }}
@@ -1565,7 +1565,7 @@ return (
 </Dialog>
 
 {/* MODAL DE CONEXÃO MULTI-CHIP (POSIÇÃO CORRETA) */}
-            <Dialog open={!!qrCodeData && qrCodeData.instanceId === selectedInstanceId} onOpenChange={() => setQrCodeData(null)}>
+            <Dialog open={!!qrCodeData} onOpenChange={() => setQrCodeData(null)}>
                 <DialogContent className="glass-panel border-white/20 text-white max-w-sm rounded-[2.5rem] p-10 bg-[#0A0A0A]/98 shadow-2xl flex flex-col items-center">
                     <div className="bg-amber-600/20 p-4 rounded-full mb-6 border border-amber-500/30" style={{boxShadow:'0 0 20px rgba(245,158,11,0.2)'}}>
                             <MessageSquare className="h-10 w-10 text-amber-400" />

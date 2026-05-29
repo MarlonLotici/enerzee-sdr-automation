@@ -1105,7 +1105,11 @@ process.on('unhandledRejection', (reason) => {
 });
     sock.ev.on('connection.update', async (update) => {
         const { connection, lastDisconnect, qr } = update;
-        if (qr && ioSocket && instanceUserId) ioSocket.to(`user:${instanceUserId}`).emit('qr_code', { qr, instanceId, name: instanceName })
+        if (qr) {
+            if (!ioSocket)       console.warn(`⚠️ [QR] ioSocket null — QR de ${instanceName} não enviado ao front`);
+            else if (!instanceUserId) console.warn(`⚠️ [QR] instanceUserId null — instância ${instanceId} sem user_id no banco`);
+            else ioSocket.to(`user:${instanceUserId}`).emit('qr_code', { qr, instanceId, name: instanceName });
+        }
 
         if (connection === 'open') {
             console.log(`✅ [SDR] Canal Pronto e Estável: ${instanceName}`);
