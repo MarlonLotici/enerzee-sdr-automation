@@ -9,14 +9,23 @@ const MODELO = 'llama-3.1-70b-versatile';
  *
  * @returns {{ desfecho, nota_ia, erro_critico_ia, resumo_executivo }} | null
  */
-async function gerarAuditoria(historico, lead) {
+async function gerarAuditoria(historico, lead, productType = 'solar') {
     if (!historico || historico.length < 2) return null;
+
+    const isSolar = !productType || productType === 'solar';
 
     const transcricao = historico
         .map(m => `[${m.role === 'assistant' ? 'IA' : 'LEAD'}]: ${m.content}`)
         .join('\n');
 
-    const prompt = `Você é um gerente de vendas sênior avaliando uma conversa do SDR de IA da empresa.
+    const descPerdidoSolar = isSolar
+        ? 'PERDIDO_SOLAR: lead já possui energia solar instalada'
+        : 'PERDIDO_SOLAR: lead já possui solução equivalente ao produto ofertado';
+    const descPerdidoCaro = isSolar
+        ? 'PERDIDO_CARO: lead reclamou de preço ou conta de energia abaixo de R$300'
+        : 'PERDIDO_CARO: lead reclamou de preço ou orçamento acima do disponível';
+
+    const prompt = `Você é um gerente de vendas sênior avaliando uma conversa do SDR de IA da Antix Flow.
 Leia a conversa abaixo e retorne SOMENTE um JSON válido, sem markdown, sem texto extra.
 
 NICHO DA EMPRESA: ${lead.niche || 'não informado'}
@@ -27,8 +36,8 @@ ${transcricao}
 CAMPOS DO JSON:
 - "desfecho": exatamente uma das opções: "AGENDADO" | "PERDIDO_SOLAR" | "PERDIDO_CARO" | "PERDIDO_SILENCIO" | "PERDIDO_ROBO" | "PERDIDO_OUTRO"
   * AGENDADO: lead agendou ou confirmou reunião
-  * PERDIDO_SOLAR: lead já possui energia solar
-  * PERDIDO_CARO: lead reclamou de preço ou conta abaixo de R$300
+  * ${descPerdidoSolar}
+  * ${descPerdidoCaro}
   * PERDIDO_SILENCIO: lead parou de responder
   * PERDIDO_ROBO: era URA, autoresposta ou robô
   * PERDIDO_OUTRO: qualquer outro motivo

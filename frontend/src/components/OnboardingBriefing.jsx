@@ -161,7 +161,7 @@ export default function OnboardingBriefing({ userId, onComplete, isModal = false
                 return (
                     <div className="space-y-4">
                         <Field label="Nome da empresa" required>
-                            <TextInput value={data.company_name} onChange={v => set('company_name', v)} placeholder="Ex: Enerzee Energia" />
+                            <TextInput value={data.company_name} onChange={v => set('company_name', v)} placeholder="Ex: Antix, Lince" />
                         </Field>
                         <Field label="Segmento de atuação" required hint="Ex: Energia solar, Seguros, Telecom, Contabilidade">
                             <TextInput value={data.company_segment} onChange={v => set('company_segment', v)} placeholder="Em qual mercado você atua?" />
@@ -189,13 +189,13 @@ export default function OnboardingBriefing({ userId, onComplete, isModal = false
                 return (
                     <div className="space-y-4">
                         <Field label="Descreva seu produto/serviço em detalhes" required hint="Quanto mais detalhes, melhor será o prompt da IA. O que é, como funciona, qual o benefício principal.">
-                            <TextArea value={data.product_description} onChange={v => set('product_description', v)} placeholder="Ex: Oferecemos energia solar por assinatura. O cliente não paga nada de adesão, não precisa instalar painéis, e recebe desconto de 15-25% na conta de luz..." rows={5} />
+                            <TextArea value={data.product_description} onChange={v => set('product_description', v)} placeholder="Ex: Oferecemos [produto/serviço]. O cliente [benefício principal]. Sem [objeção comum]. O processo é [como funciona e o que acontece após o contato]..." rows={5} />
                         </Field>
                         <Field label="Diferenciais competitivos" hint="O que te diferencia dos concorrentes?">
-                            <TextArea value={data.product_differentials} onChange={v => set('product_differentials', v)} placeholder="Ex: Zero custo de adesão, sem fidelidade, usinas certificadas WEG..." rows={3} />
+                            <TextArea value={data.product_differentials} onChange={v => set('product_differentials', v)} placeholder="Ex: Entrega em 48h, sem burocracia, garantia de resultado, atendimento dedicado, sem fidelidade..." rows={3} />
                         </Field>
                         <Field label="Faixa de preço ou modelo de cobrança">
-                            <TextInput value={data.product_price_range} onChange={v => set('product_price_range', v)} placeholder="Ex: Desconto de 15-25% na conta, planos a partir de R$ 99/mês" />
+                            <TextInput value={data.product_price_range} onChange={v => set('product_price_range', v)} placeholder="Ex: Planos a partir de R$ 299/mês, pacotes por projeto, modelo de success fee" />
                         </Field>
                         <div className="grid grid-cols-2 gap-3">
                             <Field label="Forma de entrega">
@@ -231,7 +231,7 @@ export default function OnboardingBriefing({ userId, onComplete, isModal = false
                 return (
                     <div className="space-y-4">
                         <Field label="Quem é seu cliente ideal?" required hint="Descreva o perfil: tipo de empresa, porte, segmento, cargo do decisor">
-                            <TextArea value={data.target_audience} onChange={v => set('target_audience', v)} placeholder="Ex: Comércios e indústrias com conta de luz acima de R$ 2.000/mês, preferencialmente o dono ou sócio..." rows={4} />
+                            <TextArea value={data.target_audience} onChange={v => set('target_audience', v)} placeholder="Ex: Médias e grandes empresas com equipe de 10+ pessoas, preferencialmente o dono, sócio ou gerente responsável pela área..." rows={4} />
                         </Field>
                         <Field label="Porte das empresas alvo">
                             <SelectInput value={data.target_company_size} onChange={v => set('target_company_size', v)}
@@ -262,16 +262,16 @@ export default function OnboardingBriefing({ userId, onComplete, isModal = false
                                 options={['Informal e amigável', 'Profissional mas leve', 'Formal e técnico', 'Descontraído e direto', 'Autoritativo (especialista)']} />
                         </Field>
                         <Field label="Como prefere que a IA abra a conversa?" hint="Descreva a primeira mensagem ideal ou a estratégia">
-                            <TextArea value={data.opening_strategy} onChange={v => set('opening_strategy', v)} placeholder="Ex: Gerar curiosidade sem revelar a empresa, perguntar se a pessoa é responsável pela conta de luz..." rows={3} />
+                            <TextArea value={data.opening_strategy} onChange={v => set('opening_strategy', v)} placeholder="Ex: Gerar curiosidade com uma dor conhecida do setor antes de revelar o produto, confirmar se a pessoa é o decisor..." rows={3} />
                         </Field>
                         <Field label="Principais dores que seu produto resolve" required hint="Liste as dores do cliente que fazem ele comprar">
-                            <TextArea value={data.main_pain_points} onChange={v => set('main_pain_points', v)} placeholder="Ex: Conta de luz muito alta, instabilidade no preço da energia, falta de previsibilidade nos custos..." rows={3} />
+                            <TextArea value={data.main_pain_points} onChange={v => set('main_pain_points', v)} placeholder="Ex: Custo operacional elevado, retrabalho frequente, falta de previsibilidade, dificuldade de escalar sem perder qualidade..." rows={3} />
                         </Field>
                         <Field label="Objeções mais comuns" hint="O que as pessoas falam quando não querem comprar?">
-                            <TextArea value={data.main_objections} onChange={v => set('main_objections', v)} placeholder="Ex: 'Não tenho interesse', 'Já tenho solar', 'Quem te deu meu número?', 'Manda por email', 'Vou ver com o sócio'" rows={3} />
+                            <TextArea value={data.main_objections} onChange={v => set('main_objections', v)} placeholder="Ex: 'Não tenho interesse', 'Já tenho fornecedor', 'Quem te deu meu número?', 'Manda por email', 'Vou ver com o sócio'" rows={3} />
                         </Field>
                         <Field label="Como você responde essas objeções?" hint="Isso ajuda a IA a argumentar como você faria">
-                            <TextArea value={data.objection_responses} onChange={v => set('objection_responses', v)} placeholder="Ex: Para 'já tenho solar': 'Ótimo! Nosso modelo é complementar, muitos clientes com solar próprio também usam...'" rows={4} />
+                            <TextArea value={data.objection_responses} onChange={v => set('objection_responses', v)} placeholder="Ex: Para 'já tenho fornecedor': 'Entendo! Muitos clientes tinham também — a diferença é que [diferencial único]. Vale 15min pra mostrar?'" rows={4} />
                         </Field>
                         <Field label="Objetivo final da conversa">
                             <SelectInput value={data.sales_goal} onChange={v => set('sales_goal', v)}
@@ -297,10 +297,10 @@ export default function OnboardingBriefing({ userId, onComplete, isModal = false
                             <TextArea value={data.agent_forbidden_words} onChange={v => set('agent_forbidden_words', v)} placeholder="Ex: Nunca mencionar concorrente X, nunca falar preço antes de agendar, nunca prometer desconto acima de 20%..." rows={3} />
                         </Field>
                         <Field label="Informações que DEVEM ser mencionadas" hint="O que a IA precisa falar obrigatoriamente?">
-                            <TextArea value={data.agent_mandatory_info} onChange={v => set('agent_mandatory_info', v)} placeholder="Ex: Sempre mencionar que não tem fidelidade, sempre perguntar o valor da conta de luz, sempre oferecer a consultoria gratuita..." rows={3} />
+                            <TextArea value={data.agent_mandatory_info} onChange={v => set('agent_mandatory_info', v)} placeholder="Ex: Sempre mencionar que não tem fidelidade, sempre perguntar o principal desafio atual, sempre oferecer diagnóstico gratuito..." rows={3} />
                         </Field>
                         <Field label="Restrições legais ou compliance">
-                            <TextArea value={data.compliance_notes} onChange={v => set('compliance_notes', v)} placeholder="Ex: Não pode prometer resultados específicos, mencionar que é regulado pela ANEEL..." rows={2} />
+                            <TextArea value={data.compliance_notes} onChange={v => set('compliance_notes', v)} placeholder="Ex: Não pode prometer resultados específicos de ROI, não mencionar preço antes de agendar, respeitar o LGPD..." rows={2} />
                         </Field>
                     </div>
                 )
@@ -345,7 +345,7 @@ export default function OnboardingBriefing({ userId, onComplete, isModal = false
                                 options={['Agressivo (D1, D2, D3)', 'Moderado (D1, D3, D7)', 'Suave (D1, D7)', 'Sem follow-up automático']} />
                         </Field>
                         <Field label="Nomes dos concorrentes principais" hint="Ajuda a IA a se posicionar contra eles">
-                            <TextInput value={data.competitor_names} onChange={v => set('competitor_names', v)} placeholder="Ex: SolarGrid, Ecori, Portal Solar" />
+                            <TextInput value={data.competitor_names} onChange={v => set('competitor_names', v)} placeholder="Ex: Empresa A, Empresa B, Empresa C" />
                         </Field>
                         <Field label="Algo mais que devemos saber?">
                             <TextArea value={data.additional_notes} onChange={v => set('additional_notes', v)} placeholder="Qualquer informação adicional que ajude a montar sua estratégia..." rows={3} />

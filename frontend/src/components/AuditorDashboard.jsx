@@ -26,12 +26,14 @@ const DESFECHO_COR = {
 
 const DESFECHO_LABEL = {
     AGENDADO:        'Agendado ✅',
-    PERDIDO_SOLAR:   'Já tem solar',
-    PERDIDO_CARO:    'Conta baixa',
+    PERDIDO_SOLAR:   'Já resolvido',
+    PERDIDO_CARO:    'Preço/Conta',
     PERDIDO_SILENCIO:'Sem resposta',
     PERDIDO_ROBO:    'Robô/URA',
     PERDIDO_OUTRO:   'Outros',
 }
+
+const ESTAGIO_LABEL = ['Abordagem', 'Qualificação', 'Revelação', 'Proposta', 'Agendamento', 'Fechado']
 
 function KpiCard({ icon: Icon, label, value, sub, color }) {
     return (
@@ -176,7 +178,35 @@ export default function AuditorDashboard({ socket }) {
             .filter(l => (parseFloat(l.report.nota_ia) || 0) < 5 && l.report.erro_critico_ia)
             .slice(0, 10)
 
-        return { total, agendados, notaMedia, comErro, distribuicao, notasDist, errosTop, pararevisao }
+        // Conversão por nicho
+        const nichoCont = {}
+        leads.forEach(l => {
+            const n = l.niche || 'Sem nicho'
+            if (!nichoCont[n]) nichoCont[n] = { total: 0, agendados: 0 }
+            nichoCont[n].total++
+            if (l.report.desfecho === 'AGENDADO') nichoCont[n].agendados++
+        })
+        const porNicho = Object.entries(nichoCont)
+            .map(([name, v]) => ({
+                name,
+                total: v.total,
+                agendados: v.agendados,
+                taxa: Math.round(v.agendados / v.total * 100),
+            }))
+            .sort((a, b) => b.taxa - a.taxa)
+            .slice(0, 8)
+
+        // Dropout por estágio (onde as conversas morrem)
+        const stageCont = {}
+        leads.filter(l => l.report.desfecho !== 'AGENDADO').forEach(l => {
+            const s = l.current_stage ?? 0
+            stageCont[s] = (stageCont[s] || 0) + 1
+        })
+        const porEstagio = Object.entries(stageCont)
+            .map(([s, count]) => ({ name: ESTAGIO_LABEL[parseInt(s)] || `Estágio ${s}`, value: count, stage: parseInt(s) }))
+            .sort((a, b) => a.stage - b.stage)
+
+        return { total, agendados, notaMedia, comErro, distribuicao, notasDist, errosTop, pararevisao, porNicho, porEstagio }
     }, [leads])
 
     const leadsFiltrados = useMemo(() => {
@@ -263,6 +293,43 @@ export default function AuditorDashboard({ socket }) {
                 </div>
             </div>
 
+            {/* CONVERSÃO POR NICHO + DROPOUT POR ESTÁGIO */}
+            <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
+
+                {metrics.porNicho.length > 0 && (
+                    <div className="rounded-2xl border border-white/5 bg-white/[0.02] p-5">
+                        <h3 className="text-[10px] font-black uppercase tracking-widest text-slate-500 mb-4">Conversão por nicho (%)</h3>
+                        <ResponsiveContainer width="100%" height={Math.max(160, metrics.porNicho.length * 28)}>
+                            <BarChart data={metrics.porNicho} layout="vertical" margin={{ left: 8, right: 40 }}>
+                                <CartesianGrid strokeDasharray="3 3" stroke="rgba(255,255,255,0.04)" horizontal={false} />
+                                <XAxis type="number" domain={[0, 100]} unit="%" tick={{ fill: 'rgba(255,255,255,0.3)', fontSize: 10 }} />
+                                <YAxis dataKey="name" type="category" width={110} tick={{ fill: 'rgba(255,255,255,0.4)', fontSize: 10 }} />
+                                <Tooltip
+                                    contentStyle={{ background: '#111', border: '1px solid rgba(255,255,255,0.1)', borderRadius: 8, fontSize: 11 }}
+                                    formatter={(v, _, p) => [`${v}% (${p.payload.agendados}/${p.payload.total})`, 'Conversão']}
+                                />
+                                <Bar dataKey="taxa" radius={4} fill={CORES.verde} />
+                            </BarChart>
+                        </ResponsiveContainer>
+                    </div>
+                )}
+
+                {metrics.porEstagio.length > 0 && (
+                    <div className="rounded-2xl border border-white/5 bg-white/[0.02] p-5">
+                        <h3 className="text-[10px] font-black uppercase tracking-widest text-slate-500 mb-4">Onde o funil quebra (leads perdidos)</h3>
+                        <ResponsiveContainer width="100%" height={Math.max(160, metrics.porEstagio.length * 36)}>
+                            <BarChart data={metrics.porEstagio} layout="vertical" margin={{ left: 8, right: 32 }}>
+                                <CartesianGrid strokeDasharray="3 3" stroke="rgba(255,255,255,0.04)" horizontal={false} />
+                                <XAxis type="number" tick={{ fill: 'rgba(255,255,255,0.3)', fontSize: 10 }} />
+                                <YAxis dataKey="name" type="category" width={110} tick={{ fill: 'rgba(255,255,255,0.4)', fontSize: 10 }} />
+                                <Tooltip contentStyle={{ background: '#111', border: '1px solid rgba(255,255,255,0.1)', borderRadius: 8, fontSize: 11 }} />
+                                <Bar dataKey="value" radius={4} fill={CORES.amarelo} />
+                            </BarChart>
+                        </ResponsiveContainer>
+                    </div>
+                )}
+            </div>
+
             {/* ERROS CRÍTICOS MAIS FREQUENTES */}
             {metrics.errosTop.length > 0 && (
                 <div className="rounded-2xl border border-white/5 bg-white/[0.02] p-5">
@@ -316,6 +383,11 @@ export default function AuditorDashboard({ socket }) {
                                           style={{ background: `${DESFECHO_COR[l.report.desfecho] || CORES.cinza}20`, color: DESFECHO_COR[l.report.desfecho] || CORES.cinza }}>
                                         {DESFECHO_LABEL[l.report.desfecho] || l.report.desfecho}
                                     </span>
+                                    {l.current_stage != null && (
+                                        <span className="text-[9px] px-1.5 py-0.5 rounded bg-white/[0.05] text-slate-500">
+                                            {ESTAGIO_LABEL[l.current_stage] || `E${l.current_stage}`}
+                                        </span>
+                                    )}
                                 </div>
                                 <p className="text-[10px] text-slate-500 mt-1 truncate">{l.report.resumo_executivo}</p>
                                 {l.report.erro_critico_ia && l.report.erro_critico_ia !== 'null' && (

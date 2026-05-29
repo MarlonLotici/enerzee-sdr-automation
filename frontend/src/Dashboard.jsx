@@ -375,6 +375,9 @@ const carregarDados = useCallback(async () => {
                 for (let i = 0; i <= stage; i++) spinCounts[i]++
             })
             const spinFunil = spinLabels.map((nome, i) => ({ nome, valor: spinCounts[i], cor: spinCores[i] }))
+            const leadsNaFila = leads?.filter(l => l.status === 'new').length || 0
+            const emFollowUp  = leads?.filter(l => l.followup_count > 0 && l.status === 'contact' && !l.is_paused).length || 0
+
             setDados({
                 kpis: {
                     disparosHoje,
@@ -382,18 +385,15 @@ const carregarDados = useCallback(async () => {
                     taxaResposta,
                     agendados,
                     leadsQueResponderam30d,
-                    leadsQueResponderamTotal,
+                    leadsNaFila,
+                    emFollowUp,
                     pausaAutomatica,
                     pausadoManual,
                     leadsRobo,
                     tempoMedioResposta,
                     tempCounts
                 },
-                funil,
-                spinFunil,
-                disparosPorDia,
                 respostasPorHora,
-                statusDist,
                 chipsSaude,
             })
             setUltimaAtualizacao(new Date())
@@ -431,11 +431,9 @@ const carregarDados = useCallback(async () => {
             {/* === HEADER === */}
             <div className="flex justify-between items-center">
                 <div>
-
                     <h2 className="text-2xl font-black text-white uppercase italic tracking-tighter">
-                            Painel <span className="text-amber-500 neon-text">Operacional</span>
-                   </h2>
-
+                        Painel <span className="text-amber-500 neon-text">Operacional</span>
+                    </h2>
                     {ultimaAtualizacao && (
                         <p className="text-[10px] text-slate-500 font-bold uppercase tracking-widest mt-1">
                             Atualizado às {ultimaAtualizacao.toLocaleTimeString('pt-BR', { hour: '2-digit', minute: '2-digit', second: '2-digit' })} · atualiza a cada 60s
@@ -452,195 +450,88 @@ const carregarDados = useCallback(async () => {
                 </button>
             </div>
 
-            {/* === KPIs OPERACIONAIS === */}
-                          <div className="grid grid-cols-2 lg:grid-cols-4 gap-4">
-             <KpiCard icon={Zap}   label="Disparos Hoje"        value={d?.kpis.disparosHoje || 0}   sub={`de ${d?.kpis.totalDisparados || 0} totais`} color={CORES.azul}     info="Leads que receberam a primeira mensagem hoje. O subtítulo mostra o total histórico de disparos de todos os tempos." />
-             <KpiCard icon={Clock} label="Tempo Médio Resposta" value={d?.kpis.tempoMedioResposta ? `${d.kpis.tempoMedioResposta}min` : '--'} sub="do disparo à 1ª resposta" color={CORES.ciano} info="Tempo médio entre o disparo e a primeira resposta do lead (últimos 30 dias). Respostas após 24h são descartadas da média para não distorcer o dado." />
-             <KpiCard icon={Flame} label="Leads Hot"            value={d?.kpis.tempCounts?.hot || 0} sub="prontos pra fechar"  color={CORES.vermelho} info="Leads marcados com temperatura 'hot'. Indica leads que demonstraram alto interesse e estão prontos para fechar. A temperatura é atualizada pelo perfiler da IA em cada troca de mensagem." />
-             <KpiCard icon={Bot}   label="Robôs Detectados"     value={d?.kpis.leadsRobo || 0}       sub="silenciados (30d)"   color={CORES.slate}    info="Leads únicos que receberam ao menos uma autoresposta detectada nos últimos 30 dias. O bot silencia automaticamente ao detectar robô e pausa o lead." />
-                          </div>
-
-            
-
-            {/* === LINHA 1: FUNIL + DISTRIBUIÇÃO === */}
-            <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
-
-                {/* LEADS QUE PRECISAM DE AÇÃO */}
-<div className="lg:col-span-2 glass-panel rounded-3xl p-6 border border-white/5">
-    <p className="text-[10px] font-black text-amber-400 uppercase tracking-[0.3em] mb-4 flex items-center gap-2">
-        <AlertTriangle className="h-4 w-4" /> Leads que precisam de ação<InfoBtn text="Leads que exigem atenção humana agora. Pausa Automática = IA pausou (autoresposta ou encerramento). Pausa Manual = operador pausou. Warm esfriando = engajaram mas pararam. Dead = 3 follow-ups sem resposta." />
-    </p>
-    <div className="space-y-2">
-        {[
-            {
-                label: 'Pausa Automática',
-                desc: 'IA pausou — aguardando intervenção humana',
-                value: d?.kpis.pausaAutomatica || 0,
-                color: CORES.amarelo,
-            },
-            {
-                label: 'Pausados manualmente',
-                desc: 'Operador pausou — verificar se pode retomar',
-                value: d?.kpis.pausadoManual || 0,
-                color: CORES.roxo,
-            },
-            {
-                label: 'Leads Warm esfriando',
-                desc: 'Engajaram mas pararam — oportunidade de retomada',
-                value: d?.kpis.tempCounts?.warm || 0,
-                color: CORES.amarelo,
-            },
-            {
-                label: 'Leads Dead (sem resposta)',
-                desc: 'Completaram 3 follow-ups sem responder',
-                value: d?.kpis.tempCounts?.dead || 0,
-                color: CORES.slate,
-            },
-        ].filter(item => item.value > 0).map((item, i) => (
-            <div key={i} className="flex items-center justify-between p-3 rounded-xl border border-white/5 bg-white/[0.02]">
-                <div className="flex items-center gap-3">
-                    <div className="h-2 w-2 rounded-full" style={{ background: item.color, boxShadow: `0 0 6px ${item.color}` }} />
-                    <div>
-                        <p className="text-[11px] font-black text-white uppercase tracking-wider">{item.label}</p>
-                        <p className="text-[9px] text-slate-500 font-medium">{item.desc}</p>
-                    </div>
-                </div>
-                <span className="text-lg font-black" style={{ color: item.color }}>{item.value}</span>
+            {/* === KPIs === */}
+            <div className="grid grid-cols-2 lg:grid-cols-4 gap-4">
+                <KpiCard icon={Zap}   label="Disparos Hoje"        value={d?.kpis.disparosHoje || 0}    sub={`${d?.kpis.leadsNaFila || 0} na fila`}           color={CORES.azul}     info="Leads disparados hoje. O subtítulo mostra quantos leads com status 'new' ainda aguardam disparo na fila." />
+                <KpiCard icon={Clock} label="Tempo Médio Resposta" value={d?.kpis.tempoMedioResposta ? `${d.kpis.tempoMedioResposta}min` : '--'} sub="do disparo à 1ª resposta" color={CORES.ciano} info="Tempo médio entre o disparo e a primeira resposta do lead (últimos 30 dias). Quanto menor, mais quente a base." />
+                <KpiCard icon={Flame} label="Leads Hot"            value={d?.kpis.tempCounts?.hot || 0}  sub={`${d?.kpis.emFollowUp || 0} em follow-up`}       color={CORES.vermelho} info="Leads marcados como 'hot' pela IA. O subtítulo mostra quantos estão recebendo follow-up ativo no momento." />
+                <KpiCard icon={Bot}   label="Robôs Detectados"     value={d?.kpis.leadsRobo || 0}        sub="pausados automaticamente"                         color={CORES.slate}    info="Leads únicos onde a IA detectou autoresposta nos últimos 30 dias e pausou a conversa." />
             </div>
-        ))}
-        {[d?.kpis.aguardandoHumano, d?.kpis.pausadoManual, d?.kpis.tempCounts?.warm, d?.kpis.tempCounts?.dead].every(v => !v || v === 0) && (
-            <div className="text-center py-8">
-                <p className="text-[10px] text-emerald-400 font-black uppercase tracking-widest">Tudo em dia — nenhuma ação pendente</p>
-            </div>
-        )}
-    </div>
-</div>
 
-                {/* DISTRIBUIÇÃO STATUS */}
-                <div className="glass-panel rounded-3xl p-6 border border-white/5">
-                    <p className="text-[10px] font-black text-blue-400 uppercase tracking-[0.3em] mb-4 flex items-center gap-2">
-                        <Activity className="h-4 w-4" /> Distribuição Atual<InfoBtn text="Status atual de todos os leads na base (exceto new/invalid). Em Atendimento = conversa ativa. Agendados = confirmados. Fatura = conta enviada aguardando análise. Inválidos = número sem WhatsApp ou bloqueado." />
-                    </p>
-                    <ResponsiveContainer width="100%" height={180}>
-                        <PieChart>
-                            <Pie
-                                data={d?.statusDist}
-                                cx="50%"
-                                cy="50%"
-                                innerRadius={50}
-                                outerRadius={75}
-                                paddingAngle={3}
-                                dataKey="valor"
-                            >
-                                {d?.statusDist.map((s, i) => (
-                                    <Cell key={i} fill={s.cor} stroke="transparent" />
-                                ))}
-                            </Pie>
-                            <Tooltip content={<TooltipCustom />} />
-                        </PieChart>
-                    </ResponsiveContainer>
-                    <div className="space-y-2 mt-2">
-                        {d?.statusDist.map((s, i) => (
-                            <div key={i} className="flex items-center justify-between">
-                                <div className="flex items-center gap-2">
-                                    <div className="h-2 w-2 rounded-full" style={{ background: s.cor, boxShadow: `0 0 6px ${s.cor}` }} />
-                                    <span className="text-[10px] font-bold text-slate-400 uppercase">{s.nome}</span>
-                                </div>
-                                <span className="text-[11px] font-black text-white">{s.valor}</span>
-                            </div>
-                        ))}
-                    </div>
-                </div>
-            </div>
-                        {/* === FUNIL SPIN (ESTÁGIO 0-5) === */}
+            {/* === SAÚDE DOS CHIPS (full width) === */}
             <div className="glass-panel rounded-3xl p-6 border border-white/5">
                 <p className="text-[10px] font-black text-blue-400 uppercase tracking-[0.3em] mb-6 flex items-center gap-2">
-                    <Target className="h-4 w-4" /> Funil SPIN — Estágio da Conversa<InfoBtn text="Distribuição atual dos leads por estágio do funil. 0=Qualificação (quem é?), 1=Situação (equipamentos), 2=Dor (valor da conta), 3=Solução (economia), 4=Agendamento (link enviado), 5=Fechamento (confirmado)." />
+                    <Wifi className="h-4 w-4" /> Saúde dos Chips<InfoBtn text="Status e progresso de disparos de cada chip hoje. Verde = dentro do limite, amarelo = acima de 70%, vermelho = acima de 90% da cota diária." />
                 </p>
-                <div className="grid grid-cols-6 gap-3">
-                    {d?.spinFunil?.map((etapa, i) => {
-                        const max = Math.max(...(d?.spinFunil?.map(e => e.valor) || [1]))
-                        const pct = max > 0 ? Math.round(etapa.valor / max * 100) : 0
-                        return (
-                            <div key={i} className="flex flex-col items-center gap-2">
-                                <span className="text-2xl font-black text-white">{etapa.valor}</span>
-                                <div className="w-full h-24 bg-slate-800/60 rounded-xl overflow-hidden flex flex-col justify-end">
-                                    <div
-                                        className="w-full rounded-t-lg transition-all duration-1000"
-                                        style={{ height: `${Math.max(pct, 4)}%`, background: etapa.cor, boxShadow: `0 0 10px ${etapa.cor}50` }}
-                                    />
-                                </div>
-                                <span className="text-[8px] font-black text-slate-500 uppercase tracking-wider text-center leading-tight">
-                                    {etapa.nome}
-                                </span>
-                            </div>
-                        )
-                    })}
+                <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-3">
+                    {d?.chipsSaude.length > 0 ? (
+                        d.chipsSaude.map((c, i) => (
+                            <ChipCard key={i} chip={c.chip} disparosHoje={c.disparosHoje} limite={c.limite} />
+                        ))
+                    ) : (
+                        <div className="col-span-3 flex flex-col items-center justify-center py-10 opacity-30">
+                            <WifiOff className="h-10 w-10 text-slate-500 mb-3" />
+                            <p className="text-xs font-black text-slate-500 uppercase">Nenhum chip configurado</p>
+                        </div>
+                    )}
+                </div>
+                <div className="mt-4 pt-4 border-t border-white/5 flex gap-6">
+                    {[
+                        { label: 'Online',  cor: CORES.verde,    icon: CheckCircle2 },
+                        { label: 'Offline', cor: CORES.vermelho, icon: XCircle      },
+                        { label: 'Pausado', cor: CORES.amarelo,  icon: PauseCircle  },
+                    ].map((s, i) => (
+                        <div key={i} className="flex items-center gap-1.5">
+                            <s.icon className="h-3 w-3" style={{ color: s.cor }} />
+                            <span className="text-[9px] font-black text-slate-500 uppercase">{s.label}</span>
+                        </div>
+                    ))}
                 </div>
             </div>
 
-            {/* === LINHA 2: DISPAROS POR DIA === */}
-            <div className="glass-panel rounded-3xl p-6 border border-white/5">
-                <div className="flex justify-between items-center mb-6">
-                    <p className="text-[10px] font-black text-blue-400 uppercase tracking-[0.3em] flex items-center gap-2">
-                        <TrendingUp className="h-4 w-4" /> Disparos vs Respostas<InfoBtn text="Disparos = leads únicos contactados por dia (via last_contact_at). Respostas = leads únicos que enviaram mensagem naquele dia (últimos 30 dias de mensagens). A lacuna entre as linhas indica silêncio." />
-                    </p>
-                    <div className="flex gap-2">
-                        {['7d', '30d'].map(p => (
-                            <button
-                                key={p}
-                                onClick={() => setPeriodoGrafico(p)}
-                                className={`px-4 py-1.5 rounded-xl text-[10px] font-black uppercase transition-all ${
-                            periodoGrafico === p
-                             ? 'bg-amber-600 text-black'
-                               : 'glass-card text-slate-400 border-white/10 hover:border-amber-500/30'
-                            }`}                            >
-                                {p === '7d' ? '7 dias' : '30 dias'}
-                            </button>
-                        ))}
-                    </div>
-                </div>
-                <ResponsiveContainer width="100%" height={220}>
-                    <AreaChart data={d?.disparosPorDia} margin={{ top: 5, right: 5, bottom: 5, left: -20 }}>
-                        <defs>
-                            <linearGradient id="gradDisparos" x1="0" y1="0" x2="0" y2="1">
-                                <stop offset="5%"  stopColor={CORES.azul}  stopOpacity={0.3} />
-                                <stop offset="95%" stopColor={CORES.azul}  stopOpacity={0}   />
-                            </linearGradient>
-                            <linearGradient id="gradRespostas" x1="0" y1="0" x2="0" y2="1">
-                                <stop offset="5%"  stopColor={CORES.verde} stopOpacity={0.3} />
-                                <stop offset="95%" stopColor={CORES.verde} stopOpacity={0}   />
-                            </linearGradient>
-                        </defs>
-                        <CartesianGrid strokeDasharray="3 3" stroke="#ffffff08" />
-                        <XAxis dataKey="dia" tick={{ fill: '#64748b', fontSize: 10, fontWeight: 700 }} axisLine={false} tickLine={false} />
-                        <YAxis tick={{ fill: '#64748b', fontSize: 10, fontWeight: 700 }} axisLine={false} tickLine={false} />
-                        <Tooltip content={<TooltipCustom />} />
-                        <Legend wrapperStyle={{ fontSize: '10px', fontWeight: 900, textTransform: 'uppercase', letterSpacing: '0.1em' }} />
-                        <Area type="monotone" dataKey="Disparos"  stroke={CORES.azul}  strokeWidth={2} fill="url(#gradDisparos)"  dot={false} />
-                        <Area type="monotone" dataKey="Respostas" stroke={CORES.verde} strokeWidth={2} fill="url(#gradRespostas)" dot={false} />
-                    </AreaChart>
-                </ResponsiveContainer>
-            </div>
-
-            {/* === LINHA 3: HORÁRIO + CHIPS === */}
+            {/* === LINHA 2: AÇÃO HUMANA + MELHOR HORÁRIO === */}
             <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
 
-                {/* RESPOSTAS POR HORA */}
+                {/* LEADS QUE PRECISAM DE AÇÃO */}
+                <div className="glass-panel rounded-3xl p-6 border border-white/5">
+                    <p className="text-[10px] font-black text-amber-400 uppercase tracking-[0.3em] mb-4 flex items-center gap-2">
+                        <AlertTriangle className="h-4 w-4" /> Requer Atenção Humana<InfoBtn text="Leads que exigem ação manual agora. Pausa Automática = IA pausou sozinha (bot ou encerramento). Pausa Manual = operador pausou. Warm esfriando = engajaram mas pararam. Dead = esgotaram follow-ups." />
+                    </p>
+                    <div className="space-y-2">
+                        {[
+                            { label: 'Pausa Automática',      desc: 'IA pausou — verificar se é bot ou humano esperando', value: d?.kpis.pausaAutomatica || 0,    color: CORES.amarelo  },
+                            { label: 'Pausados manualmente',  desc: 'Operador pausou — verificar se pode retomar',         value: d?.kpis.pausadoManual || 0,     color: CORES.roxo     },
+                            { label: 'Leads Warm esfriando',  desc: 'Engajaram mas pararam — oportunidade de retomada',   value: d?.kpis.tempCounts?.warm || 0,  color: CORES.amarelo  },
+                            { label: 'Leads Dead',            desc: 'Esgotaram follow-ups sem responder',                 value: d?.kpis.tempCounts?.dead || 0,  color: CORES.slate    },
+                        ].filter(item => item.value > 0).map((item, i) => (
+                            <div key={i} className="flex items-center justify-between p-3 rounded-xl border border-white/5 bg-white/[0.02]">
+                                <div className="flex items-center gap-3">
+                                    <div className="h-2 w-2 rounded-full" style={{ background: item.color, boxShadow: `0 0 6px ${item.color}` }} />
+                                    <div>
+                                        <p className="text-[11px] font-black text-white uppercase tracking-wider">{item.label}</p>
+                                        <p className="text-[9px] text-slate-500 font-medium">{item.desc}</p>
+                                    </div>
+                                </div>
+                                <span className="text-lg font-black" style={{ color: item.color }}>{item.value}</span>
+                            </div>
+                        ))}
+                        {[d?.kpis.pausaAutomatica, d?.kpis.pausadoManual, d?.kpis.tempCounts?.warm, d?.kpis.tempCounts?.dead].every(v => !v || v === 0) && (
+                            <div className="text-center py-8">
+                                <p className="text-[10px] text-emerald-400 font-black uppercase tracking-widest">Tudo em dia — nenhuma ação pendente</p>
+                            </div>
+                        )}
+                    </div>
+                </div>
+
+                {/* MELHOR HORÁRIO PARA DISPARAR */}
                 <div className="glass-panel rounded-3xl p-6 border border-white/5">
                     <p className="text-[10px] font-black text-blue-400 uppercase tracking-[0.3em] mb-6 flex items-center gap-2">
-                        <Clock className="h-4 w-4" /> Melhor Horário para Disparar<InfoBtn text="Distribuição de respostas recebidas por hora do dia (últimos 30 dias). Barra amarela = pico de engajamento. Use para configurar a janela de disparo nos horários com mais retorno." />
+                        <Clock className="h-4 w-4" /> Melhor Horário para Disparar<InfoBtn text="Respostas recebidas por hora do dia (últimos 30 dias). Barra amarela = pico de engajamento. Use para calibrar a janela de disparo dos chips." />
                     </p>
                     <ResponsiveContainer width="100%" height={200}>
                         <BarChart data={d?.respostasPorHora} margin={{ top: 5, right: 5, bottom: 5, left: -25 }}>
                             <CartesianGrid strokeDasharray="3 3" stroke="#ffffff08" />
-                            <XAxis
-                                dataKey="hora"
-                                tick={{ fill: '#64748b', fontSize: 9, fontWeight: 700 }}
-                                axisLine={false}
-                                tickLine={false}
-                                interval={2}
-                            />
+                            <XAxis dataKey="hora" tick={{ fill: '#64748b', fontSize: 9, fontWeight: 700 }} axisLine={false} tickLine={false} interval={2} />
                             <YAxis tick={{ fill: '#64748b', fontSize: 9 }} axisLine={false} tickLine={false} />
                             <Tooltip content={<TooltipCustom />} />
                             <Bar dataKey="Respostas" fill={CORES.azul} radius={[4, 4, 0, 0]}>
@@ -653,41 +544,8 @@ const carregarDados = useCallback(async () => {
                         </BarChart>
                     </ResponsiveContainer>
                     <p className="text-[9px] text-slate-600 font-bold uppercase tracking-widest mt-3 text-center">
-                        Barra amarela = horário com mais respostas
+                        Barra amarela = pico de engajamento da base
                     </p>
-                </div>
-
-                {/* SAÚDE DOS CHIPS */}
-                <div className="glass-panel rounded-3xl p-6 border border-white/5">
-                    <p className="text-[10px] font-black text-blue-400 uppercase tracking-[0.3em] mb-6 flex items-center gap-2">
-                        <Wifi className="h-4 w-4" /> Saúde dos Chips<InfoBtn text="Status e progresso de disparos de cada chip hoje. O limite diário vem da configuração de cada instância no Supabase. Verde = dentro do limite, amarelo = acima de 70%, vermelho = acima de 90%." />
-                    </p>
-                    <div className="space-y-3">
-                        {d?.chipsSaude.length > 0 ? (
-                            d.chipsSaude.map((c, i) => (
-                                <ChipCard key={i} chip={c.chip} disparosHoje={c.disparosHoje} limite={c.limite} />
-                            ))
-                        ) : (
-                            <div className="flex flex-col items-center justify-center py-10 opacity-30">
-                                <WifiOff className="h-10 w-10 text-slate-500 mb-3" />
-                                <p className="text-xs font-black text-slate-500 uppercase">Nenhum chip configurado</p>
-                            </div>
-                        )}
-                    </div>
-
-                    {/* Legenda de status geral */}
-                    <div className="mt-4 pt-4 border-t border-white/5 grid grid-cols-3 gap-2">
-                        {[
-                            { label: 'Online',  cor: CORES.verde,    icon: CheckCircle2 },
-                            { label: 'Offline', cor: CORES.vermelho, icon: XCircle      },
-                            { label: 'Pausado', cor: CORES.amarelo,  icon: PauseCircle  },
-                        ].map((s, i) => (
-                            <div key={i} className="flex items-center gap-1.5">
-                                <s.icon className="h-3 w-3" style={{ color: s.cor }} />
-                                <span className="text-[9px] font-black text-slate-500 uppercase">{s.label}</span>
-                            </div>
-                        ))}
-                    </div>
                 </div>
             </div>
         </div>

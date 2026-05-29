@@ -90,7 +90,7 @@ function AppSidebar({ activeTab, setActiveTab, leadsCount, onLogout }) {
                     <p style={{ fontSize: 14, fontWeight: 900, color: '#fff', lineHeight: 1, letterSpacing: '0.05em' }}>
                     <span style={{ color: '#F59E0B' }}>A</span>NT<span style={{ color: '#F59E0B' }}>I</span>X
                        </p>
-                       <p style={{ fontSize: 7, fontWeight: 700, color: 'rgba(255,255,255,0.25)', textTransform: 'uppercase', letterSpacing: '0.2em' }}>by Enerzee</p>
+                       <p style={{ fontSize: 7, fontWeight: 700, color: 'rgba(255,255,255,0.25)', textTransform: 'uppercase', letterSpacing: '0.2em' }}>by Antix</p>
                </div>
             </div>
 
@@ -610,7 +610,7 @@ if (session?.user?.id) checkBriefing()
         return (
             <div className="h-screen bg-[#0A0A0A] flex flex-col items-center justify-center">
             <Zap className="h-12 w-12 text-amber-500 animate-bounce mb-4" />
-            <div className="text-amber-500 font-black uppercase tracking-[0.5em] animate-pulse">Sincronizando Neural...</div>
+            <div className="text-amber-500 font-black uppercase tracking-[0.5em] animate-pulse">Conectando Antix Flow...</div>
             </div>
         )
     }
@@ -637,7 +637,7 @@ if (session?.user?.id) checkBriefing()
                         <h2 className="text-3xl font-black text-white italic uppercase tracking-tighter leading-none text-center">
                        Acesso <span className="text-amber-500">Restrito</span>
                                 </h2>
-                        <p className="text-slate-500 text-[10px] font-bold uppercase tracking-widest mt-2 text-center">Motor Enerzee SDR</p>
+                        <p className="text-slate-500 text-[10px] font-bold uppercase tracking-widest mt-2 text-center">Antix Flow</p>
                     </div>
 
                     <form onSubmit={handleLogin} className="flex flex-col gap-4">
@@ -649,7 +649,7 @@ if (session?.user?.id) checkBriefing()
                                 value={loginEmail}
                                 onChange={(e) => setLoginEmail(e.target.value)}
                                 className="glass-card h-14 rounded-xl bg-black/40 border-white/10 text-white font-bold px-4 focus:border-amber-500 transition-colors" 
-                                placeholder="marlon@enerzee.com"
+                                placeholder="seu@email.com"
                             />
                         </div>
                         
@@ -678,7 +678,7 @@ if (session?.user?.id) checkBriefing()
                             disabled={isLoggingIn}
                             className="w-full h-14 mt-4 bg-amber-600 hover:bg-amber-500 text-black font-black rounded-xl shadow-lg uppercase italic text-sm transition-transform active:scale-95"
                         >
-                            {isLoggingIn ? <Loader2 className="h-5 w-5 animate-spin mx-auto" /> : "INICIAR SESSÃO NEURAL"}
+                            {isLoggingIn ? <Loader2 className="h-5 w-5 animate-spin mx-auto" /> : "ENTRAR NO ANTIX FLOW"}
                         </Button>
                     </form>
                 </div>
@@ -724,7 +724,7 @@ return (
                                 <Input
                                     value={settingsForm.default_company_name}
                                     onChange={e => setSettingsForm(f => ({ ...f, default_company_name: e.target.value }))}
-                                    placeholder="Ex: Lince, Enerzee, Antix"
+                                    placeholder="Ex: Lince, Antix, Empresa"
                                     className="bg-black/30 border-white/10 text-white text-sm h-10 focus:border-amber-500"
                                 />
                             </div>
@@ -766,7 +766,7 @@ return (
                                 { key: '${nomeDono}',           desc: 'Só o primeiro nome',          ex: 'João'             },
                                 { key: '${nomeEmpresa}',        desc: 'Nome da empresa (CNPJ)',      ex: 'Padaria Central'  },
                                 { key: '${bairroLead}',         desc: 'Bairro ou cidade',            ex: 'Vila Madalena'    },
-                                { key: '${concessionariaLocal}',desc: 'Concessionária de energia',   ex: 'Celesc'           },
+                                { key: '${concessionariaLocal}',desc: 'Distribuidora local (solar)',  ex: 'Celesc'           },
                                 { key: '${origem}',             desc: 'Empresa que indicou',         ex: 'Empresa XYZ'      },
                             ].map(({ key, desc, ex }) => (
                                 <button
@@ -846,7 +846,7 @@ return (
             </div>
             <div>
                 <h2 className="text-sm font-black text-white uppercase tracking-wider leading-none">
-    {activeTab === 'search' ? 'Radar Neural' :
+    {activeTab === 'search' ? 'Radar' :
      activeTab === 'Pipeline' ? 'Pipeline' :
      activeTab === 'connections' ? 'Central WhatsApp' :
      'Analytics'}
@@ -1062,7 +1062,7 @@ return (
                                 <div className="flex justify-between items-center"><Label className="text-amber-300 font-black text-xs uppercase tracking-[0.3em]">3. Raio: {searchRadius} KM</Label><Badge className="bg-amber-600 text-black font-black px-6 py-2 rounded-full text-lg" style={{boxShadow:'0 0 12px rgba(245,158,11,0.3)'}}>{searchRadius} KM</Badge></div>
                                 <input type="range" min="1" max="50" value={searchRadius} onChange={(e) => setSearchRadius(e.target.value)} className="w-full h-3 bg-slate-900 rounded-full appearance-none cursor-pointer accent-amber-500 border border-white/5 shadow-inner" />
                             </div>
-                          <Button onClick={startScraping} className="w-full h-20 bg-amber-600 hover:bg-amber-500 text-black font-black text-2xl rounded-3xl mt-10 transition-transform active:scale-95 uppercase tracking-tighter italic" style={{boxShadow:'0 0 24px rgba(245,158,11,0.3)'}}>Ativar Radar Neural <ArrowRight className="ml-3 h-8 w-8"/></Button>
+                          <Button onClick={startScraping} className="w-full h-20 bg-amber-600 hover:bg-amber-500 text-black font-black text-2xl rounded-3xl mt-10 transition-transform active:scale-95 uppercase tracking-tighter italic" style={{boxShadow:'0 0 24px rgba(245,158,11,0.3)'}}>Iniciar Radar <ArrowRight className="ml-3 h-8 w-8"/></Button>
 
                           <button
                               onClick={() => setShowNotes(true)}
@@ -1652,7 +1652,7 @@ className="glass-panel border-white/20 text-white max-w-5xl w-[95vw] max-h-[95vh
             <div className="flex justify-between items-start">
                 <div className="space-y-1">
                     <div className="flex items-center gap-2">
-                     <Badge className="bg-amber-600/20 text-amber-400 border-amber-500/30 px-3 py-0.5 text-[8px] uppercase font-black tracking-widest rounded-full">Inteligência Neural 2026</Badge>
+                     <Badge className="bg-amber-600/20 text-amber-400 border-amber-500/30 px-3 py-0.5 text-[8px] uppercase font-black tracking-widest rounded-full">Antix Flow 2026</Badge>
                         {viewingLeadDetail?.priority_level >= 3 && <Badge className="bg-red-600/20 text-red-500 border-red-500/30 px-2 py-0.5 text-[8px] font-black uppercase animate-pulse">Alta Prioridade 🔥</Badge>}
                     </div>
                     {/* Diminuído de text-4xl para text-2xl */}
@@ -1791,7 +1791,7 @@ className="glass-panel border-white/20 text-white max-w-5xl w-[95vw] max-h-[95vh
                     <DialogHeader className="mb-8 text-center"><DialogTitle className="text-4xl font-black text-amber-400 neon-text tracking-tighter uppercase italic">Ajustar Lead</DialogTitle></DialogHeader>
                     <div className="space-y-8">
                         <div className="space-y-3"><Label className="text-[11px] font-black text-amber-300 uppercase tracking-[0.3em]">Nome Comercial</Label><Input value={editingLead?.name || ""} onChange={e => setEditingLead({ ...editingLead, name: e.target.value })} className="glass-card h-16 rounded-2xl bg-slate-950 border-white/10 text-xl font-black tracking-tighter px-6" /></div>
-                        <div className="space-y-3"><Label className="text-[11px] font-black text-amber-300 uppercase tracking-[0.3em]">Fase do Funil Neural</Label><select value={editingLead?.status || "new"} onChange={e => setEditingLead({ ...editingLead, status: e.target.value })} className="w-full glass-card h-16 bg-slate-950 border-white/10 rounded-2xl px-6 text-lg font-black text-white uppercase appearance-none cursor-pointer"><option value="new" className="bg-slate-950 text-white">Novos Leads</option><option value="contact" className="bg-slate-950 text-white">Em Atendimento</option><option value="waiting_analysis" className="bg-slate-950 text-white">Auditoria</option><option value="booked" className="bg-slate-950 text-white">Agendado</option></select></div>
+                        <div className="space-y-3"><Label className="text-[11px] font-black text-amber-300 uppercase tracking-[0.3em]">Fase do Funil</Label><select value={editingLead?.status || "new"} onChange={e => setEditingLead({ ...editingLead, status: e.target.value })} className="w-full glass-card h-16 bg-slate-950 border-white/10 rounded-2xl px-6 text-lg font-black text-white uppercase appearance-none cursor-pointer"><option value="new" className="bg-slate-950 text-white">Novos Leads</option><option value="contact" className="bg-slate-950 text-white">Em Atendimento</option><option value="waiting_analysis" className="bg-slate-950 text-white">Auditoria</option><option value="booked" className="bg-slate-950 text-white">Agendado</option></select></div>
                     </div>
                     <DialogFooter className="flex justify-between gap-6 pt-10 mt-6 border-t border-white/10"><Button variant="ghost" onClick={() => handleDeleteLead(editingLead.id)} className="text-red-500 font-black h-16 rounded-2xl px-10 text-xs uppercase tracking-widest glass-card border-transparent hover:bg-red-500/10">EXCLUIR</Button><Button onClick={handleSaveEdit} className="bg-amber-600 hover:bg-amber-500 text-black font-black h-16 rounded-2xl px-12 text-sm uppercase italic" style={{boxShadow:'0 0 16px rgba(245,158,11,0.2)'}}>SALVAR DADOS</Button></DialogFooter>
                 </DialogContent>

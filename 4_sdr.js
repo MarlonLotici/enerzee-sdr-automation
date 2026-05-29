@@ -606,7 +606,7 @@ async function getRegrasEmCache(instanceId) {
     if (regrasDoBanco?.user_id) {
         const { data: profile } = await supabase
             .from('profiles')
-            .select('calendly_link, opening_templates, default_agent_name, default_company_name, default_daily_limit')
+            .select('calendly_link, opening_templates, default_agent_name, default_company_name, default_daily_limit, default_tts_voice')
             .eq('id', regrasDoBanco.user_id)
             .maybeSingle();
 
@@ -616,6 +616,7 @@ async function getRegrasEmCache(instanceId) {
         if (!regrasDoBanco.agent_name && profile?.default_agent_name) regrasDoBanco.agent_name = profile.default_agent_name;
         if (!regrasDoBanco.company_name && profile?.default_company_name) regrasDoBanco.company_name = profile.default_company_name;
         if (!regrasDoBanco.daily_limit && profile?.default_daily_limit) regrasDoBanco.daily_limit = profile.default_daily_limit;
+        if (profile?.default_tts_voice) regrasDoBanco.tts_voice = regrasDoBanco.tts_voice || profile.default_tts_voice;
     }
 
     if (regrasDoBanco) {
@@ -835,9 +836,16 @@ const concessionariaLocal = (MAPA_CONCESSIONARIAS[contextoLead.estado] || 'conce
             ? `https://wa.me/55${(instanceData.owner_phone || '').replace(/\D/g, '')}`
             : 'https://antix.com.br/agendar');
 
-    const secaoIdentidade = `[IDENTIDADE]
+    const isSolar = !instanceData?.product_type || instanceData.product_type === 'solar';
+
+    const secaoIdentidade = isSolar
+        ? `[IDENTIDADE]
 Você é ${agentName}, especialista em eficiência energética da ${companyName}.
 Seu objetivo é qualificar o interesse do lead e levá-lo a agendar uma consultoria gratuita.
+Você se comunica como um ser humano no WhatsApp — direto, sem formalidade excessiva, sem robótica.`
+        : `[IDENTIDADE]
+Você é ${agentName}, representante da ${companyName}.
+Seu objetivo é qualificar o interesse do lead e levá-lo a agendar uma conversa com o time.
 Você se comunica como um ser humano no WhatsApp — direto, sem formalidade excessiva, sem robótica.`;
 
     const secaoDiretrizes = `[DIRETRIZES DE FECHAMENTO]
@@ -848,26 +856,36 @@ Você se comunica como um ser humano no WhatsApp — direto, sem formalidade exc
 - Nunca revele que é uma IA antes do REVEAL programado.
 - Texto puro: sem asteriscos, sem markdown.
 - Termine SEMPRE com uma pergunta ("?"), exceto em REPASSE e REVEAL.
-- Tags obrigatórias no final de toda resposta: [ESTAGIO:N] e [CLIMA:X].`;
+- Tags obrigatórias no final de toda resposta: [ESTAGIO:N] e [CLIMA:X].
+- EMPATIA COM GATEKEEPER (REGRA DE OURO): Quando alguém disser que não é o decisor, NUNCA pule direto para "vai passar o contato?". Primeiro: agradeça a atenção da pessoa com genuinidade ("que legal que me atendeu", "obrigado pelo tempo"). Só então, de forma leve e natural, pergunte se consegue uma ponte com o responsável. A venda começa com a pessoa que te atendeu — ela pode abrir ou fechar a porta.`;
 
-    const secaoRegional = `[INTELIGÊNCIA REGIONAL]
+    const secaoRegional = isSolar
+        ? `[INTELIGÊNCIA REGIONAL]
 - Concessionária local do lead: ${concessionariaLocal}
 - Redução esperada na fatura: ${percentualTexto}%
 - Economia anual estimada: ${economiaAnualFormatada}/ano (use APENAS este valor — nunca mencione o valor mensal)
 - Contexto regional: ${contextoBairro}
+- ${perfilComportamental}`
+        : `[CONTEXTO DO LEAD]
+- Localização: ${bairroLead}
+- Empresa: ${nomeEmpresa}
 - ${perfilComportamental}`;
 
-    const secaoNicho = dadosNicho
-        ? `[ESTRATEGIA DO NICHO]
+    const secaoNicho = isSolar
+        ? (dadosNicho
+            ? `[ESTRATEGIA DO NICHO]
 - Nicho identificado: ${contextoLead.niche || 'empresa comercial'}
 - Equipamentos de alto consumo: ${dadosNicho.equipamentos}
 - Dor principal do negócio: ${dadosNicho.dor_principal}
 - Ângulo de abordagem comercial: ${dadosNicho.angulo_venda}`
-        : `[ESTRATEGIA DO NICHO]
+            : `[ESTRATEGIA DO NICHO]
 - Nicho identificado: ${contextoLead.niche || 'empresa comercial'}
 - Equipamentos de alto consumo: ar condicionado, iluminação, equipamentos industriais.
 - Dor principal do negócio: conta de energia elevada reduzindo margem do negócio.
-- Ângulo de abordagem comercial: redução imediata da maior despesa fixa da empresa.`;
+- Ângulo de abordagem comercial: redução imediata da maior despesa fixa da empresa.`)
+        : `[ESTRATEGIA DO NICHO]
+- Nicho identificado: ${contextoLead.niche || 'empresa comercial'}
+- Siga estritamente a constituição do agente para adaptar o ângulo de abordagem ao nicho.`;
 
     const secaoModular = [secaoIdentidade, secaoDiretrizes, secaoRegional, secaoNicho].join('\n\n');
 
@@ -1275,7 +1293,7 @@ async function enviarMensagemIA(sock, jid, content) {
 }
 
 
-async function enviarAudioTTS(sock, remoteJid, texto, lead, instanceId) {
+async function enviarAudioTTS(sock, remoteJid, texto, lead, instanceId, voz = null) {
     try {
         console.log(`🎙️ [TTS] Gerando áudio humanizado para ${lead.name}...`);
         
@@ -1298,7 +1316,7 @@ async function enviarAudioTTS(sock, remoteJid, texto, lead, instanceId) {
         
         // 2. ENVIAR O TEXTO JÁ HUMANIZADO
         // Note que agora passamos 'textoHumanizado' e não mais o 'texto' original
-        const buffer = await gerarAudioTTS(textoHumanizado);
+        const buffer = await gerarAudioTTS(textoHumanizado, voz || undefined);
 
         await sock.sendMessage(remoteJid, {
             audio: buffer,
@@ -1319,7 +1337,7 @@ async function enviarAudioTTS(sock, remoteJid, texto, lead, instanceId) {
 // 🧠 NÚCLEO UNIFICADO DE RESPOSTA — elimina duplicação entre processarMensagem
 // e processarMensagemManual. Toda lógica de áudio e envio vive aqui.
 // ============================================================================
-async function filtrarEEnviarResposta(sock, remoteJid, resposta, historico, lead, instanceId) {
+async function filtrarEEnviarResposta(sock, remoteJid, resposta, historico, lead, instanceId, ttsVoz = null) {
     if (!resposta) {
         console.warn(`⚠️ [FILTRO] Resposta NULA chegou pro envio. Lead: ${lead.name}`);
         return;
@@ -1445,8 +1463,12 @@ if (matchClima) updates.sentiment = matchClima[1].toLowerCase();
     const leadEnviouAudio = ultimaMsgUser?.content?.startsWith('(Áudio)');
     const audiosJaEnviados = historico.filter(m => m.content?.includes('[AUDIO_TTS]')).length;
     const temCalendly = textoLimpo.includes('calendly.com');
-    // Nos estágios 2-3 (revelação da economia) o áudio reforça o impacto emocional
-    const estagioEmocional = (lead.current_stage === 2 || lead.current_stage === 3);
+    // Nos estágios 2-3 (revelação da economia) o áudio reforça o impacto emocional.
+    // Checa tanto o estágio atual (lead.current_stage) quanto o que a IA declarou nessa resposta
+    // (matchEstagio), pois lead.current_stage ainda reflete o estágio ANTERIOR nessa chamada.
+    const estagioNaResposta = matchEstagio ? parseInt(matchEstagio[1]) : (lead.current_stage || 0);
+    const estagioEmocional = (lead.current_stage >= 2 && lead.current_stage <= 3) ||
+                              (estagioNaResposta >= 2 && estagioNaResposta <= 3);
     // Estágio 2/3 → sempre áudio (máx 2 por conversa). Outros: lead enviou áudio OU 25% aleatório.
     const usarTTS = audiosJaEnviados < 2 && !temCalendly && (leadEnviouAudio || estagioEmocional || Math.random() < 0.25);
 
@@ -1457,7 +1479,7 @@ if (matchClima) updates.sentiment = matchClima[1].toLowerCase();
             // 🎙️ Último balão como áudio (quando aplicável)
             if (usarTTS && isUltimoBalao) {
                 console.log(`🎙️ [TTS] Enviando último balão como áudio para ${lead.name}...`);
-                const audioOk = await enviarAudioTTS(sock, remoteJid, trecho, lead, instanceId);
+                const audioOk = await enviarAudioTTS(sock, remoteJid, trecho, lead, instanceId, ttsVoz);
                 if (audioOk) continue;
                 console.log(`⚠️ [TTS FALLBACK] Áudio falhou. Enviando como texto para ${lead.name} não ficar no vácuo.`);
             }
@@ -2661,6 +2683,11 @@ async function loopAuditor() {
             .limit(5);
 
         if (leadsParaAuditar && leadsParaAuditar.length > 0) {
+            // Busca product_type de cada instância para o auditor contextualizar corretamente
+            const uniqueInstIds = [...new Set(leadsParaAuditar.map(l => l.instance_id))];
+            const { data: instProdData } = await supabase
+                .from('instances').select('id, product_type').in('id', uniqueInstIds);
+            const productTypeMap = Object.fromEntries((instProdData || []).map(i => [i.id, i.product_type]));
             console.log(`📋 [QA AUDITOR] ${leadsParaAuditar.length} leads na fila. Iniciando análise...`);
 
             let auditadosComSucesso = 0;
@@ -2679,7 +2706,7 @@ async function loopAuditor() {
                 }
 
                 const historico = histRaw.map(m => ({ role: m.role, content: m.content }));
-                const relatorio = await auditorAgent.gerarAuditoria(historico, lead);
+                const relatorio = await auditorAgent.gerarAuditoria(historico, lead, productTypeMap[lead.instance_id] || 'solar');
 
                 if (!relatorio) continue; // LLM falhou — tenta na próxima rodada
 
@@ -2770,7 +2797,7 @@ if (!histRaw || histRaw.length === 0) return;
         const instanceData = await getRegrasEmCache(instanceId);
         
         let resposta = await gerarRespostaIA(historico, lead, instanceData);
-        await filtrarEEnviarResposta(sock, remoteJid, resposta, historico, lead, instanceId);
+        await filtrarEEnviarResposta(sock, remoteJid, resposta, historico, lead, instanceId, instanceData?.tts_voice || null);
 
     } catch (erroRecuperacao) {
         console.error(`❌ [ERRO RECUPERAÇÃO] Falha para ${lead.name}:`, erroRecuperacao.message);
@@ -2987,7 +3014,7 @@ if (!resposta) {
 }
 
         // 4.3. Filtra, Carimba no WPP e Envia
-        await filtrarEEnviarResposta(instancia.sock, remoteJid, resposta, historico, lead, instanceId);
+        await filtrarEEnviarResposta(instancia.sock, remoteJid, resposta, historico, lead, instanceId, instanceData?.tts_voice || null);
 
     } catch (error) {
         console.error(`❌ [WORKER-ERRO] Falha ao processar job ${job.id}:`, error.message);
