@@ -1,6 +1,14 @@
 import React, { useState, useEffect, useCallback, useRef } from 'react'
 import { createPortal } from 'react-dom'
 import { supabase } from '@/lib/supabase'
+import PeriodSelector from './components/PeriodSelector'
+
+function getDateFrom(periodo) {
+    if (periodo === 'all') return null
+    const d = new Date()
+    d.setDate(d.getDate() - parseInt(periodo))
+    return d.toISOString()
+}
 import {
     AreaChart, Area, BarChart, Bar, PieChart, Pie, Cell,
     XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer, Legend
@@ -155,7 +163,7 @@ export default function Dashboard() {
     const [dados, setDados] = useState(null)
     const [carregando, setCarregando] = useState(true)
     const [ultimaAtualizacao, setUltimaAtualizacao] = useState(null)
-    const [periodoGrafico, setPeriodoGrafico] = useState('7d') // '7d' | '30d'
+    const [periodo, setPeriodo] = useState('30d')
 
 const carregarDados = useCallback(async () => {
         setCarregando(true)
@@ -168,12 +176,14 @@ const carregarDados = useCallback(async () => {
             const { data: instancias } = await supabase
                 .from('instances')
                 .select('id, name, whatsapp_status, daily_limit')
-                .or(`user_id.eq.${uid},user_id.is.null`)
+                .eq('user_id', uid)
 
             const instanceIds = instancias?.map(i => i.id) || []
             if (!instanceIds.length) { setCarregando(false); return }
 
-            const trintaDiasAtras = new Date(Date.now() - 30 * 86400000).toISOString()
+            // dateFrom é a janela temporal do período selecionado
+            // Para 'all' capamos em 90 dias para não sobrecarregar a query de mensagens
+            const dateFrom = getDateFrom(periodo) || new Date(Date.now() - 90 * 86400000).toISOString()
 
             const [
                 { data: leads },
@@ -188,7 +198,7 @@ const carregarDados = useCallback(async () => {
                 supabase
                     .from('messages')
                     .select('role, content, created_at, whatsapp_id')
-                    .gte('created_at', trintaDiasAtras)
+                    .gte('created_at', dateFrom)
                     .order('created_at', { ascending: false })
                     .limit(50000),
             ])
@@ -238,8 +248,8 @@ const carregarDados = useCallback(async () => {
             const disparosHoje    = leads?.filter(l => l.last_contact_at && new Date(l.last_contact_at) >= hoje).length || 0
             // totalDisparados: histórico completo (para o funil)
             const totalDisparados = leads?.filter(l => !!l.last_contact_at).length || 0
-            // disparados30d: mesma janela das mensagens — denominador correto para taxa de resposta
-            const disparados30d   = leads?.filter(l => l.last_contact_at && new Date(l.last_contact_at) >= new Date(trintaDiasAtras)).length || 0
+            // disparadosPeriodo: mesma janela das mensagens — denominador correto para taxa de resposta
+            const disparados30d   = leads?.filter(l => l.last_contact_at && new Date(l.last_contact_at) >= new Date(dateFrom)).length || 0
             const emAtendimento   = leads?.filter(l => l.status === 'contact').length || 0
             const pausaAutomatica = leads?.filter(l => l.is_paused && !l.manual_pause).length || 0
             const pausadoManual   = leads?.filter(l => l.manual_pause).length || 0
@@ -255,8 +265,12 @@ const carregarDados = useCallback(async () => {
             const taxaResposta = disparados30d > 0
                 ? Math.round((leadsQueResponderam30d / disparados30d) * 100)
                 : 0
-            // Para o funil: "Responderam" all-time usa current_stage > 0 como proxy histórico
-            const responderam30dFunil = leads?.filter(l => (l.current_stage || 0) > 0 && l.last_contact_at).length || 0
+            // Bug 8 fix: filtra pelo período selecionado (não mais all-time)
+            const responderam30dFunil = leads?.filter(l =>
+                (l.current_stage || 0) > 0 &&
+                l.last_contact_at &&
+                new Date(l.last_contact_at) >= new Date(dateFrom)
+            ).length || 0
 
             // === FUNIL DE CONVERSÃO — todos históricos, períodos consistentes ===
             const funil = [
@@ -273,7 +287,7 @@ const carregarDados = useCallback(async () => {
             const leadsInvalidos = leads?.filter(l => l.status === 'invalid' || l.status === 'blacklisted').length || 0
 
             // === DISPAROS POR DIA — corrigido pra contar leads únicos por dia ===
-            const diasPeriodo = periodoGrafico === '7d' ? 7 : 30
+            const diasPeriodo = periodo === 'all' ? 90 : Math.min(parseInt(periodo), 90)
             const disparosPorDia = Array.from({ length: diasPeriodo }, (_, i) => {
                 const dia = diasAtras(diasPeriodo - 1 - i)
                 const fimDia = new Date(dia.getTime() + 86400000)
@@ -402,7 +416,7 @@ const carregarDados = useCallback(async () => {
         } finally {
             setCarregando(false)
         }
-    }, [periodoGrafico])
+    }, [periodo])
 
     useEffect(() => { carregarDados() }, [carregarDados])
 
@@ -429,25 +443,28 @@ const carregarDados = useCallback(async () => {
         <div className="flex-1 overflow-y-auto custom-scrollbar bg-slate-950/20 p-8 space-y-8">
 
             {/* === HEADER === */}
-            <div className="flex justify-between items-center">
-                <div>
-                    <h2 className="text-2xl font-black text-white uppercase italic tracking-tighter">
-                        Painel <span className="text-amber-500 neon-text">Operacional</span>
-                    </h2>
-                    {ultimaAtualizacao && (
-                        <p className="text-[10px] text-slate-500 font-bold uppercase tracking-widest mt-1">
-                            Atualizado às {ultimaAtualizacao.toLocaleTimeString('pt-BR', { hour: '2-digit', minute: '2-digit', second: '2-digit' })} · atualiza a cada 60s
-                        </p>
-                    )}
+            <div className="space-y-4">
+                <div className="flex justify-between items-center">
+                    <div>
+                        <h2 className="text-2xl font-black text-white uppercase italic tracking-tighter">
+                            Painel <span className="text-amber-500 neon-text">Operacional</span>
+                        </h2>
+                        {ultimaAtualizacao && (
+                            <p className="text-[10px] text-slate-500 font-bold uppercase tracking-widest mt-1">
+                                Atualizado às {ultimaAtualizacao.toLocaleTimeString('pt-BR', { hour: '2-digit', minute: '2-digit', second: '2-digit' })} · atualiza a cada 60s
+                            </p>
+                        )}
+                    </div>
+                    <button
+                        onClick={carregarDados}
+                        disabled={carregando}
+                        className="flex items-center gap-2 glass-card px-5 py-2.5 rounded-2xl border border-white/10 text-[11px] font-black text-amber-400 uppercase tracking-widest hover:border-amber-500/40 transition-all disabled:opacity-50"
+                    >
+                        <RefreshCw className={`h-4 w-4 ${carregando ? 'animate-spin' : ''}`} />
+                        Atualizar
+                    </button>
                 </div>
-                <button
-                    onClick={carregarDados}
-                    disabled={carregando}
-                    className="flex items-center gap-2 glass-card px-5 py-2.5 rounded-2xl border border-white/10 text-[11px] font-black text-amber-400 uppercase tracking-widest hover:border-amber-500/40 transition-all disabled:opacity-50"
-                >
-                    <RefreshCw className={`h-4 w-4 ${carregando ? 'animate-spin' : ''}`} />
-                    Atualizar
-                </button>
+                <PeriodSelector value={periodo} onChange={setPeriodo} />
             </div>
 
             {/* === KPIs === */}

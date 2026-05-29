@@ -97,8 +97,8 @@ const db = {
                 // Proteção multi-tenant: impede sobrescrever lead de outro cliente
         const { data: leadExistente } = await supabase
             .from('leads').select('user_id').eq('whatsapp_id', zapId).maybeSingle();
-        if (leadExistente?.user_id && leadExistente.user_id !== userId) {
-            console.log();
+        if (leadExistente && leadExistente.user_id && leadExistente.user_id !== userId) {
+            console.log(`🛡️ [MULTI-TENANT] Lead ${zapId} pertence a outro tenant. Upsert bloqueado.`);
             return { error: null };
         }
 

@@ -72,7 +72,7 @@ export default function AuditorDashboard({ socket }) {
             const uid = s?.user?.id
             if (!uid) { setLoading(false); return }
 
-            const { data: instData } = await supabase.from('instances').select('id').or(`user_id.eq.${uid},user_id.is.null`)
+            const { data: instData } = await supabase.from('instances').select('id').eq('user_id', uid)
             const instIds = instData?.map(i => i.id) || []
             if (!instIds.length) { setLoading(false); return }
 
@@ -126,7 +126,7 @@ export default function AuditorDashboard({ socket }) {
 
         const total = leads.length
         const agendados = leads.filter(l => l.report.desfecho === 'AGENDADO').length
-        const notas = leads.map(l => parseFloat(l.report.nota_ia) || 0).filter(n => n > 0)
+        const notas = leads.map(l => parseFloat(l.report.nota_ia)).filter(n => !isNaN(n))
         const notaMedia = notas.length ? (notas.reduce((a, b) => a + b, 0) / notas.length) : 0
         const comErro = leads.filter(l => l.report.erro_critico_ia && l.report.erro_critico_ia !== 'null' && l.report.erro_critico_ia !== null).length
 

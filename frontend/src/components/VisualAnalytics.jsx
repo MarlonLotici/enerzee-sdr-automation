@@ -10,6 +10,14 @@ import {
     TrendingUp, TrendingDown, Zap, Users, Target,
     Activity, Flame, RefreshCw, Cpu, MapPin,
 } from 'lucide-react'
+import PeriodSelector from './PeriodSelector'
+
+function getDateFrom(periodo) {
+    if (periodo === 'all') return null
+    const d = new Date()
+    d.setDate(d.getDate() - parseInt(periodo))
+    return d.toISOString()
+}
 
 
 
@@ -392,6 +400,7 @@ export default function VisualAnalytics() {
     const [realTotalLeads,     setRealTotalLeads]     = useState(0)
     const [realAgendados,      setRealAgendados]      = useState(0)
     const [realAbordados,      setRealAbordados]      = useState(0)
+    const [periodo,            setPeriodo]            = useState('30d')
 
     const fetchData = async () => {
         setLoading(true)
@@ -400,27 +409,36 @@ export default function VisualAnalytics() {
             const uid = s?.user?.id
             if (!uid) { setLoading(false); return }
 
-            const { data: instData } = await supabase.from('instances').select('id, name, whatsapp_status').or(`user_id.eq.${uid},user_id.is.null`)
+            const { data: instData } = await supabase.from('instances').select('id, name, whatsapp_status').eq('user_id', uid)
             const instIds = instData?.map(i => i.id) || []
             if (!instIds.length) { setLoading(false); return }
 
-            const [leadsRes, countRes, agendadosRes, abordadosRes] = await Promise.all([
-                supabase
-                    .from('leads')
-                    .select('id, status, niche, created_at, last_contact_at, instance_id, capital_social_numeric, current_stage, lead_temperature, opening_template, last_seen_at, calendly_booked')
-                    .in('instance_id', instIds)
-                    .order('current_stage', { ascending: false })
-                    .limit(10000),
-                supabase.from('leads').select('*', { count: 'exact', head: true }).in('instance_id', instIds),
-                supabase.from('leads').select('*', { count: 'exact', head: true })
-                    .in('instance_id', instIds)
-                    .not('status', 'in', '(invalid,blacklisted,error)')
-                    .or('status.eq.booked,status.eq.closed,calendly_booked.eq.true,current_stage.gte.4'),
-                supabase.from('leads').select('*', { count: 'exact', head: true })
-                    .in('instance_id', instIds)
-                    .not('last_contact_at', 'is', null)
-                    .not('status', 'in', '(invalid,blacklisted,error)')
-            ])
+            const dateFrom = getDateFrom(periodo)
+
+            let leadsQ = supabase
+                .from('leads')
+                .select('id, status, niche, created_at, last_contact_at, instance_id, capital_social_numeric, current_stage, lead_temperature, opening_template, last_seen_at, calendly_booked')
+                .in('instance_id', instIds)
+                .order('current_stage', { ascending: false })
+                .limit(10000)
+            if (dateFrom) leadsQ = leadsQ.gte('created_at', dateFrom)
+
+            let countQ = supabase.from('leads').select('*', { count: 'exact', head: true }).in('instance_id', instIds)
+            if (dateFrom) countQ = countQ.gte('created_at', dateFrom)
+
+            let agendQ = supabase.from('leads').select('*', { count: 'exact', head: true })
+                .in('instance_id', instIds)
+                .not('status', 'in', '(invalid,blacklisted,error)')
+                .or('status.eq.booked,status.eq.closed,calendly_booked.eq.true,current_stage.gte.4')
+            if (dateFrom) agendQ = agendQ.gte('last_contact_at', dateFrom)
+
+            let aborQ = supabase.from('leads').select('*', { count: 'exact', head: true })
+                .in('instance_id', instIds)
+                .not('last_contact_at', 'is', null)
+                .not('status', 'in', '(invalid,blacklisted,error)')
+            if (dateFrom) aborQ = aborQ.gte('last_contact_at', dateFrom)
+
+            const [leadsRes, countRes, agendadosRes, abordadosRes] = await Promise.all([leadsQ, countQ, agendQ, aborQ])
             const instRes = { data: instData, error: null }
             if (!leadsRes.error && leadsRes.data)            setLeads(leadsRes.data)
             if (!instRes.error  && instRes.data)             setInstances(instRes.data)
@@ -439,7 +457,7 @@ export default function VisualAnalytics() {
         fetchData()
         const id = setInterval(fetchData, 60_000)
         return () => clearInterval(id)
-    }, [])
+    }, [periodo])
 
         const metrics = useMemo(() => computeMetrics(leads, instances, realTotalLeads, realAgendados, realAbordados), [leads, instances, realTotalLeads, realAgendados, realAbordados])
     // ── LOADING ───────────────────────────────────────────────────────────────
@@ -481,34 +499,37 @@ export default function VisualAnalytics() {
         <div style={{ background: '#020617', minHeight: '100vh', padding: '28px 28px 40px', fontFamily: "'DM Sans', system-ui, sans-serif", color: '#fff' }}>
 
             {/* HEADER */}
-            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 28 }}>
-                <div>
-                    <div style={{ display: 'flex', alignItems: 'center', gap: 10, marginBottom: 4 }}>
-                        <div style={{ background: 'rgba(59,130,246,0.15)', border: '1px solid rgba(59,130,246,0.3)', borderRadius: '0.75rem', padding: '6px', boxShadow: '0 0 16px rgba(59,130,246,0.3)' }}>
-                            <Zap size={18} color={NEON.blue} />
+            <div style={{ marginBottom: 28 }}>
+                <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 14 }}>
+                    <div>
+                        <div style={{ display: 'flex', alignItems: 'center', gap: 10, marginBottom: 4 }}>
+                            <div style={{ background: 'rgba(59,130,246,0.15)', border: '1px solid rgba(59,130,246,0.3)', borderRadius: '0.75rem', padding: '6px', boxShadow: '0 0 16px rgba(59,130,246,0.3)' }}>
+                                <Zap size={18} color={NEON.blue} />
+                            </div>
+                            <h1 style={{ fontSize: 22, fontWeight: 900, letterSpacing: '-0.03em', lineHeight: 1 }}>
+                                Resultados <span style={{ color: NEON.blue }}>Comerciais</span>
+                            </h1>
                         </div>
-                        <h1 style={{ fontSize: 22, fontWeight: 900, letterSpacing: '-0.03em', lineHeight: 1 }}>
-                            Resultados <span style={{ color: NEON.blue }}>Comerciais</span>
-                      </h1>
+                        <p style={{ fontSize: 12, color: 'rgba(255,255,255,0.3)', fontWeight: 700, letterSpacing: '0.05em' }}>
+                            {leads.length.toLocaleString('pt-BR')} leads · sync {lastSync ? lastSync.toLocaleTimeString('pt-BR', { hour: '2-digit', minute: '2-digit' }) : '...'}
+                        </p>
                     </div>
-                    <p style={{ fontSize: 12, color: 'rgba(255,255,255,0.3)', fontWeight: 700, letterSpacing: '0.05em' }}>
-                        {leads.length.toLocaleString('pt-BR')} leads · sync {lastSync ? lastSync.toLocaleTimeString('pt-BR', { hour: '2-digit', minute: '2-digit' }) : '...'}
-                    </p>
-                </div>
-                <div style={{ display: 'flex', gap: 10 }}>
-                    <button
-                        onClick={fetchData}
-                        disabled={loading}
-                        style={{ display: 'flex', alignItems: 'center', gap: 6, background: 'rgba(255,255,255,0.04)', border: '1px solid rgba(255,255,255,0.1)', borderRadius: '999px', padding: '6px 14px', cursor: 'pointer', color: 'rgba(255,255,255,0.5)', fontSize: 10, fontWeight: 900, textTransform: 'uppercase', letterSpacing: '0.15em' }}
-                    >
-                        <RefreshCw size={11} style={{ animation: loading ? 'spin 1s linear infinite' : 'none' }} />
-                        Atualizar
-                    </button>
-                    <div style={{ display: 'flex', alignItems: 'center', gap: 7, background: 'rgba(16,185,129,0.08)', border: '1px solid rgba(16,185,129,0.2)', borderRadius: '999px', padding: '6px 14px' }}>
-                        <div style={{ width: 7, height: 7, borderRadius: '50%', background: NEON.emerald, boxShadow: `0 0 8px ${NEON.emerald}`, animation: 'pulse 2s infinite' }} />
-                        <span style={{ fontSize: 10, fontWeight: 900, color: NEON.emerald, textTransform: 'uppercase', letterSpacing: '0.15em' }}>Live</span>
+                    <div style={{ display: 'flex', gap: 10, alignItems: 'center' }}>
+                        <button
+                            onClick={fetchData}
+                            disabled={loading}
+                            style={{ display: 'flex', alignItems: 'center', gap: 6, background: 'rgba(255,255,255,0.04)', border: '1px solid rgba(255,255,255,0.1)', borderRadius: '999px', padding: '6px 14px', cursor: 'pointer', color: 'rgba(255,255,255,0.5)', fontSize: 10, fontWeight: 900, textTransform: 'uppercase', letterSpacing: '0.15em' }}
+                        >
+                            <RefreshCw size={11} style={{ animation: loading ? 'spin 1s linear infinite' : 'none' }} />
+                            Atualizar
+                        </button>
+                        <div style={{ display: 'flex', alignItems: 'center', gap: 7, background: 'rgba(16,185,129,0.08)', border: '1px solid rgba(16,185,129,0.2)', borderRadius: '999px', padding: '6px 14px' }}>
+                            <div style={{ width: 7, height: 7, borderRadius: '50%', background: NEON.emerald, boxShadow: `0 0 8px ${NEON.emerald}`, animation: 'pulse 2s infinite' }} />
+                            <span style={{ fontSize: 10, fontWeight: 900, color: NEON.emerald, textTransform: 'uppercase', letterSpacing: '0.15em' }}>Live</span>
+                        </div>
                     </div>
                 </div>
+                <PeriodSelector value={periodo} onChange={setPeriodo} />
             </div>
 
             {/* ── KPIs ── */}

@@ -418,11 +418,10 @@ if (session?.user?.id) checkBriefing()
         const userId = currentSession?.user?.id;
         if (!userId) return;
 
-        // 1. Busca chips do usuário — inclui chips sem user_id ainda (migração pendente)
         const { data: userInstances } = await supabase
             .from('instances')
             .select('id')
-            .or(`user_id.eq.${userId},user_id.is.null`);
+            .eq('user_id', userId);
         const instanceIds = userInstances?.map(i => i.id) || [];
         if (instanceIds.length === 0) { setLeads([]); setRealTotalLeads(0); return; }
 

@@ -95,4 +95,23 @@ async function clearRedisSession(redisClient, sessionId) {
     }
 }
 
-module.exports = { useRedisAuthState, clearRedisSession };
+// Salva o dono (user_id) de uma instância no Redis — TTL 30 dias
+async function saveOwnerToRedis(redisClient, instanceId, userId) {
+    try {
+        await redisClient.set(`wpp_owner:${instanceId}`, userId, 'EX', 2592000);
+    } catch (error) {
+        console.error(`[REDIS] Erro ao salvar owner de ${instanceId}:`, error.message);
+    }
+}
+
+// Busca o user_id do dono de uma instância direto do Redis (sub-milissegundo)
+async function getOwnerFromRedis(redisClient, instanceId) {
+    try {
+        return await redisClient.get(`wpp_owner:${instanceId}`);
+    } catch (error) {
+        console.error(`[REDIS] Erro ao buscar owner de ${instanceId}:`, error.message);
+        return null;
+    }
+}
+
+module.exports = { useRedisAuthState, clearRedisSession, saveOwnerToRedis, getOwnerFromRedis };

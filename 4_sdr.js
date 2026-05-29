@@ -23,7 +23,7 @@ const objectionAgent = require('./agents/objectionAgent'); // esse agente assume
 const auditorAgent = require('./agents/auditorAgent'); // faz auditoria das conversas como um 'juiz'
 const handoffAgent = require('./agents/handoffAgent');
 const motoresEmExecucao = new Set(); // 🛡️ Impede que o mesmo chip ligue dois loops infinitos
-const { useRedisAuthState, clearRedisSession } = require('./auth_redis_adapter');
+const { useRedisAuthState, clearRedisSession, saveOwnerToRedis, getOwnerFromRedis } = require('./auth_redis_adapter');
 const { enviarAlerta } = require('./notifier');
 const { getNicheData, inicializarCache } = require('./nicheCache');
 const instanciasEncerrandoManualmente = new Set(); // 🛑 Flag para silenciar alertas no Discord ao remover chip
@@ -189,6 +189,7 @@ const mensagensEnviadasPelaIA = new Set(); // 🛡️ PASSO 1: A Memória Anti-E
 const iaRespondendo = new Set();
 const mapaRastreioLID = new Map();
 const gavetaDeMensagens = new Map(); // 🧠 OUVIDO PACIENTE: Gaveta temporária de mensagens
+const mensagensJaProcessadas = new Map(); // 🛡️ DEDUP: Previne reprocessamento de msg.key.id do Baileys
 const cacheRegrasInstancia = new Map(); // 🧠 Memória de curto prazo para regras
 const cacheAvisosMidia = new Map(); // 🛡️ TTL 5min — previne race condition em flood de fotos/catálogos
 let sdrEventsGlobal = null; // 🛡️ Adicione esta linha aqui no topo
@@ -1066,16 +1067,45 @@ function calcularEconomiaRegional(analise) {
 // ⚙️ MOTOR MULTI-INSTÂNCIA BAILEYS
 // ============================================================================
 
-async function startInstance(instanceId, instanceName) {
+async function startInstance(instanceId, instanceName, preloadedUserId = null) {
     if (instanciasLigando.has(instanceId)) return; // Se já está ligando, ignora
     instanciasLigando.add(instanceId);
 
     console.log(`[MANAGER] 🚀 Ligando SDR: ${instanceName}`);
 
-    // Busca o dono da instância para emitir eventos apenas para ele
-    const { data: instData } = await supabase.from('instances').select('user_id, proxy_url').eq('id', instanceId).maybeSingle();
-    const instanceUserId = instData?.user_id || null;
+    // ─── CASCATA DE RESOLUÇÃO DO USER_ID ────────────────────────────────────
+    // Nível 1: parâmetro direto (criação nova — zero latência, sem race condition)
+    let instanceUserId = preloadedUserId || null;
+
+    // Nível 2: Redis (reconexões — sub-milissegundo, sem tocar no Supabase)
+    if (!instanceUserId) {
+        instanceUserId = await getOwnerFromRedis(redisConnection, instanceId);
+        if (instanceUserId) console.log(`⚡ [CACHE] userId de ${instanceName} resolvido via Redis.`);
+    }
+
+    // Nível 3: Supabase (fallback + busca proxy_url que não está cacheado)
+    const { data: instData } = await supabase
+        .from('instances')
+        .select('user_id, proxy_url')
+        .eq('id', instanceId)
+        .maybeSingle();
+
     const proxyUrl = instData?.proxy_url || process.env.PROXY_URL || null;
+
+    if (!instanceUserId && instData?.user_id) {
+        instanceUserId = instData.user_id;
+        await saveOwnerToRedis(redisConnection, instanceId, instanceUserId); // cacheia para próximas reconexões
+        console.log(`💾 [CACHE] userId de ${instanceName} resolvido via Supabase e salvo no Redis.`);
+    }
+
+    // Sem user_id após as 3 tentativas → aborta para não vazar dados entre tenants
+    if (!instanceUserId) {
+        console.error(`🚨 [CRÍTICO] Instância ${instanceId} (${instanceName}) sem user_id após Parâmetro→Redis→Supabase. Abortando.`);
+        instanciasLigando.delete(instanceId);
+        return;
+    }
+    // ────────────────────────────────────────────────────────────────────────
+
     const agent = proxyUrl ? new HttpsProxyAgent(proxyUrl) : undefined;
     if (proxyUrl) console.log(`🌐 [PROXY] ${instanceName} conectando via proxy: ${proxyUrl.replace(/:[^:@]+@/, ':***@')}`);
 
@@ -1239,6 +1269,17 @@ async function startInstance(instanceId, instanceName) {
             // 📝 Extrai o texto da mensagem do cliente
             const texto = msg.message.conversation || msg.message.extendedTextMessage?.text || "";
             if (!texto) continue;
+
+            // 🛡️ DEDUP: Baileys multi-device pode reenviar o mesmo evento várias vezes
+            const msgId = msg.key?.id;
+            if (msgId) {
+                if (mensagensJaProcessadas.has(msgId)) {
+                    console.log(`⚠️ [DEDUP] Mensagem ${msgId} já processada. Ignorando duplicata do Baileys.`);
+                    continue;
+                }
+                mensagensJaProcessadas.set(msgId, Date.now());
+                setTimeout(() => mensagensJaProcessadas.delete(msgId), 300000); // TTL 5min
+            }
 
             // 🗄️ LÓGICA DA GAVETA (OUVIDO PACIENTE)
             // Chave composta instance:jid para nunca misturar mensagens de chips diferentes
@@ -1500,11 +1541,12 @@ if (matchClima) updates.sentiment = matchClima[1].toLowerCase();
             const tempoBase = Math.min(trecho.length * multiplicador + 3000, 12000);
 
             await delay(tempoBase);
+            // Salva no banco ANTES de enviar: se o job retentar, o anti-loop de 3 msgs bloqueia reenvio
+            await db.saveMessage(lead.whatsapp_id, 'assistant', trecho, instanceId);
             const enviado = await enviarMensagemIA(sock, remoteJid, { text: trecho });
 
             if (enviado) {
                 console.log(`✅ [ENVIO ${i + 1}/${mensagensSplit.length}] Balão entregue: "${trecho.substring(0, 80)}..."`);
-                await db.saveMessage(lead.whatsapp_id, 'assistant', trecho, instanceId);
 
                 // 🕒 MARCADOR DE LINK: Carimba o banco se o Calendly foi enviado
                 if (trecho.includes('calendly.com')) {
@@ -3008,6 +3050,12 @@ if (!promptResolvido) {
         // Nenhum telefone na mensagem — closer pergunta pelo contato do decisor
         console.log(`⚠️ [REPASSE] Nenhum telefone extraído para ${lead.name}. Closer assumindo para solicitar o contato...`);
         resposta = await closerAgent.gerarRespostaCloser(historico, lead, promptResolvido, 'REPASSE', { calendlyLink: instanceData?.calendly_link, instanceType: instanceData?.product_type || 'solar' });
+        // Pausa o lead para evitar loop: mesmo email chegando de novo não dispara nova resposta
+        await supabase.from('leads').update({
+            is_paused: true,
+            internal_notes: `Aguardando telefone do decisor — email recebido: "${ultimaMsg.substring(0, 80)}"`
+        }).eq('id', lead.id);
+        console.log(`⏸️ [REPASSE] Lead ${lead.name} pausado. Aguardando retorno com telefone.`);
     }
 
 } else {
@@ -3093,9 +3141,15 @@ async function redistribuirLeadsOrfaos() {
 
         // 4. Distribuição Cirúrgica
         for (const lead of orfaos) {
+            // Lead sem dono definido não pode ser redistribuído — evita cross-tenant com chipsPorUsuario[null]
+            if (!lead.user_id) {
+                console.warn(`⚠️ [REDISTRIBUIÇÃO] Lead ${lead.id} sem user_id ignorado. Não redistribuir.`);
+                continue;
+            }
+
             const chipsDoDono = chipsPorUsuario[lead.user_id];
-            
-            // Se a empresa desse lead não tem NENHUM chip online agora, ignora. 
+
+            // Se a empresa desse lead não tem NENHUM chip online agora, ignora.
             // O lead fica seguro aguardando algum chip dele mesmo voltar.
             if (!chipsDoDono || chipsDoDono.length === 0) continue;
 
@@ -3312,7 +3366,8 @@ enviarAlerta("🎊 REUNIÃO AGENDADA!", `Lead: ${lead.name}\nData: ${new Date(da
             .single();
 
         if (data) {
-            await startInstance(data.id, data.name);
+            await saveOwnerToRedis(redisConnection, data.id, userId); // cacheia antes de ligar o Baileys
+            await startInstance(data.id, data.name, userId);          // userId via parâmetro — sem race condition
             processarFilaDeAtaque(data.id);
         }
         return data;
