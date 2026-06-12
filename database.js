@@ -205,17 +205,16 @@ if (!estadoFinal && phonePuro) {
     },
 
     getHistory: async (zapId, instanceId) => {
-        // Busca as 20 mensagens mais RECENTES (desc)
+        // Filtra apenas por zapId — não por instanceId — para que o histórico
+        // seja preservado quando o lead muda de chip (redistribuição).
         const { data, error } = await supabase
             .from('messages')
             .select('role, content')
             .eq('whatsapp_id', zapId)
-            .eq('instance_id', instanceId)
             .order('created_at', { ascending: false })
             .limit(20);
-        
+
         if (error) return [];
-        // Inverte o array para que a IA leia na ordem cronológica correta: [velha -> nova]
         return data.reverse();
     },
 
