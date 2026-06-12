@@ -26,7 +26,14 @@ async function classificarMensagem(ultimaMensagemLead) {
         /\b(para (suporte|dúvidas|informações|compras|vendas|financeiro|cancelamento), (acesse|clique|vá|visite))\b/i.test(ultimaMensagemLead) ||
         /\b(este (número|canal|contato) (não recebe|não aceita) (respostas|mensagens))\b/i.test(ultimaMensagemLead) ||
         /\b(powered by|via (zendesk|intercom|freshdesk|hubspot|salesforce|rdstation))\b/i.test(ultimaMensagemLead) ||
-        /\u{1F916}|\u{1F4AC}/u.test(ultimaMensagemLead) && /\b(automático|bot|virtual)\b/i.test(ultimaMensagemLead)
+        /\u{1F916}|\u{1F4AC}/u.test(ultimaMensagemLead) && /\b(automático|bot|virtual)\b/i.test(ultimaMensagemLead) ||
+        // Padrões de bots imobiliários / chatbots comerciais
+        /j[aá]\s+recebi\s+(?:sua|a\s+sua)\s+mensagem/i.test(ultimaMensagemLead) ||
+        /logo\s+retorno\s+com\s+as\s+informa/i.test(ultimaMensagemLead) ||
+        /seja\s+bem[\s-]?vind[oa]\s+[aà]/i.test(ultimaMensagemLead) ||
+        /agradecemos\s+(?:o\s+)?(?:seu|sua)?\s*contato/i.test(ultimaMensagemLead) ||
+        /em\s+breve\s+(?:um\s+de\s+)?(?:nosso|nossa)s?\s+(?:consultor|atendente|corretor|especialista)/i.test(ultimaMensagemLead) ||
+        /logo\s+(?:um\s+de\s+)?(?:nosso|nossa)s?\s+(?:consultor|atendente|corretor)\s+entr/i.test(ultimaMensagemLead)
     );
     if (padraoRobo) {
         console.log("🤖 [ROTEADOR] Autoresposta/robô detectado. Bypass para ROBO.");

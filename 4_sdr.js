@@ -477,13 +477,13 @@ async function verificarLoopZumbi(whatsappId, instanceId, textoAtual) {
 function detectarSinalHumano(texto) {
     if (!texto) return false;
     const t = texto.trim();
+    // "aqui é" removido: bots de imobiliária usam "Aqui é a Francieli" que falseava positivo.
+    // "resposta longa" e "emoção" removidos: bots modernos geram respostas longas com !
     return (
-        /\b(eu|minha?|meu|noss[ao]|nossa\s+empresa|minha\s+empresa|aqui\s+(?:na|é))\b/i.test(t) ||
+        /\b(eu|minha?|meu|noss[ao]|nossa\s+empresa|minha\s+empresa)\b/i.test(t) ||
         /\b(tô|tá|num|tava|tamo|né|cara|ó|oxe|poxa|caramba|rapaz|véi)\b/i.test(t) || // gírias BR
         /R\$\s*[\d.,]+/.test(t) ||           // menciona valor monetário
-        /\d{3,}/.test(t) ||                  // número concreto (consumo kWh, CNPJ parcial etc.)
-        t.split(/\s+/).length >= 8 ||        // resposta longa — humanos explicam
-        (/[!?]/.test(t) && t.length > 25)    // emoção com substância
+        /\d{4,}/.test(t)                     // número concreto longo (kWh, CNPJ, CEP etc.)
     );
 }
 
@@ -568,6 +568,15 @@ function analisarIntencaoRegex(texto) {
         // Fora do horário
         /(?:n[ãa]o\s+(?:é|e)\s+poss[ií]vel\s+atend|fora\s+do\s+hor[aá]rio)/i,
         /n[ãa]o\s+(?:estamos\s+)?(?:conseguindo\s+)?(?:atender|te\s+atender)\s+no\s+momento/i,
+
+        // Auto-resposta de imobiliária / chatbot comercial (bots que escapam dos padrões genéricos)
+        /j[aá]\s+recebi\s+(?:sua|a\s+sua)\s+mensagem/i,          // "Já recebi sua mensagem e logo retorno"
+        /logo\s+retorno\s+com\s+as\s+informa[çc][oõ]es/i,         // "logo retorno com as informações"
+        /assistente\s+virtual/i,                                   // "sou o assistente virtual"
+        /em\s+breve\s+(?:um\s+de\s+)?(?:nosso|nossa)s?\s+(?:consultor|atendente|corretor|especialista)/i, // "em breve um de nossos consultores"
+        /logo\s+(?:um\s+de\s+)?(?:nosso|nossa)s?\s+(?:consultor|atendente|corretor)\s+entr/i, // "logo um consultor entrará"
+        /agradecemos\s+(?:o\s+)?(?:seu|sua)?\s*contato/i,         // "Agradecemos o contato" (hard — always bot)
+        /seja\s+bem[\s-]?vind[oa]\s+[aà]/i,                       // "Seja bem-vindo(a) à [Empresa]"
     ];
 
     for (const padrao of PADROES_HARD) {
@@ -1750,7 +1759,9 @@ if (fromMe) {
         console.log(`🔍 [ANÁLISE] Lendo mensagem de ${lead.name}: "${texto.substring(0, 50)}..."`);
 
         // 🧟 GUARD: flood de mensagens idênticas antes do is_paused propagar no banco
-        if (await verificarLoopZumbi(remoteJid, instanceId, texto)) {
+        // Usa lead.whatsapp_id (JID limpo) — remoteJid pode ter ":11" (multi-device) que
+        // não existe na tabela messages, causando 0 resultados e loop infinito.
+        if (await verificarLoopZumbi(lead.whatsapp_id, instanceId, texto)) {
             console.log(`🧟 [LOOP ZUMBI] Flood detectado para ${lead.name}. Pausando e alertando.`);
             await supabase.from('leads').update({
                 is_paused: true,
@@ -3004,9 +3015,21 @@ if (!promptResolvido) {
     return;
 }
         // -----------------------------------------------------------------------------
+        // 🛡️ ANTI-LOOP: Se a IA já mandou 15+ mensagens sem agendar, a conversa está em loop
+        // (bot sofisticado ou lead que ignora). Encerra antes de chamar qualquer agente.
+        const totalMsgsIA = historico.filter(m => m.role === 'assistant').length;
+        if (totalMsgsIA >= 15 && lead.status !== 'booked') {
+            console.log(`🛑 [ANTI-LOOP] ${lead.name}: ${totalMsgsIA} msgs da IA sem conversão. Marcando como inválido.`);
+            await supabase.from('leads').update({
+                status: 'invalid',
+                is_paused: true,
+                internal_notes: `Anti-loop: ${totalMsgsIA} respostas sem conversão em ${new Date().toLocaleString('pt-BR')}`
+            }).eq('id', lead.id);
+            return;
+        }
 
         let resposta;
-        
+
         // 4.2. Delegação aos Especialistas (Elite Squad)
         if (intencao === 'ROBO') {
     console.log(`🤖 [WORKER-IA] Robô/autoresposta detectado para ${lead.name}. Pausando lead sem responder.`);
