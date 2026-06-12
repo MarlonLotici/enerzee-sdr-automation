@@ -130,6 +130,15 @@ function limparNomeEmpresa(nomeOriginal) {
     return nomeLimpo;
 }
 
+// Resolve variações inline dentro de templates: "{Oi|Olá|Opa}" → escolha aleatória
+// Permite templates mais ricos sem multiplicar o array de variações no Supabase
+function resolverSpintax(texto) {
+    return texto.replace(/\{([^}]+)\}/g, (_, opcoes) => {
+        const lista = opcoes.split('|');
+        return lista[Math.floor(Math.random() * lista.length)];
+    });
+}
+
 // 🎯 NOVA FUNÇÃO: Chute de conta baseado em Capital Social e Nicho
 function calcularAncoraDinamica(lead) {
     const capital = lead.capital_social_numeric || 0;
@@ -2222,7 +2231,7 @@ const saudacao = primeiroNomeDono ? `Oi ${primeiroNomeDono}` : 'Oi, tudo bem?';
 const bairroLead = lead.bairro || lead.cidade || 'sua região';
 
 // Substitui variáveis nos templates vindos do Supabase
-const substituirVarsAbertura = (tpl) => tpl
+const substituirVarsAbertura = (tpl) => resolverSpintax(tpl
     .replace(/\$\{saudacao\}/g, saudacao)
     .replace(/\$\{nomeDono\}/g, primeiroNomeDono || 'você')
     .replace(/\$\{nomeEmpresa\}/g, nomeEmpresa)
@@ -2230,7 +2239,7 @@ const substituirVarsAbertura = (tpl) => tpl
     .replace(/\$\{bairroLead\}/g, bairroLead)
     .replace(/\$\{origem\}/g, lead.origin_company_name || '')
     .replace(/\s*--\s*/g, ', ') // remove em-dash do template antes de enviar
-    .trim();
+    .trim());
 
 // Tenta usar templates do Supabase; cai no hardcoded se não houver
 const tplsInstancia = instanceData?.opening_templates;
@@ -3430,5 +3439,52 @@ enviarAlerta("🎊 REUNIÃO AGENDADA!", `Lead: ${lead.name}\nData: ${new Date(da
 
         // 6. Inicia nova sessão — sem credenciais no Redis, Baileys vai gerar QR code
         startInstance(instanceId, name);
+    },
+
+    getDiagnosticoChip: async (instanceId) => {
+        const regras = await getRegrasEmCache(instanceId);
+        const sessao = sessions.get(instanceId);
+        const semaforo = semaforoChips.get(instanceId);
+        const motorRodando = motoresEmExecucao.has(instanceId);
+        const contadorHoje = await db.getDailyContactCount(instanceId);
+        const limite = regras?.daily_limit || 0;
+
+        const { count: leadsDisponiveis } = await supabase
+            .from('leads')
+            .select('*', { count: 'exact', head: true })
+            .eq('instance_id', instanceId)
+            .eq('status', 'new');
+
+        const agora = new Date(new Date().toLocaleString('en-US', { timeZone: 'America/Sao_Paulo' }));
+        const hora = agora.getHours();
+        const diaSemana = agora.getDay();
+        const dentroDaJanela = diaSemana >= 1 && diaSemana <= 5 && hora >= 8 && hora < 18;
+
+        return {
+            instanceId,
+            nome: regras?.name || instanceId,
+            causas: {
+                motor_travado: motorRodando,
+                status_bd_desconectado: regras?.whatsapp_status !== 'CONNECTED',
+                socket_nao_pronto: !sessao?.ready,
+                fora_da_janela_horario: !dentroDaJanela,
+                limite_diario_atingido: contadorHoje >= limite,
+                sem_leads_disponiveis: leadsDisponiveis === 0,
+            },
+            dados: {
+                whatsapp_status_bd: regras?.whatsapp_status,
+                socket_ready: sessao?.ready ?? false,
+                semaforo_ocupado: semaforo?.ocupado ?? false,
+                ultimo_disparo: semaforo?.ultimoDisparo
+                    ? new Date(semaforo.ultimoDisparo).toISOString()
+                    : null,
+                envios_hoje: contadorHoje,
+                limite_diario: limite,
+                leads_new_disponiveis: leadsDisponiveis ?? 0,
+                hora_brt: hora,
+                dia_semana: diaSemana,
+                dentro_janela_08_18: dentroDaJanela,
+            }
+        };
     }
 };

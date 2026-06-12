@@ -389,6 +389,23 @@ app.post('/webhook/calendly', express.json(), async (req, res) => {
     }
 });
 
+// ============================================================
+// 🔍 DIAGNÓSTICO DE CHIP FANTASMA
+// ============================================================
+app.get('/api/debug-chip/:instanceId', autenticarMiddleware, async (req, res) => {
+    try {
+        if (!sdr?.getDiagnosticoChip)
+            return res.status(503).json({ error: 'Motor SDR não inicializado.' });
+
+        const diagnostico = await sdr.getDiagnosticoChip(req.params.instanceId);
+        const temProblema = Object.values(diagnostico.causas).some(Boolean);
+
+        res.json({ ok: !temProblema, diagnostico });
+    } catch (err) {
+        res.status(500).json({ error: err.message });
+    }
+});
+
 // Entrega o Frontend (Sempre depois das rotas de API)
 app.get(/.*/, (req, res) => {
     res.sendFile(path.join(__dirname, 'frontend', 'dist', 'index.html'));
