@@ -1154,6 +1154,8 @@ async function startInstance(instanceId, instanceName, preloadedUserId = null) {
             instanciasLigando.delete(instanceId);
             await db.updateInstanceStatus(instanceId, 'CONNECTED');
             if (ioSocket && instanceUserId) ioSocket.to(`user:${instanceUserId}`).emit('whatsapp_status', { status: 'CONNECTED', instanceId });
+            // Realoca imediatamente leads órfãos do mesmo tenant para este chip
+            setTimeout(() => redistribuirLeadsOrfaos(), 3000);
         }
 
        if (connection === 'close') {
@@ -3149,7 +3151,6 @@ async function redistribuirLeadsOrfaos() {
         const idsDesconectados = instancias
             .filter(i => i.whatsapp_status !== 'CONNECTED')
             .map(i => i.id);
-        if (!idsDesconectados.length) return;
 
         // 2. Agrupa os chips conectados por usuário (O "Muro" entre empresas)
         const chipsPorUsuario = {};
@@ -3163,12 +3164,20 @@ async function redistribuirLeadsOrfaos() {
         // Contador independente por usuário para o Round-Robin justo
         const contadoresPorUsuario = {};
 
-        // 3. Busca os leads órfãos trazendo o DONO (user_id)
-        const { data: orfaos } = await supabase
+        // 3. Busca leads órfãos: sem chip (instance_id IS NULL) OU de chips desconectados
+        // Separa as duas condições para evitar query inválida quando idsDesconectados está vazio
+        let orfaosQuery = supabase
             .from('leads')
             .select('id, user_id')
-            .eq('status', 'new')
-            .or(`instance_id.in.(${idsDesconectados.join(',')}),instance_id.is.null`);
+            .eq('status', 'new');
+
+        if (idsDesconectados.length > 0) {
+            orfaosQuery = orfaosQuery.or(`instance_id.in.(${idsDesconectados.join(',')}),instance_id.is.null`);
+        } else {
+            orfaosQuery = orfaosQuery.is('instance_id', null);
+        }
+
+        const { data: orfaos } = await orfaosQuery;
         if (!orfaos?.length) return;
 
         console.log(`♻️ [REDISTRIBUIÇÃO] ${orfaos.length} leads órfãos detectados. Isolando por Tenant...`);
@@ -3253,9 +3262,9 @@ module.exports = {
             console.log(`🔓 [STARTUP] ${travados.length} leads destravados de status "reservado" → "new"`);
         }
 
-        const insts = await db.getActiveInstances(); 
-        for (const i of insts) { 
-            await startInstance(i.id, i.name); 
+        const insts = await db.getActiveInstances();
+        for (const i of insts) {
+            await startInstance(i.id, i.name, i.user_id);
             await delay(3000); 
             
             // 🚀 ARRANQUE INICIAL: Liga a turbina para este chip!
