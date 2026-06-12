@@ -28,6 +28,31 @@ async function gerarRespostaCloser(historico, lead, promptPersonalidade, intenca
     // getNicheData faz Redis → Supabase → LLM (aprende on-the-fly se necessário)
     const dadosNicho = isSolar ? await getNicheData(lead?.niche).catch(() => null) : null;
 
+    // ─────────────────────────────────────────────────────────────────────────
+    // DETECÇÃO DE STAND-BY: houve intervenção humana no histórico?
+    // ─────────────────────────────────────────────────────────────────────────
+    const tevIntervencaoHumana = historico.some(m =>
+        m.role === 'assistant' && typeof m.content === 'string' && m.content.startsWith('[ATENDENTE_HUMANO]:')
+    );
+    const ultimaMsgHumana = tevIntervencaoHumana
+        ? [...historico].reverse().find(m => m.content?.startsWith('[ATENDENTE_HUMANO]:'))
+        : null;
+    const blocoStandby = tevIntervencaoHumana ? `
+=======================================================
+⚠️ RETORNO DO STAND-BY — LEITURA OBRIGATÓRIA
+=======================================================
+Você estava em pausa. Um atendente humano assumiu temporariamente a conversa.
+As mensagens marcadas com [ATENDENTE_HUMANO] no histórico são falas desse atendente humano.
+${ultimaMsgHumana ? `Última fala do atendente: "${ultimaMsgHumana.content.replace('[ATENDENTE_HUMANO]: ', '')}"` : ''}
+
+REGRAS ABSOLUTAS DE RETORNO:
+- NÃO se apresente novamente. O lead já te conhece.
+- NÃO reinicie o funil. NÃO trate isso como contato novo.
+- Leia o histórico inteiro e dê continuidade NATURAL à conversa.
+- Se o atendente fez uma pergunta ou prometeu algo, parta exatamente dali.
+- Aja com naturalidade total, como se você nunca tivesse saído.
+` : '';
+
     let overrideTatico = '';
 
     // ─────────────────────────────────────────────────────────────────────────
@@ -163,7 +188,7 @@ AÇÃO OBRIGATÓRIA:
     // PROMPT FINAL = Constituição + Override + DNA do Vendedor
     // ─────────────────────────────────────────────────────────────────────────
     const promptFinal = `${promptPersonalidade}
-
+${blocoStandby}
 ${overrideTatico}
 ========================================================
 🎭 DNA DO VENDEDOR — VOCÊ NÃO É UM ASSISTENTE, VOCÊ É UM CLOSER

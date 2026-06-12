@@ -365,6 +365,7 @@ export default function ConversaList({ onSelect, activeId, socket, instances = [
                         .from('messages')
                         .select('role, content, created_at')
                         .eq('whatsapp_id', lead.whatsapp_id)
+                        .eq('instance_id', lead.instance_id)
                         .order('created_at', { ascending: false })
                         .limit(1)
 
@@ -379,7 +380,7 @@ export default function ConversaList({ onSelect, activeId, socket, instances = [
         } finally {
             setLoading(false)
         }
-    }, [])
+    }, [instances])
 
     useEffect(() => {
         fetchConversas()

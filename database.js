@@ -9,6 +9,22 @@ require('dotenv').config();
 // Inicialização com a Service Role Key para ignorar travas de RLS no backend
 const supabase = createClient(process.env.SUPABASE_URL, process.env.SUPABASE_KEY);
 
+// Cache instanceId → user_id para evitar lookup repetido por mensagem
+const _instanciaUserIdCache = new Map();
+
+async function _resolverUserId(instanceId) {
+    if (!instanceId) return null;
+    if (_instanciaUserIdCache.has(instanceId)) return _instanciaUserIdCache.get(instanceId);
+    const { data } = await supabase
+        .from('instances')
+        .select('user_id')
+        .eq('id', instanceId)
+        .maybeSingle();
+    const uid = data?.user_id || null;
+    _instanciaUserIdCache.set(instanceId, uid);
+    return uid;
+}
+
 const db = {
     // ========================================================================
     // 🏢 GESTÃO DE INSTÂNCIAS (CHIPS/CLIENTES DO SAAS)
@@ -171,17 +187,21 @@ if (!estadoFinal && phonePuro) {
     // 💬 GESTÃO DE MENSAGENS (MEMÓRIA NEURAL)
     // ========================================================================
 
-    saveMessage: async (zapId, role, content, instanceId) => {
+    saveMessage: async (zapId, role, content, instanceId, userId = null) => {
+        // Resolve user_id via cache lazy — necessário para o RLS do frontend enxergar as mensagens
+        const resolvedUserId = userId || await _resolverUserId(instanceId);
+
         const { error } = await supabase
             .from('messages')
-            .insert([{ 
-                whatsapp_id: zapId, 
-                role: role, 
+            .insert([{
+                whatsapp_id: zapId,
+                role: role,
                 content: content,
-                instance_id: instanceId 
+                instance_id: instanceId,
+                user_id: resolvedUserId
             }]);
-        
-        if (error) console.error(`[DB] Erro ao salvar msg de ${zapId}:`, error.message);
+
+        if (error) console.error(`[DB] Erro ao salvar msg de ${zapId} [uid:${resolvedUserId}]:`, error.message);
     },
 
     getHistory: async (zapId, instanceId) => {

@@ -1472,7 +1472,8 @@ async function filtrarEEnviarResposta(sock, remoteJid, resposta, historico, lead
     }
 
     // ── 2. ATUALIZAÇÃO DE STATUS NO BANCO ──
-    let updates = {};
+    // last_contact_at sempre atualizado: mantém a ordenação do War Room correta após cada resposta da IA
+    let updates = { last_contact_at: new Date().toISOString() };
 if (matchEstagio) {
     const estagioParsed = parseInt(matchEstagio[1]);
     // 🛡️ Range válido: 0 a 5. Se a LLM alucinar 6, 7, 9, força no 5.
@@ -1489,10 +1490,8 @@ if (matchClima) updates.sentiment = matchClima[1].toLowerCase();
         updates.status = 'booked';
         updates.current_stage = 5;
     }
-    if (Object.keys(updates).length > 0) {
-        await supabase.from('leads').update(updates).eq('id', lead.id);
-        console.log(`📊 [FILTRO] Lead atualizado:`, updates);
-    }
+    await supabase.from('leads').update(updates).eq('id', lead.id);
+    console.log(`📊 [FILTRO] Lead atualizado:`, updates);
 
     // 🔕 ENCERRADO: pausa o lead após mensagem de encerramento ser enviada
     if (matchEncerrado) {
@@ -1721,7 +1720,8 @@ if (fromMe) {
     // Comportamento original: mensagem humana normal pausa a IA por 10 min
     console.log(`👤 [HUMANO] Você enviou uma mensagem para o lead. Pausando IA por 10 min.`);
     try {
-        await db.saveMessage(lead.whatsapp_id, 'assistant', texto, instanceId);
+        // 🧠 Salva como 'human_operator' (≠ 'assistant') para a IA saber que foi um humano
+        await db.saveMessage(lead.whatsapp_id, 'human_operator', texto, instanceId);
         await supabase.from('leads').update({ 
             is_paused: true, 
             last_human_interaction: new Date().toISOString() 
@@ -1957,12 +1957,15 @@ if (fromMe) {
         
         // 1. Salva a mensagem do usuário imediatamente para não perder contexto
         if (messageType !== 'audioMessage') {
-            await db.saveMessage(lead.whatsapp_id, 'user', texto, instanceId);
+            await db.saveMessage(lead.whatsapp_id, 'user', texto, instanceId, lead.user_id);
         }
-        // 2. Atualiza a temperatura do lead
+        // 2. Atualiza last_contact_at + temperatura do lead
+        // last_contact_at aqui garante que o War Room re-ordena quando o lead responde
+        const atualizacaoLead = { last_contact_at: new Date().toISOString() };
         if (lead.lead_temperature === 'cold' || !lead.lead_temperature) {
-            await supabase.from('leads').update({ lead_temperature: 'warm' }).eq('id', lead.id);
+            atualizacaoLead.lead_temperature = 'warm';
         }
+        await supabase.from('leads').update(atualizacaoLead).eq('id', lead.id);
 
         // 3. JOGA NA FILA DO REDIS (Delega o peso pro Worker)
         await filaMensagensIA.add('gerar_resposta', {
@@ -2843,7 +2846,10 @@ if (!histRaw || histRaw.length === 0) return;
 
     try {
         console.log(`🧠 [IA] Gerando resposta de recuperação para ${lead.name}...`);
-        const historico = histRaw.map(m => ({ role: m.role, content: m.content }));
+        const historico = histRaw.map(m => ({
+            role: m.role === 'human_operator' ? 'assistant' : m.role,
+            content: m.role === 'human_operator' ? `[ATENDENTE_HUMANO]: ${m.content}` : m.content
+        }));
         const instanceData = await getRegrasEmCache(instanceId);
         
         let resposta = await gerarRespostaIA(historico, lead, instanceData);
@@ -2882,7 +2888,11 @@ if (funilEncerrado) {
 
         // 3. Monta o contexto pesado
         const histRaw = await db.getHistory(whatsappId, instanceId);
-        const historico = histRaw.map(m => ({ role: m.role, content: m.content }));
+        // 🧠 human_operator → assistant + prefixo visual para o LLM reconhecer stand-by
+        const historico = histRaw.map(m => ({
+            role: m.role === 'human_operator' ? 'assistant' : m.role,
+            content: m.role === 'human_operator' ? `[ATENDENTE_HUMANO]: ${m.content}` : m.content
+        }));
         const instanceData = await getRegrasEmCache(instanceId);
 
 // 🚀 Executa os 3 agentes EM PARALELO com SKIP INTELIGENTE
@@ -2942,8 +2952,26 @@ if (!userId) {
     return;
 }
 
-const { data: brain } = await supabase.from('tenant_prompts').select('system_prompt').eq('user_id', userId).maybeSingle();
-const promptBase = brain?.system_prompt;
+const { data: brain } = await supabase
+    .from('tenant_prompts')
+    .select('system_prompt, qualifier_prompt, closer_prompt, objection_prompt')
+    .eq('user_id', userId)
+    .maybeSingle();
+
+// Roteamento de prompt: seleciona a constituição certa para o modo do lead.
+// Fallback para system_prompt garante compatibilidade com tenants sem migração.
+let promptBase;
+if (intencao === 'COMPRA') {
+    promptBase = brain?.closer_prompt || brain?.system_prompt;
+    console.log(`🎯 [ROUTER-PROMPT] Intenção COMPRA → closer_prompt ${brain?.closer_prompt ? '✅' : '⚠️ fallback system_prompt'}`);
+} else if (intencao === 'OBJECAO') {
+    promptBase = brain?.objection_prompt || brain?.system_prompt;
+    console.log(`🛡️ [ROUTER-PROMPT] Intenção OBJECAO → objection_prompt ${brain?.objection_prompt ? '✅' : '⚠️ fallback system_prompt'}`);
+} else {
+    // DUVIDA, CONTINUAR, LIXO, REPASSE
+    promptBase = brain?.qualifier_prompt || brain?.system_prompt;
+    console.log(`🔍 [ROUTER-PROMPT] Intenção ${intencao} → qualifier_prompt ${brain?.qualifier_prompt ? '✅' : '⚠️ fallback system_prompt'}`);
+}
 
 if (!promptBase || promptBase.trim().length < 100) {
     console.error(`❌ [WORKER] Prompt não configurado para user_id ${userId}. Abortando.`);
