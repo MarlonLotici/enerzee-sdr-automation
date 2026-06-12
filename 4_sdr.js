@@ -3399,10 +3399,10 @@ enviarAlerta("🎊 REUNIÃO AGENDADA!", `Lead: ${lead.name}\nData: ${new Date(da
         const productType = profile?.default_product_type || 'solar';
         console.log(`🏷️ [INSTÂNCIA] Criando chip "${n}" para user ${userId} com product_type="${productType}"`);
 
-        const { data } = await supabase
+        const { data, error: errInsert } = await supabase
             .from('instances')
             .insert([{
-                name: n, owner_phone: t, user_id: userId, product_type: productType,
+                name: n, owner_phone: t || null, user_id: userId, product_type: productType,
                 opening_templates: profile?.opening_templates || null,
                 agent_name: profile?.default_agent_name || null,
                 company_name: profile?.default_company_name || null,
@@ -3411,9 +3411,14 @@ enviarAlerta("🎊 REUNIÃO AGENDADA!", `Lead: ${lead.name}\nData: ${new Date(da
             .select()
             .single();
 
+        if (errInsert) {
+            console.error(`❌ [INSTÂNCIA] Falha ao criar chip "${n}" para user ${userId}:`, errInsert.message);
+            return null;
+        }
+
         if (data) {
-            await saveOwnerToRedis(redisConnection, data.id, userId); // cacheia antes de ligar o Baileys
-            await startInstance(data.id, data.name, userId);          // userId via parâmetro — sem race condition
+            await saveOwnerToRedis(redisConnection, data.id, userId);
+            await startInstance(data.id, data.name, userId);
             processarFilaDeAtaque(data.id);
         }
         return data;

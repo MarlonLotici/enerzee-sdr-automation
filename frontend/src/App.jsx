@@ -1196,7 +1196,7 @@ return (
         <Button
             onClick={() => {
                 const nome = prompt("Nome da nova unidade (Ex: Chip Claro 02):");
-                if (nome) socket.emit('create_instance', { name: nome });
+                if (nome) socket.emit('create_instance', { name: nome, phone: null });
             }}
             className="flex-1 h-8 text-[9px] uppercase font-black bg-amber-600/15 text-amber-400 border border-amber-500/25 hover:bg-amber-600/30 rounded-lg"
         >

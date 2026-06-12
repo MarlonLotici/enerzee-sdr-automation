@@ -129,7 +129,10 @@ io.on('connection', (socket) => {
     });
 
     socket.on('create_instance', async (data) => {
-        await sdr.criarNovaInstancia(data.name, data.phone, socket.user.id);
+        const resultado = await sdr.criarNovaInstancia(data.name, data.phone, socket.user.id);
+        if (!resultado) {
+            socket.emit('notification', '❌ Falha ao criar chip. Verifique os logs do Railway.');
+        }
         await atualizarListaInstancias();
     });
 
