@@ -1530,6 +1530,7 @@ if (matchClima) updates.sentiment = matchClima[1].toLowerCase();
                               (estagioNaResposta >= 2 && estagioNaResposta <= 3);
     // Estágio 2/3 → sempre áudio (máx 2 por conversa). Outros: lead enviou áudio OU 25% aleatório.
     const usarTTS = audiosJaEnviados < 2 && !temCalendly && (leadEnviouAudio || estagioEmocional || Math.random() < 0.25);
+    console.log(`🎙️ [TTS-DECISAO] usarTTS=${usarTTS} | audiosJá=${audiosJaEnviados} | calendly=${temCalendly} | leadAudio=${leadEnviouAudio} | emocional=${estagioEmocional} | estágio=${estagioNaResposta}`);
 
     for (let i = 0; i < mensagensSplit.length; i++) {
         const trecho = mensagensSplit[i];
