@@ -14,10 +14,9 @@ const qwenTTS = new OpenAI({
     baseURL: 'https://dashscope.aliyuncs.com/compatible-mode/v1',
 });
 
-// Voz padrão — configure via env var QWEN_VOICE_ID
-// Use Voice-Design do DashScope para criar a voz descrevendo por texto,
-// ou Voice-Enrollment com 5s de áudio. O ID retornado vai aqui.
-const VOZ_PADRAO = process.env.QWEN_VOICE_ID || 'longxiaochun'; // fallback: voz neural masculina
+// Voz padrão — configure via env var QWEN_VOICE_ID após rodar create_voice.js
+// Fallback: longxiaochun_v2 (voz feminina neural CosyVoice, funciona em pt-BR)
+const VOZ_PADRAO = process.env.QWEN_VOICE_ID || 'longxiaochun_v2';
 
 async function gerarAudioTTS(texto, voz = null) {
     if (!process.env.QWEN_API_KEY) throw new Error('[TTS] QWEN_API_KEY não configurada.');
@@ -37,9 +36,9 @@ async function gerarAudioTTS(texto, voz = null) {
     if (!textoParaAudio) throw new Error('[TTS] Texto vazio após limpeza.');
 
     try {
-        // 1. Gera o MP3 via Qwen3-TTS-Flash (latência ~97ms para o primeiro pacote)
+        // 1. Gera o MP3 via CosyVoice (suporta vozes customizadas criadas com create_voice.js)
         const mp3Response = await qwenTTS.audio.speech.create({
-            model: 'qwen3-tts-flash',
+            model: 'cosyvoice-v3.5-plus',
             voice: vozFinal,
             input: textoParaAudio,
         });
