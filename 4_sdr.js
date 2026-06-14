@@ -1163,8 +1163,14 @@ async function startInstance(instanceId, instanceName, preloadedUserId = null) {
             instanciasLigando.delete(instanceId);
             await db.updateInstanceStatus(instanceId, 'CONNECTED');
             if (ioSocket && instanceUserId) ioSocket.to(`user:${instanceUserId}`).emit('whatsapp_status', { status: 'CONNECTED', instanceId });
-            // Realoca imediatamente leads órfãos do mesmo tenant para este chip
+            // Realoca leads órfãos do mesmo tenant para este chip
             setTimeout(() => redistribuirLeadsOrfaos(), 3000);
+            // Liga o motor de ataque deste chip se ainda não estiver rodando
+            // Cobre o caso de chips adicionados dinamicamente via painel (não estavam no initMultiTenancy)
+            if (!motoresEmExecucao.has(instanceId)) {
+                console.log(`🚀 [CHIP NOVO] Motor de ataque iniciado automaticamente para ${instanceName}`);
+                setTimeout(() => processarFilaDeAtaque(instanceId), 5000);
+            }
         }
 
        if (connection === 'close') {
@@ -1178,7 +1184,13 @@ async function startInstance(instanceId, instanceName, preloadedUserId = null) {
             sessions.set(instanceId, { sock, ready: false, userId: instanceUserId });
             instanciasLigando.delete(instanceId);
             const reason = (lastDisconnect?.error)?.output?.statusCode;
-        
+
+            // Notifica frontend imediatamente (sem esperar o DB)
+            if (ioSocket && instanceUserId) ioSocket.to(`user:${instanceUserId}`).emit('whatsapp_status', { status: 'DISCONNECTED', instanceId });
+            // Move leads 'new' deste chip para outros chips saudáveis do mesmo tenant
+            // Não espera o DB.updateStatus — usa sessions Map como fonte de verdade (já atualizado acima)
+            setTimeout(() => redistribuirLeadsOrfaos(), 1500);
+
             // Avisa no Discord (exceto se for deslogado/rejeitado pela Meta)
             if (reason !== DisconnectReason.loggedOut && reason !== 403 && reason !== 401) {
                 enviarAlerta("🔴 CHIP OFF-LINE", `O chip ${instanceName} caiu. Código do erro: ${reason}`, 15158332);
@@ -3168,11 +3180,19 @@ async function redistribuirLeadsOrfaos() {
             .select('id, name, whatsapp_status, user_id');
         if (!instancias?.length) return;
 
-        const conectados = instancias.filter(i => i.whatsapp_status === 'CONNECTED');
+        // Usa sessions Map como fonte de verdade live — evita race condition
+        // entre o DB.updateStatus e a redistribuição chamada no disconnect
+        const conectados = instancias.filter(i => {
+            const sessao = sessions.get(i.id);
+            return sessao?.ready === true;
+        });
         if (!conectados.length) return;
 
         const idsDesconectados = instancias
-            .filter(i => i.whatsapp_status !== 'CONNECTED')
+            .filter(i => {
+                const sessao = sessions.get(i.id);
+                return !sessao || sessao.ready !== true;
+            })
             .map(i => i.id);
 
         // 2. Agrupa os chips conectados por usuário (O "Muro" entre empresas)
