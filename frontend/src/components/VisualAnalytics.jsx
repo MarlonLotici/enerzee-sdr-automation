@@ -415,25 +415,27 @@ export default function VisualAnalytics() {
 
             const dateFrom = getDateFrom(periodo)
 
+            const orFilter = `instance_id.in.(${instIds.join(',')}),user_id.eq.${uid}`
+
             let leadsQ = supabase
                 .from('leads')
                 .select('id, status, niche, created_at, last_contact_at, instance_id, capital_social_numeric, current_stage, lead_temperature, opening_template, last_seen_at, calendly_booked')
-                .in('instance_id', instIds)
+                .or(orFilter)
                 .order('current_stage', { ascending: false })
                 .limit(10000)
             if (dateFrom) leadsQ = leadsQ.gte('created_at', dateFrom)
 
-            let countQ = supabase.from('leads').select('*', { count: 'exact', head: true }).in('instance_id', instIds)
+            let countQ = supabase.from('leads').select('*', { count: 'exact', head: true }).or(orFilter)
             if (dateFrom) countQ = countQ.gte('created_at', dateFrom)
 
+            // Agendamentos: sem filtro de data — são conversões acumuladas (booked é permanente)
             let agendQ = supabase.from('leads').select('*', { count: 'exact', head: true })
-                .in('instance_id', instIds)
+                .or(orFilter)
                 .not('status', 'in', '(invalid,blacklisted,error)')
                 .or('status.eq.booked,status.eq.closed,calendly_booked.eq.true,current_stage.gte.4')
-            if (dateFrom) agendQ = agendQ.gte('last_contact_at', dateFrom)
 
             let aborQ = supabase.from('leads').select('*', { count: 'exact', head: true })
-                .in('instance_id', instIds)
+                .or(orFilter)
                 .not('last_contact_at', 'is', null)
                 .not('status', 'in', '(invalid,blacklisted,error)')
             if (dateFrom) aborQ = aborQ.gte('last_contact_at', dateFrom)
@@ -537,7 +539,7 @@ export default function VisualAnalytics() {
                 <KpiCard
                     icon={Users}   label="Leads Capturados"
                     value={totalLeads.toLocaleString('pt-BR')}
-                    sub="total na base"
+                    sub={periodo === 'all' ? 'total na base' : 'criados no período'}
                     delta={deltaCriados}   color={NEON.blue}
                     info="Total de empresas capturadas pelo radar e salvas no banco. Inclui leads em qualquer status — novos, em conversa, inválidos e mortos."
                 />
