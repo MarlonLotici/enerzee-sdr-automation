@@ -2443,7 +2443,7 @@ async function loopRecuperacaoConversas() {
     .lt('followup_count', 3)
     .in('instance_id', chipsAtivos)
     .order('last_contact_at', { ascending: true })
-    .limit(5)
+    .limit(2)
     : { data: null };
 
         if (leadsFollowUp) {
@@ -2494,9 +2494,8 @@ await db.saveMessage(lf.whatsapp_id, 'assistant', msgFollowUp, lf.instance_id);
 await supabase.from('leads').update({ followup_count: 1, last_contact_at: dataAgoraDate.toISOString() }).eq('id', lf.id);
 liberarSemaforoChip(lf.instance_id); // 🚦 Libera vaga
 
-// 🛡️ ANTI-BAN: Jitter de 60-120 segundos entre follow-ups do mesmo chip
-// (antes era só 8s — ban iminente)
-const jitterAntiBan = Math.floor(Math.random() * 60000) + 60000;
+// 🛡️ ANTI-BAN: Jitter de 3-6 minutos entre follow-ups do mesmo chip
+const jitterAntiBan = Math.floor(Math.random() * 180000) + 180000;
 console.log(`⏸️ [ANTI-BAN] Aguardando ${Math.round(jitterAntiBan/1000)}s antes do próximo follow-up...`);
 await delay(jitterAntiBan);
                     }
@@ -2518,7 +2517,7 @@ await delay(jitterAntiBan);
                         await db.saveMessage(lf.whatsapp_id, 'assistant', msgD3, lf.instance_id);
                         await supabase.from('leads').update({ followup_count: 2, last_contact_at: dataAgoraDate.toISOString() }).eq('id', lf.id);
                         liberarSemaforoChip(lf.instance_id);
-                        await delay(Math.floor(Math.random() * 60000) + 60000);
+                        await delay(Math.floor(Math.random() * 180000) + 180000);
                     }
                     else if (followupAtual === 2) {
                         // Tombamento após D3 sem resposta
@@ -2556,7 +2555,7 @@ await delay(jitterAntiBan);
             .lt('link_sent_at', quatroHorasAtrasISO)
             .is('last_followup_type', null)
             .in('instance_id', chipsAtivos)
-            .limit(3)
+            .limit(1)
             : { data: null };
 
         if (leadsLink) {
@@ -2590,8 +2589,8 @@ await db.saveMessage(ll.whatsapp_id, 'assistant', msgFollowUpLink, ll.instance_i
 await supabase.from('leads').update({ last_followup_type: 'link_abandoned' }).eq('id', ll.id);
 liberarSemaforoChip(ll.instance_id); // 🚦 Libera vaga
 
-// 🛡️ ANTI-BAN: Jitter de 60-120s
-const jitterAntiBan = Math.floor(Math.random() * 60000) + 60000;
+// 🛡️ ANTI-BAN: Jitter de 3-6 minutos
+const jitterAntiBan = Math.floor(Math.random() * 180000) + 180000;
 console.log(`⏸️ [ANTI-BAN] Aguardando ${Math.round(jitterAntiBan/1000)}s antes do próximo follow-up...`);
 await delay(jitterAntiBan);
 
