@@ -239,6 +239,8 @@ function generateProxyUrl(instanceId) {
 // Nunca crasha o processo — falha graciosamente para não derrubar outros chips.
 async function validateProxy(proxyUrl, instanceId) {
     if (!proxyUrl) return null;
+    const safeUrl = proxyUrl.replace(/:[^:@]*@/, ':***@');
+    console.log(`🔍 [PROXY DEBUG] Chip ${instanceId.substring(0, 8)} tentando: ${safeUrl}`);
     let agent;
     try {
         agent = new HttpsProxyAgent(proxyUrl);
