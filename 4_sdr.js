@@ -226,13 +226,13 @@ function isChipNovo(instanceData) {
 
 // Gera URL de proxy com sticky session por chip.
 // PROXY_BASE_URL deve conter SESSION_ID como placeholder na senha, ex:
-//   http://USUARIO:SENHA_session-SESSION_ID_lifetime-168h@geo.iproyal.com:12321
-// O código substitui SESSION_ID por 8 chars do instanceId — formato oficial IPRoyal Residential.
+//   http://USUARIO:SENHA_session-SESSION_ID_country-br_lifetime-168h@geo.iproyal.com:12321
+// 16 chars hex sem hífens garante sessões distintas no pool do IPRoyal.
 function generateProxyUrl(instanceId) {
     const base = process.env.PROXY_BASE_URL;
     if (!base) return null;
-    // 8 chars alfanuméricos sem hífens — igual ao formato do exemplo do IPRoyal
-    const sessionId = instanceId.replace(/-/g, '').substring(0, 8);
+    // 16 chars = baixíssima chance de dois chips receberem o mesmo IP
+    const sessionId = instanceId.replace(/-/g, '').substring(0, 16);
     return base.replace('SESSION_ID', sessionId);
 }
 
