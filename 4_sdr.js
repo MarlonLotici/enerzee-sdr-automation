@@ -1190,8 +1190,10 @@ async function startInstance(instanceId, instanceName, preloadedUserId = null) {
     const { state, saveCreds } = await useRedisAuthState(redisConnection, instanceId);
     const { version } = await fetchLatestBaileysVersion();
 
-    // keepAlive varia por chip para evitar padrão detectável de múltiplos sockets no mesmo host
-    const keepAliveMs = 60000 + Math.floor(Math.random() * 30000); // 60-90s
+    // keepAlive curto para manter o túnel TCP do proxy residencial vivo.
+    // Roteadores domésticos (IPRoyal) têm NAT timeout de ~30-60s — 15-25s garante que
+    // o frame WebSocket chega antes do NAT expirar e matar o túnel silenciosamente.
+    const keepAliveMs = 15000 + Math.floor(Math.random() * 10000); // 15-25s
 
     let sock;
     try {
