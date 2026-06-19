@@ -224,15 +224,17 @@ function isChipNovo(instanceData) {
     return idadeMs < 7 * 24 * 60 * 60 * 1000;
 }
 
-// Gera URL de proxy com sticky session baseada no instanceId (sem consulta ao banco).
-// PROXY_BASE_URL deve conter o placeholder SESSION_ID, ex:
-//   http://user-antix-session-SESSION_ID:senha@proxy.bright.io:22225
+// Gera URL de proxy com sticky session por chip.
+// PROXY_BASE_URL deve ser a URL base do IPRoyal SEM session, ex:
+//   http://USUARIO:SENHA@geo.iproyal.com:12321
+// O código injeta _session-{id} no username automaticamente para isolar IPs por chip.
 function generateProxyUrl(instanceId) {
     const base = process.env.PROXY_BASE_URL;
     if (!base) return null;
-    // IPRoyal rejeita hífens no session ID — remove e limita a 12 chars alfanuméricos
+    // Sessão alfanumérica de 12 chars — IPRoyal não aceita hífens no session ID
     const sessionId = instanceId.replace(/-/g, '').substring(0, 12);
-    return base.replace('SESSION_ID', sessionId);
+    // Injeta _session-{id} no username: http://user:pass@host → http://user_session-id:pass@host
+    return base.replace(/\/\/([^:@]+):/, `//$1_session-${sessionId}:`);
 }
 
 // Valida o proxy fazendo GET real via ipify. Retorna o agent pronto ou null em falha.
