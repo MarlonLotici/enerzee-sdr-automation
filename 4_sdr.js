@@ -230,7 +230,9 @@ function isChipNovo(instanceData) {
 function generateProxyUrl(instanceId) {
     const base = process.env.PROXY_BASE_URL;
     if (!base) return null;
-    return base.replace('SESSION_ID', instanceId);
+    // IPRoyal rejeita hífens no session ID — remove e limita a 12 chars alfanuméricos
+    const sessionId = instanceId.replace(/-/g, '').substring(0, 12);
+    return base.replace('SESSION_ID', sessionId);
 }
 
 // Valida o proxy fazendo GET real via ipify. Retorna o agent pronto ou null em falha.
