@@ -59,7 +59,8 @@ const db = {
                 daily_limit,
                 calendly_link,
                 opening_templates,
-                product_type
+                product_type,
+                created_at
             `)
             .eq('id', instanceId)
             .single();
