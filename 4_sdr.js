@@ -211,10 +211,26 @@ let sdrEventsGlobal = null; // 🛡️ Adicione esta linha aqui no topo
 // ============================================================================
 const semaforoChips = new Map(); // chipId → { ocupado: boolean, ultimoDisparo: timestamp, cooldownMs: number, prioridadeAtual: string }
 
-// Retorna delay humano randômico entre 4-7 min (normal) ou 6-10 min (warmup para chips novos).
+// Retorna delay humano randômico entre disparos.
+// Chip novo: 10-18 min — janela maior diminui a cadência detectável pelo WA.
+// Chip maduro: 4-7 min.
 function getHumanCooldown(isWarmup = false) {
-    if (isWarmup) return Math.floor(6 * 60000 + Math.random() * 4 * 60000); // 360000–600000 ms
-    return Math.floor(4 * 60000 + Math.random() * 3 * 60000);               // 240000–420000 ms
+    if (isWarmup) return Math.floor(10 * 60000 + Math.random() * 8 * 60000); // 10-18 min
+    return Math.floor(4 * 60000 + Math.random() * 3 * 60000);                // 4-7 min
+}
+
+// Curva de aquecimento diária. Começa em 2/dia e escala ao longo de 3 semanas.
+// Substitui o binário "< 7 dias → 10" que ainda era agressivo nos primeiros dias.
+function calcularLimiteDiario(instanceData) {
+    const cap = Math.min(instanceData?.daily_limit || 30, 30);
+    if (!instanceData?.created_at) return cap;
+    const idadeDias = Math.floor((Date.now() - new Date(instanceData.created_at).getTime()) / 86400000);
+    if (idadeDias <= 1)  return 2;    // dia 1: 2 mensagens
+    if (idadeDias <= 3)  return 5;    // dias 2-3: 5
+    if (idadeDias <= 5)  return 8;    // dias 4-5: 8
+    if (idadeDias <= 7)  return 12;   // dias 6-7: 12
+    if (idadeDias <= 14) return 20;   // semana 2: 20
+    return cap;                        // semana 3+: configurado no painel (max 30)
 }
 
 // Chip com menos de 7 dias de vida é tratado como novo: limite reduzido para aquecimento gradual.
@@ -1150,10 +1166,10 @@ async function startInstance(instanceId, instanceName, preloadedUserId = null) {
         if (instanceUserId) console.log(`⚡ [CACHE] userId de ${instanceName} resolvido via Redis.`);
     }
 
-    // Nível 3: Supabase (fallback — busca apenas user_id que não está cacheado)
+    // Nível 3: Supabase (fallback — busca user_id + created_at para cold-start delay)
     const { data: instData } = await supabase
         .from('instances')
-        .select('user_id')
+        .select('user_id, created_at')
         .eq('id', instanceId)
         .maybeSingle();
 
@@ -1237,11 +1253,14 @@ async function startInstance(instanceId, instanceName, preloadedUserId = null) {
             if (ioSocket && instanceUserId) ioSocket.to(`user:${instanceUserId}`).emit('whatsapp_status', { status: 'CONNECTED', instanceId });
             // Realoca leads órfãos do mesmo tenant para este chip
             setTimeout(() => redistribuirLeadsOrfaos(), 3000);
-            // Liga o motor de ataque deste chip se ainda não estiver rodando
-            // Cobre o caso de chips adicionados dinamicamente via painel (não estavam no initMultiTenancy)
+            // Liga o motor de ataque deste chip se ainda não estiver rodando.
+            // Cold-start delay: chip novo espera 25 min antes do primeiro disparo —
+            // evita o padrão "recém autenticado → imediato outreach" que o WA detecta.
             if (!motoresEmExecucao.has(instanceId)) {
-                console.log(`🚀 [CHIP NOVO] Motor de ataque iniciado automaticamente para ${instanceName}`);
-                setTimeout(() => processarFilaDeAtaque(instanceId), 5000);
+                const chipNovoAgora = isChipNovo(instData);
+                const coldStartMs = chipNovoAgora ? 25 * 60000 : 90000; // 25 min novo / 90s maduro
+                console.log(`🚀 [MOTOR] ${instanceName} — cold-start de ${Math.round(coldStartMs / 60000)}min ${chipNovoAgora ? '(chip novo, warmup)' : '(chip maduro)'}`);
+                setTimeout(() => processarFilaDeAtaque(instanceId), coldStartMs);
             }
         }
 
@@ -2172,8 +2191,11 @@ async function processarFilaDeAtaque(instanceId) {
                 }
 
                 chipNovo = isChipNovo(instanceData);
-                const limiteAdaptativo = chipNovo ? 10 : Math.min(instanceData.daily_limit || 30, 30);
-                if (chipNovo) console.log(`🌱 [CHIP NOVO] ${instanceData.name} com menos de 7 dias — limite adaptativo: ${limiteAdaptativo} disparos/dia.`);
+                const limiteAdaptativo = calcularLimiteDiario(instanceData);
+                const idadeDias = instanceData?.created_at
+                    ? Math.floor((Date.now() - new Date(instanceData.created_at).getTime()) / 86400000)
+                    : 999;
+                if (chipNovo) console.log(`🌱 [WARMUP] ${instanceData.name} — dia ${idadeDias} de vida, limite: ${limiteAdaptativo} disparos/dia.`);
                 const config = {
                     nome: instanceData.name || `Chip-${instanceId.substring(0, 4)}`,
                     limite: limiteAdaptativo,
@@ -2284,8 +2306,10 @@ console.log(`🔒 [RESERVA] Lead ${lead.name} travado atomicamente para chip ${c
                     continue;
                 }
 
-                // ⏳ 6. JITTER SEQUENCIAL ORIGINAL (Intacto)
-                const jitter = Math.random() * 180000 + 120000;
+                // ⏳ 6. JITTER SEQUENCIAL — chip novo espera mais para reduzir cadência detectável
+                const jitter = chipNovo
+                    ? Math.random() * 300000 + 300000   // novo: 5-10 min
+                    : Math.random() * 180000 + 120000;  // maduro: 2-5 min
                 console.log(`🎯 [${config.nome}] Mirando em: ${lead.name} (${enviosHoje + 1}/${config.limite}). Aguardando ${Math.round(jitter/1000)}s...`);
                 await delay(jitter);
 
