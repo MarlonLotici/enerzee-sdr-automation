@@ -2131,7 +2131,8 @@ async function processarFilaDeAtaque(instanceId) {
 
         
             
-        let currentLeadId = null; 
+        let currentLeadId = null;
+        let chipNovo = false; // declarado aqui para ser acessível no catch interno
             
             if (isBaseVazia(instanceId)) {
                 setBaseVazia(instanceId, false);
@@ -2170,7 +2171,7 @@ async function processarFilaDeAtaque(instanceId) {
                     break; // 🛑 HÍBRIDO: Morre aqui se não estiver conectado
                 }
 
-                const chipNovo = isChipNovo(instanceData);
+                chipNovo = isChipNovo(instanceData);
                 const limiteAdaptativo = chipNovo ? 10 : Math.min(instanceData.daily_limit || 30, 30);
                 if (chipNovo) console.log(`🌱 [CHIP NOVO] ${instanceData.name} com menos de 7 dias — limite adaptativo: ${limiteAdaptativo} disparos/dia.`);
                 const config = {
@@ -2242,7 +2243,8 @@ console.log(`🔒 [RESERVA] Lead ${lead.name} travado atomicamente para chip ${c
                 }
 
                 const hist = await db.getHistory(lead.whatsapp_id, instanceId);
-                const [result] = await instancia.sock.onWhatsApp(lead.whatsapp_id);
+                const _onWhatsAppRes = await instancia.sock.onWhatsApp(lead.whatsapp_id);
+                const [result] = Array.isArray(_onWhatsAppRes) ? _onWhatsAppRes : [];
                 
                 // 1. O número não tem WhatsApp?
                 if (!result?.exists) {
