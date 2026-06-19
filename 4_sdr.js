@@ -4,10 +4,11 @@
  * INTEGRAL: Vision, PDF, Regras Regionais Enerzee, Anti-Ban e Horários.
  */
 // 🚀 FIX V13: Declaração global para injeção dinâmica (Bypass do erro ESM)
-let makeWASocket, useMultiFileAuthState, DisconnectReason, delay, fetchLatestBaileysVersion, makeCacheableSignalKeyStore, downloadMediaMessage, generateMessageID;
+let makeWASocket, useMultiFileAuthState, DisconnectReason, delay, fetchLatestBaileysVersion, makeCacheableSignalKeyStore, downloadMediaMessage, generateMessageID, Browsers;
 
 const pino = require('pino');
 const fs = require('fs');
+const axios = require('axios');
 const { HttpsProxyAgent } = require('https-proxy-agent');
 const Groq = require('groq-sdk');
 const pdf = require('pdf-parse');
@@ -208,8 +209,49 @@ let sdrEventsGlobal = null; // 🛡️ Adicione esta linha aqui no topo
 // Garante que apenas 1 disparo por chip aconteça a cada COOLDOWN_MS
 // E que disparos de SAUDAÇÃO tenham prioridade sobre FOLLOW-UPs
 // ============================================================================
-const semaforoChips = new Map(); // chipId → { ocupado: boolean, ultimoDisparo: timestamp, prioridadeAtual: 'SAUDACAO'|'RECUPERACAO'|'FOLLOWUP' }
-const COOLDOWN_ENTRE_DISPAROS_MS = 90000; // Mínimo 90s entre QUALQUER mensagem do mesmo chip
+const semaforoChips = new Map(); // chipId → { ocupado: boolean, ultimoDisparo: timestamp, cooldownMs: number, prioridadeAtual: string }
+
+// Retorna delay humano randômico entre 4-7 min (normal) ou 6-10 min (warmup para chips novos).
+function getHumanCooldown(isWarmup = false) {
+    if (isWarmup) return Math.floor(6 * 60000 + Math.random() * 4 * 60000); // 360000–600000 ms
+    return Math.floor(4 * 60000 + Math.random() * 3 * 60000);               // 240000–420000 ms
+}
+
+// Chip com menos de 7 dias de vida é tratado como novo: limite reduzido para aquecimento gradual.
+function isChipNovo(instanceData) {
+    if (!instanceData?.created_at) return false;
+    const idadeMs = Date.now() - new Date(instanceData.created_at).getTime();
+    return idadeMs < 7 * 24 * 60 * 60 * 1000;
+}
+
+// Gera URL de proxy com sticky session baseada no instanceId (sem consulta ao banco).
+// PROXY_BASE_URL deve conter o placeholder SESSION_ID, ex:
+//   http://user-antix-session-SESSION_ID:senha@proxy.bright.io:22225
+function generateProxyUrl(instanceId) {
+    const base = process.env.PROXY_BASE_URL;
+    if (!base) return null;
+    return base.replace('SESSION_ID', instanceId);
+}
+
+// Valida o proxy fazendo GET real via ipify. Retorna o agent pronto ou null em falha.
+// Nunca crasha o processo — falha graciosamente para não derrubar outros chips.
+async function validateProxy(proxyUrl, instanceId) {
+    if (!proxyUrl) return null;
+    let agent;
+    try {
+        agent = new HttpsProxyAgent(proxyUrl);
+        const resp = await axios.get('https://api.ipify.org?format=json', {
+            httpsAgent: agent,
+            timeout: 10000,
+        });
+        console.log(`✅ [PROXY OK] Chip ${instanceId.substring(0, 8)} → IP de saída: ${resp.data.ip}`);
+        return agent;
+    } catch (err) {
+        const safeMsg = (err.message || 'timeout').replace(/:[^:@]*@/g, ':***@');
+        console.warn(`⚠️ [PROXY FAIL] Chip ${instanceId.substring(0, 8)}: ${safeMsg}. Seguindo sem proxy.`);
+        return null;
+    }
+}
 
 // Mapa de prioridades (menor número = mais importante)
 const PRIORIDADE = {
@@ -232,10 +274,13 @@ async function adquirirSemaforoChip(chipId, tipoDisparo) {
     const agora = Date.now();
     const estado = semaforoChips.get(chipId);
     const minhaPrioridade = PRIORIDADE[tipoDisparo];
-    
-    // 1. Verifica cooldown global
-    if (estado?.ultimoDisparo && (agora - estado.ultimoDisparo) < COOLDOWN_ENTRE_DISPAROS_MS) {
-        const tempoRestante = Math.round((COOLDOWN_ENTRE_DISPAROS_MS - (agora - estado.ultimoDisparo)) / 1000);
+    // Cooldown foi gerado no momento da liberação — usa o mesmo valor para garantir consistência.
+    // Se nunca houve disparo (chip novo no mapa), gera um cooldown na hora.
+    const cooldownMs = estado?.cooldownMs ?? getHumanCooldown();
+
+    // 1. Verifica cooldown por chip (4-7 min randômico, gerado a cada liberação)
+    if (estado?.ultimoDisparo && (agora - estado.ultimoDisparo) < cooldownMs) {
+        const tempoRestante = Math.round((cooldownMs - (agora - estado.ultimoDisparo)) / 1000);
         console.log(`⏸️ [SEMÁFORO] Chip ${chipId.substring(0, 8)} em cooldown. ${tempoRestante}s restantes (tipo: ${tipoDisparo}).`);
         return false;
     }
@@ -265,10 +310,11 @@ async function adquirirSemaforoChip(chipId, tipoDisparo) {
 /**
  * 🚦 Libera o semáforo do chip e marca o timestamp do disparo.
  */
-function liberarSemaforoChip(chipId) {
+function liberarSemaforoChip(chipId, isWarmup = false) {
     semaforoChips.set(chipId, {
         ocupado: false,
         ultimoDisparo: Date.now(),
+        cooldownMs: getHumanCooldown(isWarmup), // warmup=true → 6-10 min; false → 4-7 min
         prioridadeAtual: null
     });
 }
@@ -1101,14 +1147,12 @@ async function startInstance(instanceId, instanceName, preloadedUserId = null) {
         if (instanceUserId) console.log(`⚡ [CACHE] userId de ${instanceName} resolvido via Redis.`);
     }
 
-    // Nível 3: Supabase (fallback + busca proxy_url que não está cacheado)
+    // Nível 3: Supabase (fallback — busca apenas user_id que não está cacheado)
     const { data: instData } = await supabase
         .from('instances')
-        .select('user_id, proxy_url')
+        .select('user_id')
         .eq('id', instanceId)
         .maybeSingle();
-
-    const proxyUrl = instData?.proxy_url || process.env.PROXY_URL || null;
 
     if (!instanceUserId && instData?.user_id) {
         instanceUserId = instData.user_id;
@@ -1124,26 +1168,49 @@ async function startInstance(instanceId, instanceName, preloadedUserId = null) {
     }
     // ────────────────────────────────────────────────────────────────────────
 
-    const agent = proxyUrl ? new HttpsProxyAgent(proxyUrl) : undefined;
-    if (proxyUrl) console.log(`🌐 [PROXY] ${instanceName} conectando via proxy: ${proxyUrl.replace(/:[^:@]+@/, ':***@')}`);
+    // Proxy dinâmico por chip via sticky session (sem consulta ao banco):
+    // PROXY_BASE_URL define o template; SESSION_ID é substituído pelo instanceId.
+    // Fallback: PROXY_URL (global) → sem proxy (Railway IP).
+    const proxyUrl = generateProxyUrl(instanceId) || process.env.PROXY_URL || null;
+    const agent = await validateProxy(proxyUrl, instanceId); // retorna HttpsProxyAgent ou null
+    if (!agent) console.warn(`⚠️ [PROXY] ${instanceName} iniciando sem proxy — IP de datacenter Railway exposto.`);
+
+    // Jitter de startup: evita burst de logins simultâneos quando Railway reinicia todos os chips de uma vez.
+    const startupJitter = Math.floor(Math.random() * 30000); // 0-30s
+    if (startupJitter > 0) {
+        console.log(`⏳ [JITTER] ${instanceName} aguardando ${Math.round(startupJitter / 1000)}s antes de conectar...`);
+        await new Promise(resolve => setTimeout(resolve, startupJitter));
+    }
 
     //const { state, saveCreds } = await useMultiFileAuthState(`wpp_sessions/${instanceId}`);
     // Agora as chaves do WhatsApp vivem no Supabase, protegidas contra restarts
     const { state, saveCreds } = await useRedisAuthState(redisConnection, instanceId);
     const { version } = await fetchLatestBaileysVersion();
 
-    const sock = makeWASocket({
-        version,
-        auth: { creds: state.creds, keys: makeCacheableSignalKeyStore(state.keys, pino({ level: 'silent' })) },
-        printQRInTerminal: false,
-        logger: pino({ level: 'silent' }),
-        browser: ["Chrome", "Chrome", "1.0"],
-        keepAliveIntervalMs: 30000,   // ping a cada 30s — evita socket morrer no descanso de 40min
-        connectTimeoutMs: 60000,      // desiste da conexão em 60s se não responder
-        markOnlineOnConnect: false,   // não anuncia presença — menos suspeito pro WhatsApp
-        retryRequestDelayMs: 2000,    // aguarda 2s antes de reenviar requisições falhas
-        ...(agent ? { agent } : {}),  // proxy por chip (ou global via PROXY_URL)
-    });
+    // keepAlive varia por chip para evitar padrão detectável de múltiplos sockets no mesmo host
+    const keepAliveMs = 60000 + Math.floor(Math.random() * 30000); // 60-90s
+
+    let sock;
+    try {
+        sock = makeWASocket({
+            version,
+            auth: { creds: state.creds, keys: makeCacheableSignalKeyStore(state.keys, pino({ level: 'silent' })) },
+            printQRInTerminal: false,
+            logger: pino({ level: 'silent' }),
+            browser: Browsers.ubuntu('Chrome'),  // fingerprint real Ubuntu/Chrome
+            keepAliveIntervalMs: keepAliveMs,
+            connectTimeoutMs: 60000,
+            markOnlineOnConnect: false,
+            retryRequestDelayMs: 2000,
+            ...(agent ? { agent } : {}),
+        });
+    } catch (socketErr) {
+        const safeMsg = (socketErr.message || 'erro desconhecido').replace(/:[^:@]*@/g, ':***@');
+        console.error(`🚫 [SOCKET FAIL] ${instanceName} falhou ao criar socket: ${safeMsg}`);
+        await supabase.from('instances').update({ whatsapp_status: 'proxy_failed' }).eq('id', instanceId);
+        instanciasLigando.delete(instanceId);
+        return;
+    }
 
     // Guardamos o socket com uma flag 'ready' falsa inicialmente
     sessions.set(instanceId, { sock, ready: false, userId: instanceUserId });
@@ -2098,9 +2165,12 @@ async function processarFilaDeAtaque(instanceId) {
                     break; // 🛑 HÍBRIDO: Morre aqui se não estiver conectado
                 }
 
+                const chipNovo = isChipNovo(instanceData);
+                const limiteAdaptativo = chipNovo ? 10 : Math.min(instanceData.daily_limit || 30, 30);
+                if (chipNovo) console.log(`🌱 [CHIP NOVO] ${instanceData.name} com menos de 7 dias — limite adaptativo: ${limiteAdaptativo} disparos/dia.`);
                 const config = {
                     nome: instanceData.name || `Chip-${instanceId.substring(0, 4)}`,
-                    limite: instanceData.daily_limit || 50,
+                    limite: limiteAdaptativo,
                     agente: instanceData.agent_name || "Agente",
                     empresa: instanceData.company_name || "nossa empresa"
                 };
@@ -2327,15 +2397,15 @@ const mensagensSplit = [balaoUnico]; // ← BALÃO ÚNICO (era [balao1, balao2])
                 await supabase.from('leads').update({ status: 'contact', last_contact_at: new Date().toISOString(), opening_template: templateName }).eq('id', lead.id);
                 console.log(`✅ [SUCESSO REAL] Entregue por ${config.nome} para ${lead.name}!`);
                 leadsEmProcessamento.delete(lead.id);
-                liberarSemaforoChip(instanceId); // 🚦 Libera vaga e marca cooldown
+                liberarSemaforoChip(instanceId, chipNovo); // 🚦 warmup=chipNovo → 6-10 min; maduro → 4-7 min
                 falhasConsecutivas = 0;
-                
+
             } catch (errInner) {
                 // SEU CATCH ORIGINAL DE FALHAS CONSECUTIVAS
                 console.error(`❌ Erro no motor do chip ${instanceId}:`, errInner.message);
                 if (currentLeadId) {
                     leadsEmProcessamento.delete(currentLeadId);
-                      liberarSemaforoChip(instanceId);
+                    liberarSemaforoChip(instanceId, chipNovo);
                     await supabase.from('leads').update({ status: 'new' }).eq('id', currentLeadId).eq('status', 'reservado');
                 }
                 if (errInner.message?.includes('Connection') || errInner.message?.includes('Socket')) {
@@ -3291,6 +3361,7 @@ module.exports = {
         makeCacheableSignalKeyStore = baileys.makeCacheableSignalKeyStore;
         downloadMediaMessage = baileys.downloadMediaMessage;
         generateMessageID = baileys.generateMessageID;
+        Browsers = baileys.Browsers;
 
         ioSocket = io;
         sdrEventsGlobal = sdrEvents;
