@@ -174,6 +174,7 @@ function AppSidebar({ activeTab, setActiveTab, leadsCount, onLogout }) {
     const logsEndRef = useRef(null);
     const chatEndRef = useRef(null);
     const notesTimerRef = useRef(null);
+    const chipConnectTimerRef = useRef(null);
 
     // --- ESTADOS DE NAVEGAÇÃO E DADOS ---
     const [activeTab, setActiveTab] = useState("search");
@@ -192,6 +193,7 @@ function AppSidebar({ activeTab, setActiveTab, leadsCount, onLogout }) {
     // --- ESTADOS DO MOTOR IA (MULTI-INSTÂNCIA 2026) ---
 const [isConnected, setIsConnected] = useState(false);
 const [qrCodeData, setQrCodeData] = useState(null); // Agora guarda { qr, instanceId, name }
+const [isConnectingChip, setIsConnectingChip] = useState(false);
 const [instances, setInstances] = useState([]); // Lista de chips no banco
 const [selectedInstanceId, setSelectedInstanceId] = useState(null);
 const [isBotRunning, setIsBotRunning] = useState(false);
@@ -361,7 +363,11 @@ if (session?.user?.id) checkBriefing()
     }
 });
 
-        socket.on('qr_code', (data) => setQrCodeData(data));
+        socket.on('qr_code', (data) => {
+            if (chipConnectTimerRef.current) { clearTimeout(chipConnectTimerRef.current); chipConnectTimerRef.current = null; }
+            setIsConnectingChip(false);
+            setQrCodeData(data);
+        });
 
         socket.on('whatsapp_status', (statusData) => {
             if (statusData.status === 'CONNECTED') {
@@ -1256,11 +1262,23 @@ return (
         <Button
             onClick={() => {
                 const nome = prompt("Nome da nova unidade (Ex: Chip Claro 02):");
-                if (nome) socket.emit('create_instance', { name: nome, phone: null });
+                if (!nome) return;
+                setIsConnectingChip(true);
+                socket.emit('create_instance', { name: nome, phone: null });
+                // Safety timeout: reset se o QR demorar mais de 45s
+                if (chipConnectTimerRef.current) clearTimeout(chipConnectTimerRef.current);
+                chipConnectTimerRef.current = setTimeout(() => {
+                    setIsConnectingChip(false);
+                    chipConnectTimerRef.current = null;
+                }, 45000);
             }}
-            className="flex-1 h-8 text-[9px] uppercase font-black bg-orange-500 text-white hover:bg-orange-400 rounded-lg border-0 shadow-[0_0_12px_rgba(249,115,22,0.35)]"
+            disabled={isConnectingChip}
+            className="flex-1 h-8 text-[9px] uppercase font-black bg-orange-500 text-white hover:bg-orange-400 rounded-lg border-0 shadow-[0_0_12px_rgba(249,115,22,0.35)] disabled:opacity-60 disabled:cursor-not-allowed"
         >
-            + Adicionar Chip
+            {isConnectingChip
+                ? <span className="flex items-center gap-1.5"><Loader2 className="h-3 w-3 animate-spin" />Conectando...</span>
+                : '+ Adicionar Chip'
+            }
         </Button>
         {selectedInstanceId && (
             <Button
@@ -1642,12 +1660,19 @@ return (
     </DialogContent>
 </Dialog>
 
-{/* MODAL DE CONEXÃO MULTI-CHIP (POSIÇÃO CORRETA) */}
-            <Dialog open={!!qrCodeData} onOpenChange={() => setQrCodeData(null)}>
+{/* MODAL DE CONEXÃO MULTI-CHIP */}
+            <Dialog
+                open={isConnectingChip || !!qrCodeData}
+                onOpenChange={() => {
+                    setQrCodeData(null);
+                    setIsConnectingChip(false);
+                    if (chipConnectTimerRef.current) { clearTimeout(chipConnectTimerRef.current); chipConnectTimerRef.current = null; }
+                }}
+            >
                 <DialogContent className="glass-panel border-white/20 text-white max-w-sm rounded-[2.5rem] p-10 bg-[#0A0A0A]/98 shadow-2xl flex flex-col items-center">
                     <div className="bg-amber-600/20 p-4 rounded-full mb-6 border border-amber-500/30" style={{boxShadow:'0 0 20px rgba(245,158,11,0.2)'}}>
-                            <MessageSquare className="h-10 w-10 text-amber-400" />
-                           </div>
+                        <MessageSquare className="h-10 w-10 text-amber-400" />
+                    </div>
 
                     <DialogTitle className="text-2xl font-black text-white uppercase italic tracking-tighter text-center">
                         Vincular Unidade
@@ -1655,16 +1680,70 @@ return (
                     <p className="text-amber-400 font-bold text-[10px] uppercase tracking-widest mb-8 text-center">
                         {qrCodeData?.name || 'Nova Instância'}
                     </p>
-                    
-                    <div className="p-6 bg-white rounded-[2rem] shadow-2xl">
-                        {qrCodeData?.qr && <QRCodeSVG value={qrCodeData.qr} size={200} />}
-                    </div>
 
-                    <p className="text-slate-500 text-[10px] font-bold uppercase mt-8 text-center leading-relaxed">
-                        Abra o WhatsApp no celular <br/> 
-                        Menu &gt; Aparelhos Conectados <br/> 
-                        Escaneie o código acima
-                    </p>
+                    {isConnectingChip && !qrCodeData?.qr ? (
+                        /* ── SPINNER DE CARREGAMENTO ── */
+                        <div className="flex flex-col items-center gap-6 py-2">
+                            {/* Spinner triplo em laranja Enerzee */}
+                            <div className="relative flex items-center justify-center" style={{ width: 88, height: 88 }}>
+                                {/* Anel externo — rotação lenta */}
+                                <div className="absolute inset-0 rounded-full border-2 border-orange-500/20 border-t-orange-500"
+                                     style={{ animation: 'spin 2.4s linear infinite' }} />
+                                {/* Anel médio — rotação inversa */}
+                                <div className="absolute inset-3 rounded-full border-2 border-amber-500/20 border-t-amber-400"
+                                     style={{ animation: 'spin 1.6s linear infinite reverse' }} />
+                                {/* Ícone central */}
+                                <div className="absolute inset-6 rounded-full flex items-center justify-center"
+                                     style={{ background: 'rgba(249,115,22,0.1)', border: '1px solid rgba(249,115,22,0.25)' }}>
+                                    <Loader2 className="h-5 w-5 text-orange-400" style={{ animation: 'spin 1s linear infinite' }} />
+                                </div>
+                            </div>
+
+                            {/* Barra de progresso animada */}
+                            <div className="w-full max-w-[200px] h-0.5 rounded-full overflow-hidden"
+                                 style={{ background: 'rgba(255,255,255,0.06)' }}>
+                                <div className="h-full rounded-full"
+                                     style={{
+                                         background: 'linear-gradient(90deg, #f97316, #fbbf24, #f97316)',
+                                         backgroundSize: '200% 100%',
+                                         animation: 'shimmer-bar 1.8s ease-in-out infinite',
+                                         width: '60%',
+                                     }} />
+                            </div>
+
+                            {/* Texto informativo */}
+                            <div className="text-center space-y-1.5 max-w-[220px]">
+                                <p className="text-[10px] font-black text-orange-400 uppercase tracking-widest">
+                                    Estabelecendo conexão segura
+                                </p>
+                                <p className="text-[9px] font-bold text-slate-500 leading-relaxed">
+                                    Proxy BR · Criptografando chaves de sessão
+                                </p>
+                                <p className="text-[8px] font-bold text-amber-400/60 leading-relaxed">
+                                    Por favor, aguarde o QR Code e não recarregue a página.
+                                </p>
+                            </div>
+
+                            <style>{`
+                                @keyframes shimmer-bar {
+                                    0%   { background-position: 200% 0; }
+                                    100% { background-position: -200% 0; }
+                                }
+                            `}</style>
+                        </div>
+                    ) : (
+                        /* ── QR CODE ── */
+                        <>
+                            <div className="p-6 bg-white rounded-[2rem] shadow-2xl">
+                                {qrCodeData?.qr && <QRCodeSVG value={qrCodeData.qr} size={200} />}
+                            </div>
+                            <p className="text-slate-500 text-[10px] font-bold uppercase mt-8 text-center leading-relaxed">
+                                Abra o WhatsApp no celular <br/>
+                                Menu &gt; Aparelhos Conectados <br/>
+                                Escaneie o código acima
+                            </p>
+                        </>
+                    )}
                 </DialogContent>
             </Dialog>
 
