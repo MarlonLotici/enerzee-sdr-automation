@@ -1,4 +1,4 @@
-/**
+﻿/**
  * 
  * 4_sdr.js - MÓDULO DE VENDAS NEURAL V12 (BAILEYS MULTI-TENANCY)
  * INTEGRAL: Vision, PDF, Regras Regionais Enerzee, Anti-Ban e Horários.
@@ -2970,7 +2970,7 @@ async function loopAuditor() {
         const { data: leadsParaAuditar } = await supabase
             .from('leads')
             .select('id, name, whatsapp_id, instance_id, status, niche')
-            .in('status', ['booked', 'dead', 'invalid'])
+            .in('status', ['booked', 'dead', 'invalid', 'closed'])
             .or('is_audited.eq.false,is_audited.is.null')
             .in('instance_id', chipsAudit)
             .limit(5);
@@ -2989,11 +2989,12 @@ async function loopAuditor() {
             for (const lead of leadsParaAuditar) {
                 const histRaw = await db.getHistory(lead.whatsapp_id, lead.instance_id);
 
-                if (!histRaw || histRaw.length <= 2) {
-                    // Sem conversa suficiente: sai da fila sem gastar tokens
+                const hasLeadReply = histRaw?.some(m => m.role === 'user');
+                if (!histRaw || histRaw.length <= 2 || !hasLeadReply) {
+                    // Sem resposta do lead: marca auditado mas sem relatório — não contamina métricas
                     await supabase.from('leads').update({
                         is_audited:   true,
-                        audit_report: { desfecho: 'PERDIDO_SILENCIO', nota_ia: null, erro_critico_ia: null, resumo_executivo: 'Sem interação suficiente para auditoria.' }
+                        audit_report: null,
                     }).eq('id', lead.id);
                     continue;
                 }

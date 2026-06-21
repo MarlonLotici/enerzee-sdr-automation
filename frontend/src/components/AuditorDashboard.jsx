@@ -97,7 +97,7 @@ export default function AuditorDashboard({ socket }) {
                         }
                     }
                     return { ...l, report }
-                }).filter(l => l.report && typeof l.report === 'object' && l.report.desfecho)
+                }).filter(l => l.report && typeof l.report === 'object' && l.report.desfecho && l.report.desfecho !== 'PERDIDO_SILENCIO')
 
                 setLeads(parsed)
                 setLastSync(new Date())
@@ -126,7 +126,7 @@ export default function AuditorDashboard({ socket }) {
 
         const total = leads.length
         const agendados = leads.filter(l => l.report.desfecho === 'AGENDADO').length
-        const notas = leads.map(l => parseFloat(l.report.nota_ia)).filter(n => !isNaN(n))
+        const notas = leads.map(l => parseFloat(l.report.nota_ia)).filter(n => !isNaN(n) && n > 0)
         const notaMedia = notas.length ? (notas.reduce((a, b) => a + b, 0) / notas.length) : 0
         const comErro = leads.filter(l => l.report.erro_critico_ia && l.report.erro_critico_ia !== 'null' && l.report.erro_critico_ia !== null).length
 
@@ -193,7 +193,7 @@ export default function AuditorDashboard({ socket }) {
                 agendados: v.agendados,
                 taxa: Math.round(v.agendados / v.total * 100),
             }))
-            .sort((a, b) => b.taxa - a.taxa)
+            .sort((a, b) => b.total - a.total || b.taxa - a.taxa)
             .slice(0, 8)
 
         // Dropout por estágio (onde as conversas morrem)
