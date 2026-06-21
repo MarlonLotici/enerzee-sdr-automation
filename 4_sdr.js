@@ -1445,22 +1445,12 @@ async function startInstance(instanceId, instanceName, preloadedUserId = null) {
 // 🛡️ PASSO 1: O "CARIMBO" E RASTREIO DIGITAL DO ROBÔ (NATIVO E SEGURO)
 // ============================================================================
 async function enviarMensagemIA(sock, jid, content) {
-    try {
-        // 1. Deixa o próprio Baileys criar e enviar a mensagem (Garante a entrega no Ataque)
-        const sentMsg = await sock.sendMessage(jid, content);
-        
-        // 2. Pega o ID oficial gerado e carimba na memória viva
-        if (sentMsg?.key?.id) {
-            mensagensEnviadasPelaIA.add(sentMsg.key.id); 
-            mapaRastreioLID.set(sentMsg.key.id, jid); // 🔗 O Fio de Ariadne está a salvo aqui!
-            
-    
-        }
-        return sentMsg;
-    } catch (err) {
-        console.error("❌ Erro no disparo da mensagem:", err.message);
-        return null;
+    const sentMsg = await sock.sendMessage(jid, content);
+    if (sentMsg?.key?.id) {
+        mensagensEnviadasPelaIA.add(sentMsg.key.id);
+        mapaRastreioLID.set(sentMsg.key.id, jid);
     }
+    return sentMsg;
 }
 
 
@@ -2138,6 +2128,21 @@ if (fromMe) {
 // ============================================================================
 let dataControleLimites = new Date(Date.now() - 3 * 60 * 60 * 1000).toISOString().split('T')[0]; // BRT
 
+// Detecta erros do Baileys que indicam número inexistente no WhatsApp.
+// Retorna true para 404/item-not-found; false para erros de rede/socket (que devem ser relançados).
+function isNumeroInexistente(err) {
+    const msg = (err?.message || '').toLowerCase();
+    const code = err?.output?.statusCode || err?.statusCode || 0;
+    return (
+        code === 404 ||
+        msg.includes('item-not-found') ||
+        msg.includes('not-authorized') ||
+        msg.includes('no such contact') ||
+        msg.includes('invalid jid') ||
+        (msg.includes('bad-request') && msg.includes('jid'))
+    );
+}
+
 // ============================================================================
 // 🔄 MOTOR HÍBRIDO DE ATAQUE (RAM + DB) - PRESERVANDO 100% DAS TRAVAS
 // ============================================================================
@@ -2170,6 +2175,7 @@ async function processarFilaDeAtaque(instanceId) {
         
             
         let currentLeadId = null;
+        let currentLead = null;  // espelho de lead acessível no errInner catch
         let chipNovo = false; // declarado aqui para ser acessível no catch interno
             
             if (isBaseVazia(instanceId)) {
@@ -2246,6 +2252,7 @@ if (!leadReservado || leadReservado.length === 0) {
 
 const lead = leadReservado[0];
 currentLeadId = lead.id;
+currentLead = lead;
 
 console.log(`🔒 [RESERVA] Lead ${lead.name} travado atomicamente para chip ${config.nome}`);
 
@@ -2284,31 +2291,8 @@ console.log(`🔒 [RESERVA] Lead ${lead.name} travado atomicamente para chip ${c
                 }
 
                 const hist = await db.getHistory(lead.whatsapp_id, instanceId);
-                const _onWhatsAppRes = await instancia.sock.onWhatsApp(lead.whatsapp_id);
-                const [result] = Array.isArray(_onWhatsAppRes) ? _onWhatsAppRes : [];
-                
-                // 1. O número não tem WhatsApp?
-                if (!result?.exists) {
-                    if (!lead.backup_tried && lead.backup_whatsapp_id) {
-                        console.log(`🔄 [FALLBACK] CNPJ sem WhatsApp! Tombando ${lead.name} para o número reserva do Maps...`);
-                        await supabase.from('leads').update({
-                            whatsapp_id: lead.backup_whatsapp_id,
-                            phone: lead.backup_phone,
-                            backup_tried: true,
-                            status: 'new' // Devolve pro início da fila
-                        }).eq('id', lead.id);
-                        leadsEmProcessamento.delete(lead.id);
-                        continue; // Pula pro próximo lead e deixa esse ser repescado na próxima rodada
-                    } else {
-                        console.log(`💀 [DESCARTE] Lead ${lead.name} inválido e sem reserva. Descartando.`);
-                        await supabase.from('leads').update({ status: 'invalid' }).eq('id', lead.id);
-                        leadsEmProcessamento.delete(lead.id);
-                        await delay(2000);
-                        continue;
-                    }
-                }
 
-                // 2. O número já foi contatado antes?
+                // 1. O número já foi contatado antes?
                 // Verifica em TODOS os chips (ignora instance_id) — protege contra recontato após redistribuição
                 const { data: anyMsg } = await supabase
                     .from('messages')
@@ -2332,14 +2316,8 @@ console.log(`🔒 [RESERVA] Lead ${lead.name} travado atomicamente para chip ${c
                 console.log(`🎯 [${config.nome}] Mirando em: ${lead.name} (${enviosHoje + 1}/${config.limite}). Aguardando ${Math.round(jitter/1000)}s...`);
                 await delay(jitter);
 
-                // 7. Limpeza de LID/JID
-                let cleanLid = null;
-                if (result.lid) {
-                    cleanLid = result.lid.split(':')[0].split('@')[0] + '@lid';
-                    await supabase.from('leads').update({ whatsapp_lid: cleanLid }).eq('id', lead.id);
-                }
-
-                const cleanJid = result.jid.split(':')[0].split('@')[0] + '@s.whatsapp.net';
+                // 7. Normalização do JID — derivada diretamente do banco (sem onWhatsApp)
+                const cleanJid = lead.whatsapp_id.split(':')[0].split('@')[0] + '@s.whatsapp.net';
                 if (lead.whatsapp_id !== cleanJid) {
                     await supabase.from('leads').update({ whatsapp_id: cleanJid }).eq('id', lead.id);
                     lead.whatsapp_id = cleanJid;
@@ -2491,7 +2469,28 @@ const mensagensSplit = [textoFinal];
                 falhasConsecutivas = 0;
 
             } catch (errInner) {
-                // SEU CATCH ORIGINAL DE FALHAS CONSECUTIVAS
+                // 🚫 ANTI-BAN: Número inexistente no WA — descarta lead sem penalizar o chip
+                if (isNumeroInexistente(errInner)) {
+                    if (currentLead) {
+                        if (!currentLead.backup_tried && currentLead.backup_whatsapp_id) {
+                            console.log(`🔄 [BACKUP] Tombando ${currentLead.name} para o número reserva...`);
+                            await supabase.from('leads').update({
+                                whatsapp_id: currentLead.backup_whatsapp_id,
+                                phone: currentLead.backup_phone,
+                                backup_tried: true,
+                                status: 'new',
+                            }).eq('id', currentLead.id);
+                        } else {
+                            console.log(`🚫 [ANTI-BAN FILTRO] Número inválido detectado no envio: ${currentLead.phone || currentLead.whatsapp_id}. Descartando...`);
+                            await supabase.from('leads').update({ status: 'invalid_number' }).eq('id', currentLead.id);
+                        }
+                        leadsEmProcessamento.delete(currentLead.id);
+                        liberarSemaforoChip(instanceId, chipNovo);
+                    }
+                    continue; // Passa pro próximo lead imediatamente — chip não é penalizado
+                }
+
+                // Erros de rede/socket/chip — lógica original de retry
                 console.error(`❌ Erro no motor do chip ${instanceId}:`, errInner.message);
                 if (currentLeadId) {
                     leadsEmProcessamento.delete(currentLeadId);
@@ -2503,7 +2502,7 @@ const mensagensSplit = [textoFinal];
                     break; // 🛑 HÍBRIDO: Erro de rede? Desliga e espera o Vigia tentar de novo em 30 min.
                 }
                 falhasConsecutivas++;
-                await delay(Math.min(10000 * Math.pow(2, falhasConsecutivas - 1), 300000)); 
+                await delay(Math.min(10000 * Math.pow(2, falhasConsecutivas - 1), 300000));
             }
         } // <-- Fim do while(true)
 
