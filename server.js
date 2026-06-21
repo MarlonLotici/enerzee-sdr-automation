@@ -11,10 +11,11 @@ const EventEmitter = require('events');
 const sdrEvents = new EventEmitter(); // 🔔 Nosso Alarme de RAM
 
 // ⚙️ IMPORTAÇÕES DA ESTEIRA DE DADOS MESTRE
-const { iniciarVarredura } = require('./1_scraper'); 
-const { processarLimpeza } = require('./2_clean'); 
-const { enriquecerLeadIndividual } = require('./3_enrich'); 
-const db = require('./database'); 
+const { iniciarVarredura } = require('./1_scraper');
+const { processarLimpeza } = require('./2_clean');
+const { enriquecerLeadIndividual } = require('./3_enrich');
+const db = require('./database');
+const { alertaCalendly } = require('./notifier');
 
 const { Worker } = require('bullmq');
 const { redisConnection } = require('./queue');
@@ -269,20 +270,20 @@ io.on('connection', (socket) => {
             }, stopCheck).then(() => {
                 getScraperState(userId).running = false;
                 emitLog("✅ Varredura concluída com sucesso na nuvem.");
-                socket.emit('scraper_status', { isRunning: false, recentLogs: getScraperState(userId).logs });
-                socket.emit('scraping_stopped');
+                io.to(`user:${userId}`).emit('scraper_status', { isRunning: false, recentLogs: getScraperState(userId).logs });
+                io.to(`user:${userId}`).emit('scraping_stopped');
             }).catch(err => {
                 console.error("🔥 Crash no processo de varredura:", err.message);
                 getScraperState(userId).running = false;
                 emitLog('❌ O Radar parou devido a uma falha de conexão com a Receita/Google.');
-                socket.emit('scraper_status', { isRunning: false, recentLogs: getScraperState(userId).logs });
-                socket.emit('scraping_stopped');
+                io.to(`user:${userId}`).emit('scraper_status', { isRunning: false, recentLogs: getScraperState(userId).logs });
+                io.to(`user:${userId}`).emit('scraping_stopped');
             });
 
         } catch (errGeral) {
             console.error("Erro geral na rota:", errGeral);
             getScraperState(userId).running = false;
-            socket.emit('scraping_stopped');
+            io.to(`user:${userId}`).emit('scraping_stopped');
         }
     });
 
@@ -347,7 +348,7 @@ app.post('/webhook/calendly', express.json(), async (req, res) => {
             for (const jid of jids) {
                 const { data } = await supabase
                     .from('leads')
-                    .select('id, name, whatsapp_id, instance_id, dono')
+                    .select('id, name, whatsapp_id, instance_id, dono, niche')
                     .eq('whatsapp_id', jid)
                     .maybeSingle();
                 if (data) { lead = data; break; }
@@ -358,7 +359,7 @@ app.post('/webhook/calendly', express.json(), async (req, res) => {
         if (!lead && emailConvidado) {
             const { data } = await supabase
                 .from('leads')
-                .select('id, name, whatsapp_id, instance_id, dono')
+                .select('id, name, whatsapp_id, instance_id, dono, niche')
                 .eq('email', emailConvidado)
                 .maybeSingle();
             if (data) lead = data;
@@ -381,7 +382,19 @@ app.post('/webhook/calendly', express.json(), async (req, res) => {
 
         console.log(`✅ [CALENDLY] Lead ${lead.name} travado — is_paused=true, status=closed.`);
 
-        // 4. Acorda o SDR para enviar o feedback humanizado ao lead
+        // 4. Alertas: Discord canal comercial + Socket.io para HandoffQueue do frontend
+        alertaCalendly({ leadName: lead.dono || lead.name, empresa: lead.name, niche: lead.niche, dataEvento, nomeEvento }).catch(() => {});
+        io.emit('handoff_detected', {
+            leadId:    lead.id,
+            name:      lead.dono || lead.name,
+            business:  lead.name,
+            niche:     lead.niche || '—',
+            reason:    `Reunião confirmada: ${nomeEvento}`,
+            instanceId: lead.instance_id,
+            pausadoEm: new Date().toISOString(),
+        });
+
+        // 5. Acorda o SDR para enviar o feedback humanizado ao lead
         sdrEvents.emit('AGENDAMENTO_CONFIRMADO', { lead, dataEvento, instanceId: lead.instance_id });
 
         return res.status(200).json({ ok: true, lead: lead.name });

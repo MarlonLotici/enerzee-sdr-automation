@@ -25,7 +25,7 @@ const auditorAgent = require('./agents/auditorAgent'); // faz auditoria das conv
 const handoffAgent = require('./agents/handoffAgent');
 const motoresEmExecucao = new Set(); // 🛡️ Impede que o mesmo chip ligue dois loops infinitos
 const { useRedisAuthState, clearRedisSession, saveOwnerToRedis, getOwnerFromRedis } = require('./auth_redis_adapter');
-const { enviarAlerta } = require('./notifier');
+const { enviarAlerta, alertaHandoff, alertaCalendly, alertaChipOffline, cancelarDebounceChip } = require('./notifier');
 const { getNicheData, inicializarCache } = require('./nicheCache');
 const instanciasEncerrandoManualmente = new Set(); // 🛑 Flag para silenciar alertas no Discord ao remover chip
 
@@ -1247,6 +1247,7 @@ async function startInstance(instanceId, instanceName, preloadedUserId = null) {
 
         if (connection === 'open') {
             console.log(`✅ [SDR] Canal Pronto e Estável: ${instanceName}`);
+            cancelarDebounceChip(instanceId); // Chip voltou — cancela alerta de desconexão se ainda no debounce
             sessions.set(instanceId, { sock, ready: true, userId: instanceUserId }); // <--- LIBERADO PARA ENVIO
             instanciasLigando.delete(instanceId);
             await db.updateInstanceStatus(instanceId, 'CONNECTED');
@@ -1282,9 +1283,9 @@ async function startInstance(instanceId, instanceName, preloadedUserId = null) {
             // Não espera o DB.updateStatus — usa sessions Map como fonte de verdade (já atualizado acima)
             setTimeout(() => redistribuirLeadsOrfaos(), 1500);
 
-            // Avisa no Discord (exceto se for deslogado/rejeitado pela Meta)
+            // Avisa no Discord via debounce de 3 min (exceto loggedOut/banido)
             if (reason !== DisconnectReason.loggedOut && reason !== 403 && reason !== 401) {
-                enviarAlerta("🔴 CHIP OFF-LINE", `O chip ${instanceName} caiu. Código do erro: ${reason}`, 15158332);
+                alertaChipOffline(instanceId, instanceName);
             }
 
             // 🔴 ERROS FATAIS (Deslogado, Banido, ou Rejeitado pela Meta)
@@ -2141,6 +2142,52 @@ function isNumeroInexistente(err) {
         msg.includes('invalid jid') ||
         (msg.includes('bad-request') && msg.includes('jid'))
     );
+}
+
+// Gera um resumo executivo de até 2 frases para o consultor que vai assumir o chat.
+async function gerarResumoHandoff(historicoRecente) {
+    try {
+        const msgs = (historicoRecente || []).slice(-12)
+            .map(m => `${m.role === 'user' ? 'Lead' : 'IA'}: ${m.content}`)
+            .join('\n');
+        const res = await groq.chat.completions.create({
+            messages: [{ role: 'user', content: `Analise o histórico de conversa de energia solar abaixo e gere um resumo executivo de no máximo 2 frases para o consultor humano assumir o chat. Foque em: 1. Perfil do negócio (o que é, porte), 2. Dor/Dados coletados (valor da conta se houver), 3. Motivo do travamento/handoff. Seja direto, sem introduções.\n\n${msgs}` }],
+            model: 'llama-3.1-8b-instant',
+            temperature: 0.2,
+            max_tokens: 100,
+        });
+        return res.choices[0].message.content.trim();
+    } catch (err) {
+        console.error('[HANDOFF] Erro ao gerar resumo:', err.message);
+        return 'Resumo indisponível.';
+    }
+}
+
+// Dispara Socket.io + Discord sempre que um lead entrar em handoff humano.
+async function emitirEventoHandoff(lead, motivo, historico) {
+    console.log(`📥 [HANDOFF] Disparando resumo e alerta para o lead ${lead.name}`);
+    const resumoIA = await gerarResumoHandoff(historico);
+    if (ioSocket) {
+        ioSocket.emit('handoff_detected', {
+            leadId:     lead.id,
+            name:       lead.name,
+            business:   lead.name,
+            niche:      lead.niche  || '—',
+            reason:     motivo,
+            resumoIA,
+            instanceId: lead.instance_id,
+            pausadoEm:  new Date().toISOString(),
+        });
+    }
+    await alertaHandoff({
+        leadId:    lead.id,
+        leadName:  lead.dono || lead.name,
+        empresa:   lead.name,
+        niche:     lead.niche || '—',
+        motivo,
+        resumoIA,
+        instanceId: lead.instance_id,
+    });
 }
 
 // ============================================================================
@@ -3195,6 +3242,7 @@ if (!promptResolvido) {
                 is_paused: true,
                 internal_notes: `Anti-loop: ${totalMsgsIA} respostas sem conversão em ${new Date().toLocaleString('pt-BR')}`
             }).eq('id', lead.id);
+            emitirEventoHandoff(lead, `${totalMsgsIA} msgs da IA sem conversão — lead não engajou`, historico).catch(() => {});
             return;
         }
 
@@ -3253,6 +3301,7 @@ if (!promptResolvido) {
             internal_notes: `Lead pediu retorno posterior. Pausado em ${new Date().toLocaleString('pt-BR')}.`
         }).eq('id', lead.id);
         console.log(`⏸️ [AGENDA_RETORNO] Sem tag FOLLOW_UP. Lead ${lead.name} pausado preventivamente.`);
+        emitirEventoHandoff(lead, 'Lead pediu retorno posterior — sem data extraída automaticamente', historico).catch(() => {});
     }
 
 } else if (intencao === 'COMPRA') {
@@ -3319,6 +3368,7 @@ if (!promptResolvido) {
             internal_notes: `Aguardando telefone do decisor — email recebido: "${ultimaMsg.substring(0, 80)}"`
         }).eq('id', lead.id);
         console.log(`⏸️ [REPASSE] Lead ${lead.name} pausado. Aguardando retorno com telefone.`);
+        emitirEventoHandoff(lead, 'Aguardando telefone do decisor — lead indicou outra pessoa sem passar o número', historico).catch(() => {});
     }
 
 } else {
@@ -3591,7 +3641,7 @@ module.exports = {
 
                sdrEvents.on('AGENDAMENTO_CONFIRMADO', async ({ lead, dataEvento, instanceId }) => {
     console.log(`🎊 [WEBHOOK] Agendamento confirmado para ${lead.name}. Preparando feedback...`);
-enviarAlerta("🎊 REUNIÃO AGENDADA!", `Lead: ${lead.name}\nData: ${new Date(dataEvento).toLocaleString('pt-BR')}`, 3066993);
+    alertaCalendly({ leadName: lead.dono || lead.name, empresa: lead.name, niche: lead.niche, dataEvento, nomeEvento: lead.calendly_event_name }).catch(() => {});
     // 🛡️ BLINDAGEM: Em domingos, só registra mas não dispara mensagem (lead recebe na segunda)
     if (!dentroDoExpediente()) {
         console.log(`💤 [WEBHOOK] Fora do expediente. Feedback será enviado no próximo dia útil.`);
