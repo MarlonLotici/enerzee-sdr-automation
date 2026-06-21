@@ -1517,8 +1517,27 @@ async function filtrarEEnviarResposta(sock, remoteJid, resposta, historico, lead
     // 🔍 LOG DE DIAGNÓSTICO: mostra o que a LLM gerou
     console.log(`📝 [FILTRO] Resposta RAW da LLM (${resposta.length} chars): "${resposta.substring(0, 200)}..."`);
 
+    // ── 0. EXTRAÇÃO DE [FOLLOW_UP] — DEVE rodar ANTES da limpeza de tags ──
+    const _matchFollowUp = resposta.match(/\[FOLLOW_UP:\s*([^\]]+)\]/i);
+    if (_matchFollowUp && lead?.id) {
+        try {
+            const followUpAt = new Date(_matchFollowUp[1].trim());
+            if (!isNaN(followUpAt.getTime())) {
+                await supabase.from('leads').update({
+                    is_paused:    true,
+                    follow_up_at: followUpAt.toISOString(),
+                }).eq('id', lead.id);
+                console.log(`⏳ [FOLLOW-UP] Lead ${lead.name} pausado até ${followUpAt.toLocaleString('pt-BR')}.`);
+            } else {
+                console.warn(`⚠️ [FOLLOW-UP] Data inválida na tag: "${_matchFollowUp[1]}". Tag será removida sem salvar.`);
+            }
+        } catch (errFU) {
+            console.error(`❌ [FOLLOW-UP] Erro ao salvar follow-up para ${lead?.name}:`, errFU.message);
+        }
+    }
+
     // ── 1. LIMPEZA TOTAL DE TAGS (À PROVA DE ALUCINAÇÃO) ──
-    const regexTags = /\[\s*(ESTAGIO|ESTÁGIO|CLIMA|RAIO-X|PERFIL|ROBO|CONTADOR|ENGANO|GATEKEEPER|AGENDAMENTO_MANUAL|PAUSA\s*PARA\s*RESPOSTA|REVERSAO_TENTADA)[^\]]*\]/gi;
+    const regexTags = /\[\s*(ESTAGIO|ESTÁGIO|CLIMA|RAIO-X|PERFIL|ROBO|CONTADOR|ENGANO|GATEKEEPER|AGENDAMENTO_MANUAL|PAUSA\s*PARA\s*RESPOSTA|REVERSAO_TENTADA|FOLLOW_UP|AGUARDANDO_RETORNO)[^\]]*\]/gi;
     const matchEstagio = /\[?\s*EST[AÁ]GIO\s*:?\s*(\d)\s*\]?/gi.exec(resposta);
     const matchEncerrado = /\[?\s*EST[AÁ]GIO\s*:?\s*ENCERRADO\s*\]?/gi.test(resposta);
     const matchClima = /\[?\s*CLIMA\s*:?\s*([a-zA-Z_]+)\s*\]?/gi.exec(resposta);
@@ -2368,37 +2387,77 @@ const substituirVarsAbertura = (tpl) => resolverSpintax(tpl
     .replace(/\s*--\s*/g, ', ') // remove em-dash do template antes de enviar
     .trim());
 
-// Tenta usar templates do Supabase; cai no hardcoded se não houver
+// ── ABERTURA: cache → REPASSE → LLM → spintax ──────────────────────────
 const tplsInstancia = instanceData?.opening_templates;
-let variacoesAbertura;
+let textoFinal;
 
-if (tplsInstancia && Array.isArray(tplsInstancia.decisor) && lead.is_decisor && lead.origin_company_name) {
-    // Decisor com template customizado no Supabase
-    variacoesAbertura = tplsInstancia.decisor.map(substituirVarsAbertura);
+if (lead.opening_template && lead.opening_template.length > 15 && lead.opening_template.includes(' ')) {
+    // PASSO 1: Cache hit — reutiliza abertura original (redistribuição de chip)
+    textoFinal = lead.opening_template;
+    console.log(`💾 [OPENER] Cache hit para ${lead.name}.`);
+} else if (tplsInstancia && Array.isArray(tplsInstancia.decisor) && lead.is_decisor && lead.origin_company_name) {
+    // PASSO 2a: Decisor com template customizado no Supabase
+    const vars = tplsInstancia.decisor.map(substituirVarsAbertura);
+    textoFinal = vars[Math.floor(Math.random() * vars.length)];
 } else if (lead.is_decisor && lead.origin_company_name) {
-    // Decisor sem template customizado → hardcoded com contexto de repasse
-    // (não cai no padrao para preservar o "me indicaram vc")
-    variacoesAbertura = tplsInstancia && Array.isArray(tplsInstancia.decisor_fallback)
+    // PASSO 2b: Decisor sem template — hardcoded com contexto de repasse
+    const fallbacks = tplsInstancia && Array.isArray(tplsInstancia.decisor_fallback)
         ? tplsInstancia.decisor_fallback.map(substituirVarsAbertura)
         : [
             `${saudacao}, o pessoal da ${lead.origin_company_name} me passou seu contato. Tenho uma informação que achei que valia compartilhar — vc que cuida da parte comercial/financeira aí?`,
             `${saudacao}, falei com a equipe da ${lead.origin_company_name} e me indicaram vc. Queria confirmar uma coisa rápida — é vc que responde por essa área?`,
           ];
-} else if (tplsInstancia && Array.isArray(tplsInstancia.padrao) && tplsInstancia.padrao.length > 0) {
-    variacoesAbertura = tplsInstancia.padrao.map(substituirVarsAbertura);
+    textoFinal = fallbacks[Math.floor(Math.random() * fallbacks.length)];
 } else {
-    // fallback hardcoded padrão
-    variacoesAbertura = [
-        `${saudacao}, vi algo sobre a conta de energia da ${nomeEmpresa} que achei que valia te passar. Vc cuida dessa parte de contas fixas aí?`,
-        `${saudacao}, dei uma olhada no cadastro da ${nomeEmpresa} e tem uma coisa sobre a conta de luz da ${concessionariaLocal} que achei que valia te avisar. Tô falando com quem cuida disso?`,
-        `${saudacao}, mapeamos empresas da região que podem estar pagando a mais na ${concessionariaLocal}. A ${nomeEmpresa} apareceu na lista. Vc é quem cuida dessa parte?`
-    ];
+    // PASSO 3: Motor LLM para leads frios / padrão
+    const spintaxFallback = (tplsInstancia && Array.isArray(tplsInstancia.padrao) && tplsInstancia.padrao.length > 0)
+        ? tplsInstancia.padrao.map(substituirVarsAbertura)
+        : [
+            `${saudacao}, vi algo sobre a conta de energia da ${nomeEmpresa} que achei que valia te passar. Vc cuida dessa parte de contas fixas aí?`,
+            `${saudacao}, dei uma olhada no cadastro da ${nomeEmpresa} e tem uma coisa sobre a conta de luz da ${concessionariaLocal} que achei que valia te avisar. Tô falando com quem cuida disso?`,
+            `${saudacao}, mapeamos empresas da região que podem estar pagando a mais na ${concessionariaLocal}. A ${nomeEmpresa} apareceu na lista. Vc é quem cuida dessa parte?`
+          ];
+
+    try {
+        const capitalDesc = !lead.capital_social_numeric ? 'não informado'
+            : lead.capital_social_numeric >= 500000 ? 'grande (R$ 500k+)'
+            : lead.capital_social_numeric >= 150000 ? 'médio (R$ 150k-500k)'
+            : 'pequeno (< R$ 150k)';
+        const descontoEstimado = MAPA_DESCONTO_REGIONAL[ufLead] ? `${Math.round(MAPA_DESCONTO_REGIONAL[ufLead] * 100)}` : '12-18';
+        const nicheCtx = gerarContextoNicho(lead.niche || '');
+
+        const llmPromise = groq.chat.completions.create({
+            messages: [{
+                role: 'user',
+                content: `Nicho: ${lead.niche || 'comércio'}\nEmpresa: ${nomeEmpresa}\nResponsável: ${primeiroNomeDono || 'não identificado'}\nBairro: ${bairroLead}\nConcessionária: ${concessionariaLocal}\nCapital social: ${capitalDesc}\nDesconto estimado: ${descontoEstimado}%${nicheCtx ? '\nContexto do setor: ' + nicheCtx : ''}\n\nGere UMA mensagem de abertura WhatsApp B2B em português brasileiro.\nRegras: máx 80 caracteres, tom casual/direto, pergunta de qualificação no final, SEM mencionar "energia solar" ou "painel solar", SEM emojis, SEM links, SEM markdown.\nRetorne APENAS o texto da mensagem, sem aspas.`
+            }],
+            model: 'llama-3.1-8b-instant',
+            temperature: 0.8,
+            max_tokens: 80,
+        });
+        const timeoutPromise = new Promise((_, reject) =>
+            setTimeout(() => reject(new Error('timeout')), 3500));
+        const llmRes = await Promise.race([llmPromise, timeoutPromise]);
+        const llmTexto = llmRes.choices[0].message.content.trim().replace(/^["'`]|["'`]$/g, '');
+        if (llmTexto && llmTexto.length > 10) {
+            textoFinal = llmTexto;
+            console.log(`🧠 [LLM] Abertura gerada para ${lead.name}: "${textoFinal}"`);
+        } else {
+            throw new Error('texto vazio');
+        }
+    } catch (errLLM) {
+        console.warn(`⚠️ [LLM TIMEOUT] Usando spintax para ${lead.name}: ${errLLM.message}`);
+        textoFinal = spintaxFallback[Math.floor(Math.random() * spintaxFallback.length)];
+    }
 }
 
-const templateIndex = Math.floor(Math.random() * variacoesAbertura.length);
-const balaoUnico = variacoesAbertura[templateIndex];
-const templateName = `abertura_v${templateIndex + 1}${lead.is_decisor ? '_decisor' : ''}`;
-const mensagensSplit = [balaoUnico]; // ← BALÃO ÚNICO (era [balao1, balao2])
+// PASSO 4: Cap de segurança — corta na última palavra antes de 85 chars
+if (textoFinal.length > 85) {
+    const corte = textoFinal.lastIndexOf(' ', 85);
+    textoFinal = (corte > 20 ? textoFinal.substring(0, corte) : textoFinal.substring(0, 85)) + '...';
+}
+
+const mensagensSplit = [textoFinal];
 
                 // 9. FATIADOR HUMANO E ENVIO (Com interrupção intacta!)
                 
@@ -2425,7 +2484,7 @@ const mensagensSplit = [balaoUnico]; // ← BALÃO ÚNICO (era [balao1, balao2])
                 }
 
                 // 10. CONCLUSÃO E SUCESSO
-                await supabase.from('leads').update({ status: 'contact', last_contact_at: new Date().toISOString(), opening_template: templateName }).eq('id', lead.id);
+                await supabase.from('leads').update({ status: 'contact', last_contact_at: new Date().toISOString(), opening_template: textoFinal }).eq('id', lead.id);
                 console.log(`✅ [SUCESSO REAL] Entregue por ${config.nome} para ${lead.name}!`);
                 leadsEmProcessamento.delete(lead.id);
                 liberarSemaforoChip(instanceId, chipNovo); // 🚦 warmup=chipNovo → 6-10 min; maduro → 4-7 min
@@ -3155,18 +3214,48 @@ if (!promptResolvido) {
 
         if (intencao === 'ENCERRAMENTO') {
     console.log(`👋 [WORKER-IA] ENCERRAMENTO detectado. Finalizando conversa educadamente e pausando o lead...`);
-    
-    // Pausa o lead pra o vigia não insistir nessa conversa já finalizada
-    await supabase.from('leads').update({ 
+    await supabase.from('leads').update({
         is_paused: true,
         manual_pause: false,
         internal_notes: `Conversa encerrada cordialmente em ${new Date().toLocaleString('pt-BR')}.`
     }).eq('id', lead.id);
-    
-    // Não gera resposta — o cliente se despediu, não vamos mandar mais mensagem
     console.log(`🔕 [WORKER-IA] Lead ${lead.name} pausado após despedida cordial.`);
-    return; // Encerra o worker aqui, sem chamar nenhum agente
-    
+    return;
+
+} else if (intencao === 'ENGANO') {
+    console.log(`🚫 [WORKER-IA] ENGANO detectado para ${lead.name}. Encerrando com resposta de cortesia.`);
+    await supabase.from('leads').update({
+        status: 'invalid',
+        is_paused: true,
+        internal_notes: `Número errado/engano detectado em ${new Date().toLocaleString('pt-BR')}.`
+    }).eq('id', lead.id);
+    resposta = 'Puxa, desculpas pelo incômodo! O cadastro devia estar desatualizado. Um abraço e boa semana!';
+
+} else if (intencao === 'SOLAR') {
+    console.log(`☀️ [WORKER-IA] Lead já tem solar: ${lead.name}. Aplicando KNOCK-OUT.`);
+    await supabase.from('leads').update({
+        status: 'invalid',
+        is_paused: true,
+        internal_notes: `Lead já tem geração solar ativa. Encerrado em ${new Date().toLocaleString('pt-BR')}.`
+    }).eq('id', lead.id);
+    resposta = 'Entendi! Como vocês já têm geração ativa, a ANEEL não permite acumular dois benefícios. Parabéns pela gestão energética!';
+
+} else if (intencao === 'AGENDA_RETORNO') {
+    console.log(`📅 [WORKER-IA] Lead ${lead.name} pediu retorno em horário específico. Gerando confirmação...`);
+    resposta = await closerAgent.gerarRespostaCloser(historico, lead, promptResolvido, 'COMPRA', {
+        calendlyLink: instanceData?.calendly_link,
+        instanceType: instanceData?.product_type || 'solar'
+    });
+    // A extração de [FOLLOW_UP] e a pausa do lead são feitas em filtrarEEnviarResposta (etapa 0).
+    // Fallback: se o closer não gerou a tag, pausa preventivamente para não reenviar.
+    if (resposta && !resposta.match(/\[FOLLOW_UP:/i)) {
+        await supabase.from('leads').update({
+            is_paused:      true,
+            internal_notes: `Lead pediu retorno posterior. Pausado em ${new Date().toLocaleString('pt-BR')}.`
+        }).eq('id', lead.id);
+        console.log(`⏸️ [AGENDA_RETORNO] Sem tag FOLLOW_UP. Lead ${lead.name} pausado preventivamente.`);
+    }
+
 } else if (intencao === 'COMPRA') {
     // ... resto do código igual
     console.log(`💰 [WORKER-IA] Sinal de COMPRA! Acionando Closer em modo fechamento para ${lead.name}...`);
@@ -3374,6 +3463,66 @@ async function redistribuirLeadsOrfaos() {
     }
 }
 
+// ============================================================
+// 📅 MOTOR DE FOLLOW-UP — Despertador de leads agendados
+// ============================================================
+async function verificarFollowUpsVencidos() {
+    try {
+        const agora = new Date().toISOString();
+        const { data: leads, error } = await supabase
+            .from('leads')
+            .select('id, name, dono, whatsapp_id, instance_id')
+            .eq('is_paused', true)
+            .not('follow_up_at', 'is', null)
+            .lte('follow_up_at', agora)
+            .limit(20);
+
+        if (error) {
+            console.error('[FOLLOW-UP] Erro ao buscar follow-ups vencidos:', error.message);
+            return;
+        }
+        if (!leads || leads.length === 0) return;
+
+        for (const lead of leads) {
+            try {
+                // 1. Despausa o lead antes de tentar enviar
+                await supabase.from('leads')
+                    .update({ is_paused: false, follow_up_at: null })
+                    .eq('id', lead.id);
+
+                console.log(`⏰ [FOLLOW-UP] Acordando lead ${lead.name} no prazo combinado!`);
+
+                // 2. Tenta obter o socket ativo para o chip do lead
+                const instancia = sessions.get(lead.instance_id);
+                if (!instancia?.sock || !instancia?.ready) {
+                    console.warn(`⚠️ [FOLLOW-UP] Chip ${lead.instance_id} offline. Lead ${lead.name} despausado; próximo disparo retoma contato.`);
+                    continue;
+                }
+
+                // 3. Monta e envia a mensagem de reativação
+                const primeiroNome = (lead.dono || lead.name || '').split(' ')[0];
+                const msgReativacao = `Oi ${primeiroNome}, passando aqui conforme combinamos! Como estão as coisas por aí?`;
+                const cleanJid = lead.whatsapp_id.includes('@')
+                    ? lead.whatsapp_id
+                    : `${lead.whatsapp_id}@s.whatsapp.net`;
+
+                await instancia.sock.sendPresenceUpdate('composing', cleanJid);
+                await delay(2000 + Math.random() * 2000);
+                await instancia.sock.sendPresenceUpdate('paused', cleanJid);
+
+                await enviarMensagemIA(instancia.sock, cleanJid, { text: msgReativacao });
+                await db.saveMessage(cleanJid, 'assistant', msgReativacao, lead.instance_id);
+
+                console.log(`✅ [FOLLOW-UP] Mensagem de reativação enviada para ${lead.name}.`);
+            } catch (errLead) {
+                console.error(`❌ [FOLLOW-UP] Erro ao acordar lead ${lead.name}:`, errLead.message);
+            }
+        }
+    } catch (err) {
+        console.error('[FOLLOW-UP] Erro geral na verificação de follow-ups:', err.message);
+    }
+}
+
 module.exports = {
     // 👇 Recebe a porta de comunicação (io) e o Alarme (sdrEvents)
     initMultiTenancy: async (io, sdrEvents) => {
@@ -3430,6 +3579,9 @@ module.exports = {
                     processarFilaDeAtaque(id);
                 }
             }, 30 * 60 * 1000);
+
+            // 📅 DESPERTADOR DE FOLLOW-UPS: verifica a cada 1 minuto
+            setInterval(verificarFollowUpsVencidos, 60 * 1000);
 
             // 🔔 OUVINTE DO ALARME RAM: Escuta o grito do Scraper
             if (sdrEvents) {
