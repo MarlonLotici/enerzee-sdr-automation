@@ -97,7 +97,7 @@ function computeMetrics(leads, instances, realTotalLeads, realAgendados = 0, rea
         { etapa: 'Capturados',   qtd: realTotalLeads || leadsValidos.length,    fill: NEON.blue    },
         { etapa: 'Abordados',    qtd: realAbordados  || leadsValidos.filter(l => !!l.last_contact_at).length, fill: NEON.cyan },
         { etapa: 'Em Conversa',  qtd: emConversaQtd,                             fill: '#6366f1'   },
-        { etapa: 'Em análise',   qtd: sc.waiting_analysis + sc.booked + sc.closed, fill: NEON.violet },
+        { etapa: 'Negociação',   qtd: sc.waiting_analysis + sc.booked + sc.closed, fill: NEON.violet },
         { etapa: 'Agendados',    qtd: totalAgendamentosReais,                    fill: NEON.emerald },
     ]
     // ── 3. Nichos (top 6) ──
@@ -117,23 +117,21 @@ function computeMetrics(leads, instances, realTotalLeads, realAgendados = 0, rea
             fill: NICHE_COLORS[i % NICHE_COLORS.length],
         }))
 
-    // ── 4. Disparos por chip (instance_id) ──
-    const chipCount = {}
+    // ── 4. Disparos por dia (últimos 14 dias) ──
+    const _dailyMap = {}
+    for (let i = 13; i >= 0; i--) {
+        const d = new Date(now)
+        d.setDate(d.getDate() - i)
+        const key = `${d.getFullYear()}-${String(d.getMonth()+1).padStart(2,'0')}-${String(d.getDate()).padStart(2,'0')}`
+        _dailyMap[key] = { dia: `${String(d.getDate()).padStart(2,'0')}/${String(d.getMonth()+1).padStart(2,'0')}`, disparos: 0 }
+    }
     leadsValidos.forEach(l => {
-        if (!l.last_contact_at || !l.instance_id) return
-        chipCount[l.instance_id] = (chipCount[l.instance_id] || 0) + 1
+        if (!l.last_contact_at) return
+        const d = new Date(l.last_contact_at)
+        const key = `${d.getFullYear()}-${String(d.getMonth()+1).padStart(2,'0')}-${String(d.getDate()).padStart(2,'0')}`
+        if (_dailyMap[key]) _dailyMap[key].disparos++
     })
-    const chipData = Object.entries(chipCount)
-        .sort((a, b) => b[1] - a[1])
-        .slice(0, 8)
-        .map(([id, qtd]) => {
-            const inst = instances?.find(i => i.id === id)
-            return {
-                chip: inst?.name ? (inst.name.length > 12 ? inst.name.slice(0, 12) + '…' : inst.name) : id.slice(0, 8),
-                disparos: qtd,
-                fill: inst?.whatsapp_status === 'CONNECTED' ? NEON.emerald : NEON.violet,
-            }
-        })
+    const dailyDisparos = Object.values(_dailyMap)
 
     // ── 5. Leads capturados por dia da semana ──
     const diaCriados = [0, 0, 0, 0, 0, 0, 0]
@@ -173,29 +171,6 @@ function computeMetrics(leads, instances, realTotalLeads, realAgendados = 0, rea
         { name: 'Hot 🔥',   value: tempCount.hot,  fill: '#EF4444' },
         { name: 'Dead 💀',  value: tempCount.dead, fill: '#64748b' },
     ].filter(d => d.value > 0)
-
-    // ── 8. A/B Testing de aberturas ──
-    // "responderam" = avançaram além do estágio 0 (melhor proxy disponível sem histórico de mensagens)
-    const templateStats = {}
-    leadsValidos.forEach(l => {
-        if (!l.opening_template || !l.last_contact_at) return
-        const baseTemplate = l.opening_template.replace('_decisor', '') // merge variantes decisor/não-decisor
-        if (!templateStats[baseTemplate]) {
-            templateStats[baseTemplate] = { enviados: 0, responderam: 0 }
-        }
-        templateStats[baseTemplate].enviados++
-        if ((l.current_stage || 0) > 0) {
-            templateStats[baseTemplate].responderam++
-        }
-    })
-    const abTestData = Object.entries(templateStats)
-        .map(([template, stats]) => ({
-            template: template.replace('abertura_', '').toUpperCase(),
-            enviados: stats.enviados,
-            responderam: stats.responderam,
-            taxa: stats.enviados > 0 ? Math.round(stats.responderam / stats.enviados * 100) : 0,
-        }))
-        .sort((a, b) => b.taxa - a.taxa)
 
     // ── 9. Taxa de resposta por nicho ──
     // Denominador: apenas leads que foram efetivamente disparados (têm last_contact_at)
@@ -258,19 +233,22 @@ function computeMetrics(leads, instances, realTotalLeads, realAgendados = 0, rea
         .sort((a, b) => b.total - a.total)
         .slice(0, 5)
 
-   // ── 12. Métrica de Engajamento Real ──
-    let visualizados = 0
-    let responderamAposVer = 0
-    leadsValidos.forEach(l => {
-        if (l.last_seen_at) {
-            visualizados++
-            // 🎯 Se passou do estágio 0 OU se a temperatura esquentou, ele engajou
-            if ((l.current_stage || 0) > 0 || l.lead_temperature === 'warm' || l.lead_temperature === 'hot') {
-                responderamAposVer++
-            }
-        }
-    })
-    const engagementRate = visualizados > 0 ? Math.round((responderamAposVer / visualizados) * 100) : 0
+    // ── 12. Taxa de Engajamento Real ──
+    // Fórmula: (Em Conversa + Pausados + Hot + Agendados) / Total Abordados
+    const leadsAbordados = leadsValidos.filter(l => !!l.last_contact_at)
+    const leadsEngajados = leadsAbordados.filter(l =>
+        l.status === 'contact'          ||
+        l.status === 'waiting_analysis' ||
+        l.is_paused === true            ||
+        l.lead_temperature === 'hot'    ||
+        l.status === 'booked'           ||
+        l.status === 'closed'           ||
+        l.calendly_booked === true      ||
+        (l.current_stage || 0) >= 4
+    )
+    const engagementRate = leadsAbordados.length > 0
+        ? Math.round((leadsEngajados.length / leadsAbordados.length) * 100)
+        : 0
 
     // ── KPIs — todos usam valores server-side quando disponíveis ──
     const totalLeads     = realTotalLeads || leadsValidos.length
@@ -283,11 +261,11 @@ function computeMetrics(leads, instances, realTotalLeads, realAgendados = 0, rea
     const deltaAbordados = last2.length === 2 && last2[0].abordados > 0 ? Math.round((last2[1].abordados - last2[0].abordados) / last2[0].abordados * 100) : 0
 
     return {
-        monthly, funnel, nicheData, chipData, dailyCapture,
+        monthly, funnel, nicheData, dailyDisparos, dailyCapture,
         totalLeads, totalAbordados, totalAgendados, taxaAbordagem,
         deltaCriados, deltaAbordados,
         statusCounts: sc,
-        funnelSpin, temperatureData, abTestData,
+        funnelSpin, temperatureData,
         nicheResponseData, spinPassagem,
         geoData, engagementRate
     }
@@ -342,8 +320,29 @@ function InfoTooltip({ text }) {
     )
 }
 
+// ─── SPARKLINE ────────────────────────────────────────────────────────────────
+function Sparkline({ data, color }) {
+    if (!data || data.length < 2) return null
+    const vals = data.map((v, i) => ({ i, v }))
+    const id = `sg${color.replace('#', '')}`
+    return (
+        <ResponsiveContainer width="100%" height={28}>
+            <AreaChart data={vals} margin={{ top: 2, right: 0, bottom: 0, left: 0 }}>
+                <defs>
+                    <linearGradient id={id} x1="0" y1="0" x2="0" y2="1">
+                        <stop offset="5%"  stopColor={color} stopOpacity={0.25} />
+                        <stop offset="95%" stopColor={color} stopOpacity={0}    />
+                    </linearGradient>
+                </defs>
+                <Area type="monotone" dataKey="v" stroke={color} strokeWidth={1.5}
+                      fill={`url(#${id})`} dot={false} isAnimationActive={false} />
+            </AreaChart>
+        </ResponsiveContainer>
+    )
+}
+
 // ─── KPI CARD ─────────────────────────────────────────────────────────────────
-function KpiCard({ icon: Icon, label, value, sub, delta, color, info }) {
+function KpiCard({ icon: Icon, label, value, sub, delta, color, info, sparklineData }) {
     const isUp = delta >= 0
     return (
         <div
@@ -368,6 +367,7 @@ function KpiCard({ icon: Icon, label, value, sub, delta, color, info }) {
             </p>
             <p style={{ fontSize: 28, fontWeight: 900, color: '#fff', letterSpacing: '-0.03em', lineHeight: 1, marginBottom: 4 }}>{value}</p>
             <p style={{ fontSize: 11, color: 'rgba(255,255,255,0.28)', fontWeight: 700 }}>{sub}</p>
+            {sparklineData && <div style={{ marginTop: 8 }}><Sparkline data={sparklineData} color={color} /></div>}
         </div>
     )
 }
@@ -419,7 +419,7 @@ export default function VisualAnalytics() {
 
             let leadsQ = supabase
                 .from('leads')
-                .select('id, status, niche, created_at, last_contact_at, instance_id, capital_social_numeric, current_stage, lead_temperature, opening_template, last_seen_at, calendly_booked')
+                .select('id, status, niche, created_at, last_contact_at, instance_id, capital_social_numeric, current_stage, lead_temperature, opening_template, last_seen_at, calendly_booked, estado, is_paused')
                 .or(orFilter)
                 .order('current_stage', { ascending: false })
                 .limit(10000)
@@ -489,12 +489,11 @@ export default function VisualAnalytics() {
     }
 
     const {
-    monthly, funnel, nicheData, chipData, dailyCapture,
-    totalLeads, totalAbordados, totalAgendados, taxaAbordagem,
+    monthly, funnel, nicheData, dailyDisparos, dailyCapture,
+    totalLeads, totalAbordados, totalAgendados,
     deltaCriados, deltaAbordados,
-    funnelSpin, temperatureData, abTestData,
     nicheResponseData, spinPassagem,
-    geoData, engagementRate,
+    engagementRate,
 } = metrics
 
     return (
@@ -542,6 +541,7 @@ export default function VisualAnalytics() {
                     sub={periodo === 'all' ? 'total na base' : 'criados no período'}
                     delta={deltaCriados}   color={NEON.blue}
                     info="Total de empresas capturadas pelo radar e salvas no banco. Inclui leads em qualquer status — novos, em conversa, inválidos e mortos."
+                    sparklineData={monthly.map(m => m.criados)}
                 />
                 <KpiCard
                     icon={Zap}     label="Leads Abordados"
@@ -549,6 +549,7 @@ export default function VisualAnalytics() {
                     sub="receberam disparo"
                     delta={deltaAbordados} color={NEON.cyan}
                     info="Leads que efetivamente receberam a primeira mensagem do SDR. Exclui leads capturados mas ainda não disparados (status 'new')."
+                    sparklineData={monthly.map(m => m.abordados)}
                 />
                 <KpiCard
                     icon={Target}  label="Agendamentos"
@@ -572,9 +573,9 @@ export default function VisualAnalytics() {
                 <KpiCard
                     icon={Flame} label="Engajamento Real"
                     value={engagementRate + '%'}
-                    sub="responderam após ver"
+                    sub="em conv. + pausados + hot + agendados"
                     delta={null} color={NEON.rose}
-                    info="De todos os leads que leram a mensagem (confirmado pelo visto azul), quantos avançaram além do estágio 0. Mede qualidade da abertura, não quantidade de disparos."
+                    info="Proporção de leads abordados que estão em conversa ativa, pausados aguardando humano, com temperatura hot, ou já agendados. Mede qualidade do engajamento gerado pelo SDR."
                 />
             </div>
 
@@ -646,34 +647,36 @@ export default function VisualAnalytics() {
             {/* ── ROW 3: Disparos por chip + Nichos + Leads por dia ── */}
             <div style={{ display: 'grid', gridTemplateColumns: '1fr 260px 240px', gap: 16 }}>
 
-                {/* DISPAROS POR CHIP — substitui Economia Gerada */}
+                {/* DISPAROS DIÁRIOS — últimos 14 dias */}
                 <ChartCard>
-                    <SectionTitle accent={NEON.amber}>
+                    <SectionTitle accent={NEON.amber} info="Total de leads abordados por dia nos últimos 14 dias, baseado em last_contact_at. Mostra o ritmo de disparos do motor SDR.">
                         <Cpu size={12} color={NEON.amber} style={{ display: 'inline', marginRight: 6 }} />
-                        Disparos por Chip
+                        Disparos Diários — 14 dias
                     </SectionTitle>
-                    {chipData.length > 0 ? (
+                    {dailyDisparos.some(d => d.disparos > 0) ? (
                         <ResponsiveContainer width="100%" height={200}>
-                            <BarChart data={chipData} margin={{ top: 4, right: 4, bottom: 0, left: -10 }}>
+                            <BarChart data={dailyDisparos} margin={{ top: 4, right: 4, bottom: 0, left: -10 }}>
                                 <CartesianGrid stroke={NEON.grid} vertical={false} />
-                                <XAxis dataKey="chip" tick={{ fill: NEON.muted, fontSize: 10, fontWeight: 700 }} axisLine={false} tickLine={false} />
+                                <XAxis dataKey="dia" tick={{ fill: NEON.muted, fontSize: 9, fontWeight: 700 }} axisLine={false} tickLine={false} interval={1} />
                                 <YAxis tick={{ fill: NEON.muted, fontSize: 10, fontWeight: 700 }} axisLine={false} tickLine={false} />
                                 <Tooltip content={<NeonTooltip />} cursor={{ fill: 'rgba(255,255,255,0.03)' }} />
-                                <Bar dataKey="disparos" name="Disparos" radius={[6, 6, 0, 0]}>
-                                    {chipData.map((d, i) => (
-                                        <Cell key={i} fill={d.fill} />
-                                    ))}
+                                <Bar dataKey="disparos" name="Disparos" radius={[4, 4, 0, 0]}>
+                                    {(() => {
+                                        const max = Math.max(...dailyDisparos.map(x => x.disparos), 1)
+                                        return dailyDisparos.map((d, i) => (
+                                            <Cell key={i} fill={d.disparos === max ? NEON.amber : d.disparos >= max * 0.6 ? NEON.cyan : NEON.blue} />
+                                        ))
+                                    })()}
                                 </Bar>
                             </BarChart>
                         </ResponsiveContainer>
                     ) : (
                         <div style={{ height: 200, display: 'flex', alignItems: 'center', justifyContent: 'center', color: 'rgba(255,255,255,0.2)', fontSize: 11, fontWeight: 700 }}>
-                            Nenhum disparo registrado
+                            Nenhum disparo nos últimos 14 dias
                         </div>
                     )}
-                    {/* legenda status chip */}
-                    <div style={{ display: 'flex', gap: 14, marginTop: 10 }}>
-                        {[{ c: NEON.emerald, l: 'Chip conectado' }, { c: NEON.violet, l: 'Chip desconectado' }].map(({ c, l }) => (
+                    <div style={{ display: 'flex', gap: 10, marginTop: 10 }}>
+                        {[{ c: NEON.amber, l: 'Pico do dia' }, { c: NEON.cyan, l: '≥60% pico' }, { c: NEON.blue, l: 'Baixo' }].map(({ c, l }) => (
                             <div key={l} style={{ display: 'flex', alignItems: 'center', gap: 5 }}>
                                 <div style={{ width: 8, height: 8, borderRadius: 2, background: c, boxShadow: `0 0 5px ${c}` }} />
                                 <span style={{ fontSize: 9, fontWeight: 700, color: 'rgba(255,255,255,0.3)' }}>{l}</span>
@@ -755,8 +758,8 @@ export default function VisualAnalytics() {
                     </p>
                 </ChartCard>
             </div>
-                  {/* ── ROW 4: RESPOSTA POR NICHO + PASSAGEM SPIN + A/B TESTING ── */}
-<div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr 260px', gap: 16, marginTop: 16 }}>
+            {/* ── ROW 4: RESPOSTA POR NICHO + PASSAGEM SPIN ── */}
+<div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 16, marginTop: 16 }}>
 
     {/* TAXA DE RESPOSTA POR NICHO */}
     <ChartCard>
@@ -835,35 +838,6 @@ export default function VisualAnalytics() {
         )}
     </ChartCard>
 
-    {/* A/B TESTING DE ABERTURAS (mantém igual) */}
-    <ChartCard>
-        <SectionTitle accent={NEON.emerald} info="Compara as variações de mensagem de abertura. A taxa é a % de leads que avançaram além do estágio 0 após receber cada template. V1/V2/V3 correspondem aos templates cadastrados no Supabase.">A/B Testing — Aberturas</SectionTitle>
-        {abTestData.length > 0 ? (
-            <div style={{ display: 'flex', flexDirection: 'column', gap: 10 }}>
-                {abTestData.map((d, i) => (
-                    <div key={i} style={{ background: 'rgba(255,255,255,0.03)', borderRadius: '0.75rem', padding: '10px 12px', border: '1px solid rgba(255,255,255,0.06)' }}>
-                        <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 6 }}>
-                            <span style={{ fontSize: 11, fontWeight: 900, color: '#fff' }}>{d.template}</span>
-                            <span style={{ fontSize: 14, fontWeight: 900, color: i === 0 ? NEON.emerald : NEON.muted }}>
-                                {d.taxa}%
-                            </span>
-                        </div>
-                        <div style={{ height: 4, background: 'rgba(255,255,255,0.05)', borderRadius: 2, overflow: 'hidden', marginBottom: 4 }}>
-                            <div style={{ height: '100%', borderRadius: 2, width: `${d.taxa}%`, background: i === 0 ? NEON.emerald : NEON.blue, transition: 'width 1s ease' }} />
-                        </div>
-                        <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: 9, color: 'rgba(255,255,255,0.3)', fontWeight: 700 }}>
-                            <span>{d.enviados} enviados</span>
-                            <span>{d.responderam} responderam</span>
-                        </div>
-                    </div>
-                ))}
-            </div>
-        ) : (
-            <div style={{ height: 180, display: 'flex', alignItems: 'center', justifyContent: 'center', color: 'rgba(255,255,255,0.2)', fontSize: 11, fontWeight: 700, textAlign: 'center' }}>
-                Dados de A/B aparecerão<br/>após os primeiros disparos
-            </div>
-        )}
-    </ChartCard>
 </div>
 
 
