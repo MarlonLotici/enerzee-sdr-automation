@@ -254,9 +254,9 @@ function ConversaCard({ lead, ultimaMsg, isActive, onClick, onUpdate }) {
 {isUser && !lead.is_paused && !lead.manual_pause && (
     <div style={{
         position: 'absolute', top: 10, right: 10,
-        width: 7, height: 7, borderRadius: '50%',
-        background: '#F59E0B',
-        boxShadow: '0 0 6px #F59E0B',
+        width: 8, height: 8, borderRadius: '50%',
+        background: '#10B981',
+        boxShadow: '0 0 8px #10B981',
         animation: 'pulse 1.5s infinite',
     }} className="quick-action-indicator" />
 )}

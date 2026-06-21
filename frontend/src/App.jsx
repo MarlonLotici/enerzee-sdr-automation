@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useRef, useMemo } from 'react'
+﻿import React, { useState, useEffect, useRef, useMemo } from 'react'
 // --- IMPORTAÇÕES DE UI ---
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs"
 import { Button } from "@/components/ui/button"
@@ -194,7 +194,6 @@ const [isConnected, setIsConnected] = useState(false);
 const [qrCodeData, setQrCodeData] = useState(null); // Agora guarda { qr, instanceId, name }
 const [instances, setInstances] = useState([]); // Lista de chips no banco
 const [selectedInstanceId, setSelectedInstanceId] = useState(null);
-const [sidebarOpen, setSidebarOpen] = useState(true);
 const [isBotRunning, setIsBotRunning] = useState(false);
 const [scraperLeadsCount, setScraperLeadsCount] = useState(0);
 const [botProgress, setBotProgress] = useState(0);
@@ -607,6 +606,65 @@ if (session?.user?.id) checkBriefing()
         if(!confirm(`Excluir ${selectedLeadIds.size} leads permanentemente?`)) return;
         selectedLeadIds.forEach(id => handleDeleteLead(id));
     };
+
+    // Envio de mensagem manual — pausa a IA automaticamente
+    const handleSendMessage = async () => {
+        const text = messageInput.trim();
+        if (!text || !activeChat) return;
+        setMessageInput('');
+
+        await supabase.from('leads').update({ is_paused: true }).eq('id', activeChat.id);
+        setActiveChat(prev => ({ ...prev, is_paused: true }));
+
+        try {
+            const { data: { session: s } } = await supabase.auth.getSession();
+            const res = await fetch('/api/send-message', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${s?.access_token}` },
+                body: JSON.stringify({ instanceId: activeChat.instance_id, whatsappId: activeChat.whatsapp_id, text }),
+            });
+            if (res.ok) {
+                const { data: msgs } = await supabase.from('messages').select('*').eq('whatsapp_id', activeChat.whatsapp_id).order('created_at', { ascending: true });
+                if (msgs) setChatMessages(msgs);
+                setTimeout(() => chatEndRef.current?.scrollIntoView({ behavior: 'smooth' }), 100);
+            } else {
+                const err = await res.json().catch(() => ({}));
+                alert(`Erro ao enviar: ${err.error || 'Falha desconhecida'}`);
+            }
+        } catch (e) {
+            alert(`Erro de rede: ${e.message}`);
+        }
+    };
+
+    // Toggle manual de pausa da IA
+    const handleTogglePause = async () => {
+        if (!activeChat) return;
+        const nowPaused = activeChat.is_paused || activeChat.manual_pause;
+        const update = nowPaused
+            ? { is_paused: false, manual_pause: false, last_human_interaction: null, internal_notes: `IA reativada via dashboard em ${new Date().toLocaleString('pt-BR')}` }
+            : { is_paused: true, manual_pause: true };
+        await supabase.from('leads').update(update).eq('id', activeChat.id);
+        setActiveChat(prev => ({ ...prev, ...update }));
+        fetchLeadsFromDB();
+    };
+
+    // CRM rápido — descarte de lead
+    const handleBaixa = async () => {
+        if (!activeChat) return;
+        if (!confirm(`Dar baixa em "${activeChat.name}"? O lead será descartado.`)) return;
+        await supabase.from('leads').update({ status: 'dead', lead_temperature: 'dead', is_paused: true }).eq('id', activeChat.id);
+        setActiveChat(null);
+        fetchLeadsFromDB();
+    };
+
+    // CRM rápido — fechar negócio
+    const handleFechamento = async () => {
+        if (!activeChat) return;
+        if (!confirm(`Marcar "${activeChat.name}" como negócio FECHADO?`)) return;
+        await supabase.from('leads').update({ status: 'closed', is_paused: true }).eq('id', activeChat.id);
+        setActiveChat(null);
+        fetchLeadsFromDB();
+    };
 
     
         // --- NÚCLEO DE SEGURANÇA: CONTROLE DE ACESSO ---
@@ -1188,21 +1246,8 @@ return (
               <TabsContent value="connections" className="w-full flex flex-col flex-1 m-0 p-0 border-none overflow-hidden">
     <div className="flex h-full overflow-hidden bg-slate-950/40">
 
-      {/* COLUNA 1 — Chips + Hub de Conversão (drawer expansível) */}
-<div className={`sidebar-drawer shrink-0 border-r border-white/5 bg-[#0d0d0d]/60 flex flex-col h-full ${sidebarOpen ? 'w-[400px]' : 'w-10'}`}>
-
-    {/* Toggle do Drawer */}
-    <button
-        onClick={() => setSidebarOpen(o => !o)}
-        className="absolute z-20 top-[calc(50%)] flex items-center justify-center w-5 h-10 rounded-r-lg bg-[#1a1a1a] border border-white/10 border-l-0 hover:border-amber-500/40 hover:bg-amber-900/20 transition-all"
-        style={{ left: sidebarOpen ? 'calc(400px - 1px)' : '39px' }}
-        title={sidebarOpen ? 'Recolher sidebar' : 'Expandir sidebar'}
-    >
-        {sidebarOpen
-            ? <ChevronLeft className="h-3 w-3 text-slate-400" />
-            : <ChevronRight className="h-3 w-3 text-amber-400" />
-        }
-    </button>
+      {/* COLUNA 1 — Chips + Hub de Conversão (largura fixa) */}
+<div className="w-[350px] shrink-0 border-r border-white/5 bg-[#0d0d0d]/60 flex flex-col h-full">
 
     {/* === CHIP SELECTOR — limpo e direto === */}
 <div className="shrink-0 p-3 border-b border-white/5 space-y-2">
@@ -1213,7 +1258,7 @@ return (
                 const nome = prompt("Nome da nova unidade (Ex: Chip Claro 02):");
                 if (nome) socket.emit('create_instance', { name: nome, phone: null });
             }}
-            className="flex-1 h-8 text-[9px] uppercase font-black bg-amber-600/15 text-amber-400 border border-amber-500/25 hover:bg-amber-600/30 rounded-lg"
+            className="flex-1 h-8 text-[9px] uppercase font-black bg-orange-500 text-white hover:bg-orange-400 rounded-lg border-0 shadow-[0_0_12px_rgba(249,115,22,0.35)]"
         >
             + Adicionar Chip
         </Button>
@@ -1256,7 +1301,7 @@ return (
                     onClick={() => setSelectedInstanceId(inst.id)}
                     className={`flex items-center gap-1.5 px-2.5 py-1 rounded-lg cursor-pointer transition-all text-[9px] font-black uppercase tracking-wider border ${
                         ativo
-                            ? 'bg-amber-600/15 border-amber-500/30 text-amber-300'
+                            ? 'bg-amber-500/25 border-amber-400/60 text-amber-200 shadow-[0_0_8px_rgba(245,158,11,0.35)]'
                             : 'bg-white/[0.02] border-white/5 text-slate-500 hover:border-white/10'
                     }`}
                 >
@@ -1274,15 +1319,15 @@ return (
         const handoffLeads = leads.filter(l => (l.is_paused || l.manual_pause) && l.status !== 'closed' && l.status !== 'invalid').slice(0, 4);
         if (handoffLeads.length === 0) return null;
         return (
-            <div className="shrink-0 border-b border-amber-500/10 bg-amber-950/10">
-                <div className="px-3 pt-2.5 pb-1 flex items-center gap-2">
+            <div className="shrink-0 max-h-48 flex flex-col border-b border-amber-500/10 bg-amber-950/10">
+                <div className="px-3 pt-2.5 pb-1 flex items-center gap-2 shrink-0">
                     <AlertTriangle className="h-2.5 w-2.5 text-amber-500 shrink-0" />
                     <span className="text-[8px] font-black text-amber-500/80 uppercase tracking-widest">Atenção Humana</span>
                     <span className="ml-auto text-[7px] font-black bg-amber-500/15 border border-amber-500/25 text-amber-400 rounded-full px-1.5 py-0.5">
                         {handoffLeads.length}
                     </span>
                 </div>
-                <div className="px-2 pb-2 space-y-1">
+                <div className="px-2 pb-2 space-y-1 overflow-y-auto">
                     {handoffLeads.map(l => (
                         <div
                             key={l.id}
@@ -1335,25 +1380,31 @@ return (
                 </div>
             </div>
             <div className="flex items-center gap-1.5">
-                {/* Badge de status IA */}
-                {activeChat.is_paused || activeChat.manual_pause ? (
-                    <Badge className="bg-amber-500/10 text-amber-400 border-amber-500/20 text-[7px] font-black">⏸️ PAUSADA</Badge>
-                ) : (
-                    <Badge className="bg-emerald-500/10 text-emerald-400 border-emerald-500/20 text-[7px] font-black">🟢 ATIVA</Badge>
-                )}
+                {/* Toggle de pausa da IA — clicável */}
+                <button
+                    onClick={handleTogglePause}
+                    className={`h-6 px-2.5 rounded-md text-[8px] font-black uppercase tracking-wide border transition-all ${
+                        (activeChat.is_paused || activeChat.manual_pause)
+                            ? 'bg-amber-500/15 text-amber-400 border-amber-500/30 hover:bg-amber-500/25'
+                            : 'bg-emerald-500/15 text-emerald-400 border-emerald-500/30 hover:bg-emerald-500/25'
+                    }`}
+                    title={(activeChat.is_paused || activeChat.manual_pause) ? 'Clique para reativar a IA' : 'Clique para pausar a IA'}
+                >
+                    {(activeChat.is_paused || activeChat.manual_pause) ? '⏸️ IA PAUSADA' : '🟢 IA ATIVA'}
+                </button>
                 {/* CRM Rápido — mock, funções futuras */}
                 <div className="flex items-center gap-1 ml-1 pl-1.5 border-l border-white/5">
                     <button
-                        onClick={() => {/* TODO: dar baixa no lead */}}
-                        className="h-6 px-2 rounded-md flex items-center gap-1 text-[8px] font-black uppercase tracking-wide text-red-400/70 border border-red-500/15 bg-red-900/10 hover:border-red-500/35 hover:bg-red-900/25 transition-all"
+                        onClick={handleBaixa}
+                        className="h-6 px-2 rounded-md flex items-center gap-1 text-[8px] font-black uppercase tracking-wide text-red-400 border border-red-500/30 bg-red-900/15 hover:border-red-500/50 hover:bg-red-900/30 transition-all"
                         title="Dar Baixa (descarte)"
                     >
                         <XCircle className="h-2.5 w-2.5" />
                         Baixa
                     </button>
                     <button
-                        onClick={() => {/* TODO: fechar negócio */}}
-                        className="h-6 px-2 rounded-md flex items-center gap-1 text-[8px] font-black uppercase tracking-wide text-emerald-400/70 border border-emerald-500/15 bg-emerald-900/10 hover:border-emerald-500/35 hover:bg-emerald-900/25 transition-all"
+                        onClick={handleFechamento}
+                        className="h-6 px-2 rounded-md flex items-center gap-1 text-[8px] font-black uppercase tracking-wide text-emerald-400 border border-emerald-500/30 bg-emerald-900/15 hover:border-emerald-500/50 hover:bg-emerald-900/30 transition-all"
                         title="Fechar Negócio"
                     >
                         <CheckCircle2 className="h-2.5 w-2.5" />
@@ -1370,28 +1421,16 @@ return (
             </div>
         </div>
 
-        {/* ⏸ BANNER IA PAUSADA — slim, fixo, elegante */}
+        {/* ⏸ BANNER IA PAUSADA — motivo da pausa */}
         {(activeChat.is_paused || activeChat.manual_pause) && (
-            <div className="shrink-0 px-3 py-1.5 flex items-center gap-2.5 border-b border-amber-500/15 bg-amber-950/40">
+            <div className="shrink-0 px-3 py-1.5 flex items-center gap-2 border-b border-amber-500/15 bg-amber-950/40">
                 <span className="text-[9px] shrink-0">⏸️</span>
-                <p className="text-[8px] font-bold text-amber-300/80 truncate flex-1 min-w-0">
+                <p className="text-[8px] font-bold text-amber-300/80 truncate min-w-0">
                     <span className="font-black text-amber-400 mr-1">IA PAUSADA —</span>
                     {activeChat.internal_notes
-                        ? activeChat.internal_notes.slice(0, 80) + (activeChat.internal_notes.length > 80 ? '…' : '')
-                        : activeChat.manual_pause ? 'Pausa manual (/pausar)' : 'Pausa automática'}
+                        ? activeChat.internal_notes.slice(0, 100) + (activeChat.internal_notes.length > 100 ? '…' : '')
+                        : activeChat.manual_pause ? 'Pausa manual (/pausar)' : 'Pausa automática — aguardando intervenção humana'}
                 </p>
-                <Button
-                    onClick={async () => {
-                        const { error } = await supabase.from('leads').update({
-                            is_paused: false, manual_pause: false, last_human_interaction: null,
-                            internal_notes: `IA reativada via dashboard em ${new Date().toLocaleString('pt-BR')}`
-                        }).eq('id', activeChat.id);
-                        if (!error) { setActiveChat({...activeChat, is_paused: false, manual_pause: false}); fetchLeadsFromDB(); }
-                    }}
-                    className="shrink-0 h-6 px-2.5 text-[8px] font-black uppercase text-amber-400 bg-transparent border border-amber-500/40 hover:border-amber-400 hover:bg-amber-900/30 rounded-md tracking-wider transition-all"
-                >
-                    ▶ Reativar
-                </Button>
             </div>
         )}
 
@@ -1447,9 +1486,10 @@ return (
                             placeholder="Intervenção humana — digite e pressione Enter..."
                             value={messageInput}
                             onChange={e => setMessageInput(e.target.value)}
-                            onKeyDown={e => { if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); /* TODO: enviar */ } }}
+                            onKeyDown={e => { if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); handleSendMessage(); } }}
                         />
                         <Button
+                            onClick={handleSendMessage}
                             className="shrink-0 h-9 w-9 rounded-lg bg-amber-600 hover:bg-amber-500 px-0 transition-all"
                             style={{ boxShadow: '0 0 10px rgba(245,158,11,0.25)' }}
                         >
