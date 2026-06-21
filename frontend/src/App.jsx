@@ -18,7 +18,8 @@ import {
     Rocket, MapPin, LayoutDashboard, MessageSquare, Phone, Play, LocateFixed, Send,
     BrainCircuit, Search, Download, X, CheckSquare, Square, Users, StopCircle,
     Map as MapIcon, Loader2, Edit2, Trash2, Crosshair, Zap, Star, ShieldCheck, FileText,
-    DollarSign, Briefcase, Building2, ArrowRight, ShieldAlert, Trash, Check, BarChart2, Flame, Cpu, Radio, Settings, LogOut, Menu, ChevronDown
+    DollarSign, Briefcase, Building2, ArrowRight, ShieldAlert, Trash, Check, BarChart2, Flame, Cpu, Radio, Settings, LogOut, Menu, ChevronDown,
+    ChevronLeft, ChevronRight, Calendar, XCircle, CheckCircle2, AlertTriangle, PanelLeftClose, PanelLeftOpen
 } from 'lucide-react'
 
 // --- MAPAS E SOCKET ---
@@ -192,7 +193,8 @@ function AppSidebar({ activeTab, setActiveTab, leadsCount, onLogout }) {
 const [isConnected, setIsConnected] = useState(false);
 const [qrCodeData, setQrCodeData] = useState(null); // Agora guarda { qr, instanceId, name }
 const [instances, setInstances] = useState([]); // Lista de chips no banco
-const [selectedInstanceId, setSelectedInstanceId] = useState(null); 
+const [selectedInstanceId, setSelectedInstanceId] = useState(null);
+const [sidebarOpen, setSidebarOpen] = useState(true);
 const [isBotRunning, setIsBotRunning] = useState(false);
 const [scraperLeadsCount, setScraperLeadsCount] = useState(0);
 const [botProgress, setBotProgress] = useState(0);
@@ -1186,8 +1188,21 @@ return (
               <TabsContent value="connections" className="w-full flex flex-col flex-1 m-0 p-0 border-none overflow-hidden">
     <div className="flex h-full overflow-hidden bg-slate-950/40">
 
-      {/* COLUNA 1 — Chips + War Room (40% mínimo pro War Room) */}
-<div className="w-[400px] shrink-0 border-r border-white/5 bg-[#0d0d0d]/60 flex flex-col h-full overflow-hidden">
+      {/* COLUNA 1 — Chips + Hub de Conversão (drawer expansível) */}
+<div className={`sidebar-drawer shrink-0 border-r border-white/5 bg-[#0d0d0d]/60 flex flex-col h-full ${sidebarOpen ? 'w-[400px]' : 'w-10'}`}>
+
+    {/* Toggle do Drawer */}
+    <button
+        onClick={() => setSidebarOpen(o => !o)}
+        className="absolute z-20 top-[calc(50%)] flex items-center justify-center w-5 h-10 rounded-r-lg bg-[#1a1a1a] border border-white/10 border-l-0 hover:border-amber-500/40 hover:bg-amber-900/20 transition-all"
+        style={{ left: sidebarOpen ? 'calc(400px - 1px)' : '39px' }}
+        title={sidebarOpen ? 'Recolher sidebar' : 'Expandir sidebar'}
+    >
+        {sidebarOpen
+            ? <ChevronLeft className="h-3 w-3 text-slate-400" />
+            : <ChevronRight className="h-3 w-3 text-amber-400" />
+        }
+    </button>
 
     {/* === CHIP SELECTOR — limpo e direto === */}
 <div className="shrink-0 p-3 border-b border-white/5 space-y-2">
@@ -1254,32 +1269,43 @@ return (
         })}
     </div>
 </div>
-    {/* === MÉTRICAS A/B/C DE ABERTURA === */}
-    {openingStats.length > 0 && (
-        <div className="shrink-0 px-3 py-2.5 border-b border-white/5 space-y-1.5">
-            <p className="text-[8px] font-black text-amber-500/50 uppercase tracking-widest mb-2">Aberturas — Taxa de Engajamento</p>
-            {openingStats.map(s => {
-                const pct = s.total > 0 ? Math.round((s.responded / s.total) * 100) : 0;
-                const isLeading = openingStats.length > 1 && pct === Math.max(...openingStats.map(x => x.total > 0 ? Math.round((x.responded/x.total)*100) : 0)) && s.total > 0;
-                return (
-                    <div key={s.label} className="flex items-center gap-2">
-                        <span className={`text-[8px] font-black w-4 shrink-0 ${isLeading ? 'text-amber-400' : 'text-slate-600'}`}>{s.label}</span>
-                        <div className="flex-1 h-1.5 bg-white/5 rounded-full overflow-hidden">
-                            <div
-                                className={`h-full rounded-full transition-all ${isLeading ? 'bg-amber-400' : 'bg-slate-600'}`}
-                                style={{ width: `${pct}%` }}
-                            />
+    {/* === LEADS EM ATENÇÃO HUMANA === */}
+    {(() => {
+        const handoffLeads = leads.filter(l => (l.is_paused || l.manual_pause) && l.status !== 'closed' && l.status !== 'invalid').slice(0, 4);
+        if (handoffLeads.length === 0) return null;
+        return (
+            <div className="shrink-0 border-b border-amber-500/10 bg-amber-950/10">
+                <div className="px-3 pt-2.5 pb-1 flex items-center gap-2">
+                    <AlertTriangle className="h-2.5 w-2.5 text-amber-500 shrink-0" />
+                    <span className="text-[8px] font-black text-amber-500/80 uppercase tracking-widest">Atenção Humana</span>
+                    <span className="ml-auto text-[7px] font-black bg-amber-500/15 border border-amber-500/25 text-amber-400 rounded-full px-1.5 py-0.5">
+                        {handoffLeads.length}
+                    </span>
+                </div>
+                <div className="px-2 pb-2 space-y-1">
+                    {handoffLeads.map(l => (
+                        <div
+                            key={l.id}
+                            onClick={() => setActiveChat(l)}
+                            className="handoff-pulse rounded-lg border border-amber-500/20 bg-amber-900/10 px-2.5 py-2 cursor-pointer hover:border-amber-500/40 hover:bg-amber-900/20 transition-all"
+                        >
+                            <div className="flex items-center justify-between gap-2 mb-0.5">
+                                <span className="text-[10px] font-black text-white truncate">{l.name}</span>
+                                {l.bairro && <span className="text-[8px] text-amber-400/60 font-bold shrink-0">{l.bairro}</span>}
+                            </div>
+                            {l.internal_notes && (
+                                <p className="text-[8px] text-amber-200/50 leading-snug line-clamp-2">
+                                    {l.internal_notes}
+                                </p>
+                            )}
                         </div>
-                        <span className={`text-[8px] font-black w-6 text-right shrink-0 ${isLeading ? 'text-amber-400' : 'text-slate-600'}`}>{pct}%</span>
-                        <span className="text-[7px] text-slate-700 w-14 shrink-0">{s.responded}/{s.total} leads</span>
-                        {s.booked > 0 && <span className="text-[7px] text-emerald-600 font-black">{s.booked} ag.</span>}
-                    </div>
-                );
-            })}
-        </div>
-    )}
+                    ))}
+                </div>
+            </div>
+        );
+    })()}
 
-    {/* === WAR ROOM — flex:1 = todo o espaço restante === */}
+    {/* === HUB DE CONVERSÃO — flex:1 = todo o espaço restante === */}
     <div className="flex-1 flex flex-col overflow-hidden min-h-0">
 <ConversaList
     onSelect={setActiveChat}
@@ -1291,130 +1317,143 @@ return (
     </div>
 </div>
         {/* COLUNA 2 — Chat */}
-        <div className="flex-1 flex flex-col overflow-hidden min-h-0 bg-black/20">
+        <div className="flex-1 flex flex-col overflow-hidden min-h-0 chat-bg-pattern" style={{ position: 'relative' }}>
             {activeChat ? (
     <>
-        <div className="shrink-0 p-3 border-b border-white/5 flex items-center justify-between backdrop-blur-md bg-slate-900/40">
-            <div className="flex items-center gap-3">
-                 <div className="h-8 w-8 bg-amber-600/20 rounded-lg border border-amber-500/30 flex items-center justify-center font-black text-amber-400 text-xs">
+        <div className="shrink-0 px-3 py-2 border-b border-white/5 flex items-center justify-between backdrop-blur-md bg-[#0d0d0f]/90">
+            <div className="flex items-center gap-2.5">
+                <div className="h-7 w-7 bg-amber-600/20 rounded-lg border border-amber-500/30 flex items-center justify-center font-black text-amber-400 text-xs shrink-0">
                     {activeChat.name?.[0]}
                 </div>
                 <div>
-                    <h2 className="text-base font-black text-white tracking-tighter uppercase">{activeChat.name}</h2>
+                    <h2 className="text-sm font-black text-white tracking-tighter uppercase leading-none">{activeChat.name}</h2>
                     {activeChat.instance_id && (
-                        <span className="text-[8px] text-slate-500 font-bold uppercase tracking-widest">
+                        <span className="text-[7px] text-slate-600 font-bold uppercase tracking-widest">
                             via {instances.find(i => i.id === activeChat.instance_id)?.name || 'chip desconhecido'}
                         </span>
                     )}
                 </div>
             </div>
-            <div className="flex items-center gap-2">
-                {/* Badge dinâmico de status da IA */}
+            <div className="flex items-center gap-1.5">
+                {/* Badge de status IA */}
                 {activeChat.is_paused || activeChat.manual_pause ? (
-                    <Badge className="bg-amber-500/10 text-amber-400 border-amber-500/20 text-[8px] font-black">
-                        ⏸️ IA PAUSADA
-                    </Badge>
+                    <Badge className="bg-amber-500/10 text-amber-400 border-amber-500/20 text-[7px] font-black">⏸️ PAUSADA</Badge>
                 ) : (
-                    <Badge className="bg-emerald-500/10 text-emerald-400 border-emerald-500/20 text-[8px] font-black">
-                        🟢 IA ATIVA
-                    </Badge>
+                    <Badge className="bg-emerald-500/10 text-emerald-400 border-emerald-500/20 text-[7px] font-black">🟢 ATIVA</Badge>
                 )}
+                {/* CRM Rápido — mock, funções futuras */}
+                <div className="flex items-center gap-1 ml-1 pl-1.5 border-l border-white/5">
+                    <button
+                        onClick={() => {/* TODO: dar baixa no lead */}}
+                        className="h-6 px-2 rounded-md flex items-center gap-1 text-[8px] font-black uppercase tracking-wide text-red-400/70 border border-red-500/15 bg-red-900/10 hover:border-red-500/35 hover:bg-red-900/25 transition-all"
+                        title="Dar Baixa (descarte)"
+                    >
+                        <XCircle className="h-2.5 w-2.5" />
+                        Baixa
+                    </button>
+                    <button
+                        onClick={() => {/* TODO: fechar negócio */}}
+                        className="h-6 px-2 rounded-md flex items-center gap-1 text-[8px] font-black uppercase tracking-wide text-emerald-400/70 border border-emerald-500/15 bg-emerald-900/10 hover:border-emerald-500/35 hover:bg-emerald-900/25 transition-all"
+                        title="Fechar Negócio"
+                    >
+                        <CheckCircle2 className="h-2.5 w-2.5" />
+                        Fechar
+                    </button>
+                </div>
                 <button
                     onClick={() => setActiveChat(null)}
-                    className="h-7 w-7 rounded-lg bg-white/5 border border-white/10 flex items-center justify-center hover:bg-white/10 transition-all"
-                    title="Fechar conversa e ver chips"
+                    className="h-6 w-6 rounded-lg bg-white/5 border border-white/10 flex items-center justify-center hover:bg-white/10 transition-all ml-0.5"
+                    title="Fechar conversa"
                 >
-                    <X className="h-3.5 w-3.5 text-slate-400" />
+                    <X className="h-3 w-3 text-slate-400" />
                 </button>
             </div>
         </div>
 
-        {/* 🟡 BANNER DE IA PAUSADA — só aparece se a IA estiver realmente pausada */}
+        {/* ⏸ BANNER IA PAUSADA — slim, fixo, elegante */}
         {(activeChat.is_paused || activeChat.manual_pause) && (
-            <div className="shrink-0 px-4 py-3 bg-gradient-to-r from-amber-900/20 to-amber-700/10 border-b border-amber-500/20">
-                <div className="flex items-start gap-3">
-                    <div className="h-8 w-8 rounded-lg bg-amber-500/15 border border-amber-500/30 flex items-center justify-center shrink-0">
-                        <span className="text-base">⏸️</span>
-                    </div>
-                    <div className="flex-1 min-w-0">
-                        <p className="text-[10px] font-black text-amber-300 uppercase tracking-widest mb-1">
-                            IA Pausada — Não vai responder automaticamente
-                        </p>
-                        <p className="text-[10px] text-amber-200/70 font-medium leading-relaxed mb-2">
-                            <span className="text-amber-400 font-black">Motivo: </span>
-                            {activeChat.internal_notes || 
-                                (activeChat.manual_pause ? 'Pausada manualmente via comando /pausar' : 
-                                 'Pausa automática (intervenção humana ou conversa encerrada pela IA)')}
-                        </p>
-                        <Button
-                            onClick={async () => {
-                                if (!confirm('Reativar a IA para esta conversa? Ela voltará a responder mensagens automaticamente.')) return;
-                                
-                                const { error } = await supabase.from('leads').update({
-                                    is_paused: false,
-                                    manual_pause: false,
-                                    last_human_interaction: null,
-                                    internal_notes: `IA reativada manualmente via dashboard em ${new Date().toLocaleString('pt-BR')}`
-                                }).eq('id', activeChat.id);
-
-                                if (!error) {
-                                    setActiveChat({...activeChat, is_paused: false, manual_pause: false});
-                                    fetchLeadsFromDB();
-                                    alert('✅ IA reativada com sucesso!');
-                                } else {
-                                    alert('❌ Erro ao reativar IA: ' + error.message);
-                                }
-                            }}
-                            className="h-7 px-3 text-[9px] font-black uppercase bg-amber-600 hover:bg-amber-500 text-black rounded-lg tracking-wider"
-                        >
-                            ▶️ Reativar IA Agora
-                        </Button>
-                    </div>
-                </div>
+            <div className="shrink-0 px-3 py-1.5 flex items-center gap-2.5 border-b border-amber-500/15 bg-amber-950/40">
+                <span className="text-[9px] shrink-0">⏸️</span>
+                <p className="text-[8px] font-bold text-amber-300/80 truncate flex-1 min-w-0">
+                    <span className="font-black text-amber-400 mr-1">IA PAUSADA —</span>
+                    {activeChat.internal_notes
+                        ? activeChat.internal_notes.slice(0, 80) + (activeChat.internal_notes.length > 80 ? '…' : '')
+                        : activeChat.manual_pause ? 'Pausa manual (/pausar)' : 'Pausa automática'}
+                </p>
+                <Button
+                    onClick={async () => {
+                        const { error } = await supabase.from('leads').update({
+                            is_paused: false, manual_pause: false, last_human_interaction: null,
+                            internal_notes: `IA reativada via dashboard em ${new Date().toLocaleString('pt-BR')}`
+                        }).eq('id', activeChat.id);
+                        if (!error) { setActiveChat({...activeChat, is_paused: false, manual_pause: false}); fetchLeadsFromDB(); }
+                    }}
+                    className="shrink-0 h-6 px-2.5 text-[8px] font-black uppercase text-amber-400 bg-transparent border border-amber-500/40 hover:border-amber-400 hover:bg-amber-900/30 rounded-md tracking-wider transition-all"
+                >
+                    ▶ Reativar
+                </Button>
             </div>
         )}
 
         {/* Mensagens */}
-        <div className="flex-1 overflow-y-auto p-4 custom-scrollbar flex flex-col gap-3 h-0">
-                                    {chatMessages.length === 0 ? (
-                            <div className="flex-1 flex items-center justify-center">
-                                <p className="text-xs text-slate-500 uppercase tracking-widest font-black">Nenhuma mensagem registrada</p>
+        <div className="flex-1 overflow-y-auto px-4 py-3 custom-scrollbar flex flex-col gap-2 h-0">
+            {chatMessages.length === 0 ? (
+                <div className="flex-1 flex items-center justify-center">
+                    <p className="text-xs text-slate-600 uppercase tracking-widest font-black">Nenhuma mensagem registrada</p>
+                </div>
+            ) : (
+                chatMessages.map((msg) => {
+                    const isLead = msg.role === 'user';
+                    return (
+                        <div
+                            key={msg.id}
+                            className={`flex flex-col max-w-[80%] ${isLead ? 'self-start items-start' : 'self-end items-end'}`}
+                        >
+                            <div
+                                className={`px-3 py-2 rounded-xl shadow-sm ${
+                                    isLead
+                                    ? 'bg-[#2a2a2e] rounded-tl-none border border-white/5'
+                                    : 'rounded-tr-none'
+                                }`}
+                                style={isLead ? {} : { backgroundColor: '#075E54', border: '1px solid rgba(255,255,255,0.08)' }}
+                            >
+                                <p className={`text-[11px] leading-relaxed ${isLead ? 'text-slate-200' : 'text-white'}`}>
+                                    {msg.content}
+                                </p>
                             </div>
-                        ) : (
-                            chatMessages.map((msg) => {
-                                const isLead = msg.role === 'user';
-                                return (
-                                    <div
-                                        key={msg.id}
-                                        className={`max-w-[85%] p-3 rounded-xl border ${
-                                            isLead
-                                            ? "bg-slate-800/60 rounded-tl-none border-white/5 self-start"
-                                            : "bg-amber-600/80 rounded-tr-none border-amber-500/50 self-end text-white shadow-lg"
-                                        }`}
-                                    >
-                                        <p className={`text-xs ${isLead ? "text-slate-300" : "font-medium"}`}>
-                                            {msg.content}
-                                        </p>
-                                        <span className={`text-[8px] mt-1.5 block font-black uppercase tracking-widest ${isLead ? "text-slate-500 text-left" : "text-amber-300 text-right"}`}>
-                                            {new Date(msg.created_at).toLocaleTimeString('pt-BR', { hour: '2-digit', minute: '2-digit' })}
-                                        </span>
-                                    </div>
-                                );
-                            })
-                        )}
-                        <div ref={chatEndRef} />
-                    </div>
+                            <span className="text-[8px] mt-0.5 font-bold text-slate-600 px-1">
+                                {new Date(msg.created_at).toLocaleTimeString('pt-BR', { hour: '2-digit', minute: '2-digit' })}
+                                {!isLead && <span className="ml-1 text-[#25D366]">✓✓</span>}
+                            </span>
+                        </div>
+                    );
+                })
+            )}
+            <div ref={chatEndRef} />
+        </div>
 
                     {/* Input */}
-                    <div className="shrink-0 p-3 bg-slate-900/40 border-t border-white/5 flex gap-3">
+                    <div className="shrink-0 px-3 py-2.5 bg-[#0d0d0f]/90 border-t border-white/5 flex items-center gap-2">
+                        {/* Ação futura: Follow-up agendado */}
+                        <button
+                            title="Agendar Follow-up (em breve)"
+                            className="shrink-0 h-9 w-9 rounded-lg bg-white/[0.03] border border-white/8 flex items-center justify-center hover:border-amber-500/30 hover:bg-amber-900/15 transition-all"
+                            onClick={() => {/* TODO: abrir picker de follow-up */}}
+                        >
+                            <Calendar className="h-3.5 w-3.5 text-slate-500 hover:text-amber-400" />
+                        </button>
                         <Input
-                            className="h-10 rounded-lg bg-black/40 border-white/10 text-xs"
-                            placeholder="Digite para intervir..."
+                            className="flex-1 h-9 rounded-lg bg-black/30 border-white/8 text-[11px] text-slate-200 placeholder:text-slate-600"
+                            placeholder="Intervenção humana — digite e pressione Enter..."
                             value={messageInput}
                             onChange={e => setMessageInput(e.target.value)}
+                            onKeyDown={e => { if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); /* TODO: enviar */ } }}
                         />
-                        <Button className="h-10 w-10 rounded-lg bg-amber-600 px-0" style={{boxShadow:'0 0 12px rgba(245,158,11,0.3)'}}>
-                            <Send className="h-4 w-4" />
+                        <Button
+                            className="shrink-0 h-9 w-9 rounded-lg bg-amber-600 hover:bg-amber-500 px-0 transition-all"
+                            style={{ boxShadow: '0 0 10px rgba(245,158,11,0.25)' }}
+                        >
+                            <Send className="h-3.5 w-3.5" />
                         </Button>
                     </div>
                 </>
