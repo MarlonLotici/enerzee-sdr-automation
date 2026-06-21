@@ -360,9 +360,12 @@ if (mode === 'map' && lat && lng) {
 
     console.log(`🔥 [MOTOR] ${lotes.length} lotes de ${LOTE_SIZE} quadrados cada`);
 
+    let pontosVaziosConsecutivos = 0;
+    let areaEsgotada = false;
+
     try {
         for (let loteIdx = 0; loteIdx < lotes.length; loteIdx++) {
-            if (shouldStop()) break;
+            if (shouldStop() || areaEsgotada) break;
 
             const loteAtual = lotes[loteIdx];
             console.log(`\n🔄 [LOTE ${loteIdx + 1}/${lotes.length}] ${loteAtual.length} quadrados`);
@@ -382,7 +385,8 @@ if (mode === 'map' && lat && lng) {
 
             try {
                 for (const ponto of loteAtual) {
-                    if (shouldStop()) break;
+                    if (shouldStop() || areaEsgotada) break;
+                    let pontoTeveLead = false;
 
                     for (const termo of termos) {
                         if (shouldStop()) break;
@@ -436,6 +440,7 @@ if (mode === 'map' && lat && lng) {
                             }
 
                             console.log(`🔗 ${feedCount} encontrados, ${linksNovos.length} novos`);
+                            pontoTeveLead = true;
 
                             // Extrair cada lead
                             for (let i = 0; i < linksNovos.length; i++) {
@@ -483,17 +488,27 @@ if (mode === 'map' && lat && lng) {
                     }
 
                     quadradosVarridos++;
-                    
+
+                    if (pontoTeveLead) {
+                        pontosVaziosConsecutivos = 0;
+                    } else {
+                        pontosVaziosConsecutivos++;
+                        if (pontosVaziosConsecutivos >= 15) {
+                            sendStatus(`🏁 [RADAR] Área esgotada — 15 pontos sem novos leads. Encerrando varredura automaticamente.`);
+                            areaEsgotada = true;
+                        }
+                    }
+
                     // Log de progresso por quadrado
                     const pctGrid = Math.round(quadradosVarridos / pontosParaVarrer.length * 100);
-                    onProgress({ 
-                        type: 'progress', 
-                        data: { 
-                            percent: pctGrid, 
-                            extracted: totalExtraidos, 
-                            scanned: quadradosVarridos, 
-                            total: pontosParaVarrer.length 
-                        } 
+                    onProgress({
+                        type: 'progress',
+                        data: {
+                            percent: pctGrid,
+                            extracted: totalExtraidos,
+                            scanned: quadradosVarridos,
+                            total: pontosParaVarrer.length
+                        }
                     });
                 }
 

@@ -1,0 +1,165 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+@layer base {
+  :root {
+    --background: 0 0% 4%;
+    --foreground: 40 20% 95%;
+    --card: 0 0% 6%;
+    --card-foreground: 40 20% 95%;
+    --popover: 0 0% 5%;
+    --popover-foreground: 40 20% 95%;
+    --primary: 38 92% 50%;
+    --primary-foreground: 0 0% 4%;
+    --secondary: 0 0% 12%;
+    --secondary-foreground: 40 20% 95%;
+    --muted: 0 0% 12%;
+    --muted-foreground: 38 10% 55%;
+    --accent: 0 0% 12%;
+    --accent-foreground: 40 20% 95%;
+    --destructive: 0 62% 30%;
+    --destructive-foreground: 40 20% 95%;
+    --border: 0 0% 14%;
+    --input: 0 0% 14%;
+    --ring: 38 92% 50%;
+    --radius: 0.5rem;
+  }
+}
+
+:root {
+  --deep-bg: #0A0A0A;
+}
+
+body {
+  @apply bg-[#0A0A0A] text-slate-100 font-sans;
+  background: 
+    radial-gradient(circle at 15% 50%, rgba(245, 158, 11, 0.08), transparent 40%),
+    radial-gradient(circle at 85% 30%, rgba(217, 119, 6, 0.06), transparent 40%),
+    linear-gradient(to bottom, #111111, #0A0A0A);
+  min-height: 100vh;
+  overflow: hidden;
+}
+
+
+/* Painéis de Vidro */
+.glass-panel {
+    @apply bg-[#111111]/85 border border-white/[0.06] shadow-2xl;
+    backdrop-filter: blur(20px);
+}
+
+.glass-card {
+    @apply bg-slate-800/40 border border-white/5 shadow-lg transition-all duration-300;
+    backdrop-filter: blur(12px);
+}
+
+.glass-card:hover {
+    @apply border-amber-500/30 bg-white/[0.04] shadow-[0_0_30px_rgba(245,158,11,0.08)] -translate-y-1;
+}
+
+.glass-card-selected {
+    @apply bg-blue-900/30 border-blue-500/60 shadow-[0_0_20px_rgba(59,130,246,0.3)];
+}
+
+/* Scrollbar Neon */
+.custom-scrollbar::-webkit-scrollbar { width: 8px; height: 8px; }
+.custom-scrollbar::-webkit-scrollbar-track { background: rgba(15, 23, 42, 0.5); border-radius: 4px; }
+.custom-scrollbar::-webkit-scrollbar-thumb {
+  background: linear-gradient(to bottom, #F59E0B, #D97706);
+  border-radius: 4px;
+}
+
+/* Animações */
+.neon-text { text-shadow: 0 0 10px rgba(245, 158, 11, 0.6); }
+.animate-spin-slow { animation: spin 3s linear infinite; }
+@keyframes radar-ping {
+    0% { box-shadow: 0 0 0 0px rgba(245, 158, 11, 0.4); opacity: 1; }
+    100% { box-shadow: 0 0 0 50px rgba(245, 158, 11, 0); opacity: 0; }
+}
+.radar-active { animation: radar-ping 2s infinite cubic-bezier(0, 0, 0.2, 1); }
+
+[data-state="inactive"][role="tabpanel"] {
+    display: none !important;
+}
+html {
+    height: 100%;
+}
+
+body {
+    height: 100%;
+    min-height: unset;
+    overflow: hidden;
+}
+
+#root {
+    height: 100%;
+    display: flex;
+    flex-direction: column;
+}
+
+/* Kanban scroll suave */
+.kanban-scroll {
+    -webkit-overflow-scrolling: touch;
+    scroll-snap-type: x proximity;
+}
+
+.kanban-scroll > * {
+    scroll-snap-align: start;
+}
+
+/* ── SIDEBAR ── */
+.sidebar {
+    width: 72px;
+    transition: width 0.3s cubic-bezier(0.4, 0, 0.2, 1);
+    overflow: hidden;
+}
+
+.sidebar:hover {
+    width: 220px;
+}
+
+.sidebar-item {
+    display: flex;
+    align-items: center;
+    gap: 12px;
+    padding: 10px 14px;
+    border-radius: 10px;
+    cursor: pointer;
+    color: rgba(255, 255, 255, 0.35);
+    transition: all 0.15s ease;
+    white-space: nowrap;
+    overflow: hidden;
+    font-size: 12px;
+    font-weight: 700;
+}
+
+.sidebar-item:hover {
+    background: rgba(245, 158, 11, 0.08);
+    color: #FBBF24;
+}
+
+.sidebar-item.active {
+    background: rgba(245, 158, 11, 0.12);
+    color: #F59E0B;
+    box-shadow: inset 3px 0 0 #F59E0B;
+}
+
+.sidebar-item .label {
+    opacity: 0;
+    transition: opacity 0.15s ease 0.05s;
+    font-size: 11px;
+    font-weight: 800;
+    text-transform: uppercase;
+    letter-spacing: 0.06em;
+}
+
+.sidebar:hover .sidebar-item .label {
+    opacity: 1;
+}
+
+/* ── RESPONSIVE ── */
+@media (max-width: 1024px) {
+    .sidebar { width: 56px; }
+    .sidebar:hover { width: 56px; }
+    .sidebar-item .label { display: none; }
+}

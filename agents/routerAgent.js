@@ -40,7 +40,35 @@ async function classificarMensagem(ultimaMensagemLead) {
         return 'ROBO';
     }
 
-    // 🛡️ NÍVEL 2b: Deteção de Repasse Direto (Regex — custo zero, latência zero)
+    // 🛡️ NÍVEL 2b: Detecção de Engano / Número Errado (Regex — custo zero, latência zero)
+    const padraoEngano = (
+        /\bnúmero\s+(errado|incorreto|trocado)\b/i.test(ultimaMensagemLead) ||
+        /\b(é\s+um?\s+)?engano\b/i.test(ultimaMensagemLead) ||
+        /\b(esse|este)\s+(número|contato|celular|zap|whatsapp)\s+(é|foi|era)\s+(da|do|de)\s+\w/i.test(ultimaMensagemLead) ||
+        /\b(não\s+)?(sou|somos)\s+mais\s+(de\s+|dessa\s+|desta\s+)?(empresa|loja|estabelecimento)\b/i.test(ultimaMensagemLead) ||
+        /\bex[-\s]?sócio\b/i.test(ultimaMensagemLead) ||
+        /\b(aqui|isso)\s+(não\s+)?(é|tem)\s+(empresa|negócio|loja|estabelecimento)\b/i.test(ultimaMensagemLead)
+    );
+    if (padraoEngano) {
+        console.log("🚫 [ROTEADOR] Engano/número errado detectado. Bypass para ENGANO.");
+        return 'ENGANO';
+    }
+
+    // 🛡️ NÍVEL 2c: Detecção de Já Tem Solar / Geração Ativa (Regex — custo zero, latência zero)
+    const padraoSolar = (
+        /\bjá\s+(ten[hm]o?s?|tem[oa]s?)\s+(placa|painel|sistema\s+solar|energia\s+solar|usina|geração|fotovoltai)/i.test(ultimaMensagemLead) ||
+        /\b(placa|painel|sistema)\s+solar\s+(instalad|colocad|funcionando|ativo)/i.test(ultimaMensagemLead) ||
+        /\bgeração\s+(própria|ativa|distribuída|solar)\b/i.test(ultimaMensagemLead) ||
+        /\bjá\s+(somos?|sou)\s+(cliente|assinante|parceiro)\s+(da\s+usina|de\s+energia\s+solar|do\s+consórcio)/i.test(ultimaMensagemLead) ||
+        /\bjá\s+(compensamos?|geramos?|produzimos?)\s+energ/i.test(ultimaMensagemLead) ||
+        /\btemos?\s+(noss[ao]\s+)?(própri[ao]\s+)?(usina|geração|painel|placa)\b/i.test(ultimaMensagemLead)
+    );
+    if (padraoSolar) {
+        console.log("☀️ [ROTEADOR] Lead já tem solar/geração ativa. Bypass para SOLAR.");
+        return 'SOLAR';
+    }
+
+    // 🛡️ NÍVEL 2d: Deteção de Repasse Direto (Regex — custo zero, latência zero)
 
     // 2a. Número de telefone isolado
     const textoLimpo = ultimaMensagemLead.replace(/[\s\-\(\)\+]/g, '');
@@ -58,7 +86,7 @@ async function classificarMensagem(ultimaMensagemLead) {
     // 🧠 NÍVEL 3: Análise Semântica de Alta Precisão
     const prompt = `
 Você é o classificador de intenções ultra-rápido de um sistema SDR B2B de alta performance.
-A sua ÚNICA função é ler a mensagem do cliente e devolver ESTRITAMENTE UMA das 6 palavras-chave abaixo.
+A sua ÚNICA função é ler a mensagem do cliente e devolver ESTRITAMENTE UMA das 7 palavras-chave abaixo.
 
 [REGRAS DE CLASSIFICAÇÃO]
 
@@ -82,14 +110,20 @@ A sua ÚNICA função é ler a mensagem do cliente e devolver ESTRITAMENTE UMA d
 - ⚠️ CRÍTICO: Se o lead disse que VAI passar um contato (futuro), isso também é REPASSE — não confunda com CONTINUAR.
 
 4. OBJECAO
-- O lead resiste ativamente à abordagem ("tá caro", "sem tempo", "é golpe?", "já tenho energia solar", "não quero", "manda por email e eu leio depois").
+- O lead resiste ativamente à abordagem ("tá caro", "sem tempo", "é golpe?", "não quero", "manda por email e eu leio depois").
+- ⚠️ NÃO use OBJECAO para "já tenho solar/painel/geração" — esse caso é tratado antes desta análise.
 
 5. ENCERRAMENTO
 - O lead despede-se cordialmente sem intenção de continuar ("obrigado", "boa semana", "valeu", "fica com Deus").
 
 6. LIXO
-- Mensagens completamente ininteligíveis (ex: "asdfg", batidas no teclado) ou xingamentos sem contexto. 
+- Mensagens completamente ininteligíveis (ex: "asdfg", batidas no teclado) ou xingamentos sem contexto.
 - ⚠️ ALERTA: Respostas curtas como "ok", "tá", "entendi" NÃO SÃO LIXO, são CONTINUAR.
+
+7. AGENDA_RETORNO
+- O lead quer ser contactado num dia ou hora específica futura, sem aceitar a conversa agora.
+- Exemplos: "me chama segunda", "me liga amanhã", "só na terça às 14h", "depois do feriado", "semana que vem tô disponível", "não posso agora, me manda mensagem amanhã cedo".
+- ⚠️ DIFERENÇA DE COMPRA: COMPRA = lead aceita agendar AGORA (confirma horário, pede o link). AGENDA_RETORNO = lead empurra para um momento futuro sem se comprometer agora.
 
 MENSAGEM DO CLIENTE: "${ultimaMensagemLead}"
 
@@ -107,17 +141,18 @@ Retorne APENAS a palavra da intenção. Nada de pontuação, aspas ou justifica�
         const resposta = res.choices[0].message.content.trim().toUpperCase();
 
         // Mapeamento à prova de balas
+        if (resposta.includes('AGENDA_RETORNO') || resposta.includes('AGENDA')) return 'AGENDA_RETORNO';
         if (resposta.includes('COMPRA')) return 'COMPRA';
         if (resposta.includes('OBJECAO') || resposta.includes('OBJEÇÃO')) return 'OBJECAO';
-        if (resposta.includes('ENCERRAMENTO')) return 'ENCERRAMENTO';  
+        if (resposta.includes('ENCERRAMENTO')) return 'ENCERRAMENTO';
         if (resposta.includes('REPASSE')) return 'REPASSE';
-        
-        // 🎯 O SEGREDO DA SOLDADURA: 
+
+        // 🎯 O SEGREDO DA SOLDADURA:
         // O Roteador devolve "CONTINUAR" ou "DUVIDA" para a intenção de fluxo natural.
-        // O código mapeia ambas para 'DUVIDA', pois no closerAgent.js, o modo 'DUVIDA' 
+        // O código mapeia ambas para 'DUVIDA', pois no closerAgent.js, o modo 'DUVIDA'
         // é o motor consultivo que faz a qualificação do maquinário (Estágio 1 e 2).
         if (resposta.includes('CONTINUAR') || resposta.includes('DUVIDA')) return 'DUVIDA';
-        
+
         if (resposta.includes('LIXO')) return 'LIXO';
         
         // Fallback de segurança: se a LLM tiver um colapso e devolver um texto aleatório, 
