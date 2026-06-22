@@ -2451,11 +2451,23 @@ if (lead.opening_template && lead.opening_template.length > 15 && lead.opening_t
         const descontoEstimado = MAPA_DESCONTO_REGIONAL[ufLead] ? `${Math.round(MAPA_DESCONTO_REGIONAL[ufLead] * 100)}` : '12-18';
         const nicheCtx = gerarContextoNicho(lead.niche || '');
 
+        // Prompt LLM: lido do Supabase (opening_templates.llm_prompt) — editável por tenant sem deploy.
+        // Se não configurado, usa o fallback hardcoded abaixo (produto agnóstico: sem "energia solar").
+        // Variáveis disponíveis no template: ${nomeEmpresa}, ${nomeDono}, ${nicho},
+        // ${bairroLead}, ${concessionariaLocal}, ${capitalDesc}, ${descontoEstimado}, ${nicheCtx}
+        const _llmTpl = tplsInstancia?.llm_prompt ||
+            'Você está prospectando a empresa abaixo via WhatsApp. Escreva uma mensagem de abertura para enviar AO responsável. Você NÃO é da empresa alvo.\n\nEmpresa alvo: ${nomeEmpresa}\nResponsável: ${nomeDono}\nNicho: ${nicho}\nBairro: ${bairroLead}\nCapital social: ${capitalDesc}${nicheCtx}\n\nRegras obrigatórias:\n- Máx 80 caracteres no total\n- Tom casual e direto\n- Terminar com pergunta sobre quem cuida dos custos\n- SEM emojis, SEM links, SEM markdown\n- NÃO se apresente com nome ou empresa — apenas crie curiosidade\nRetorne APENAS o texto da mensagem, sem aspas.';
+        const llmPromptFinal = _llmTpl
+            .replace(/\$\{nomeEmpresa\}/g,        nomeEmpresa)
+            .replace(/\$\{nomeDono\}/g,            primeiroNomeDono || 'não identificado')
+            .replace(/\$\{nicho\}/g,               lead.niche || 'comércio')
+            .replace(/\$\{bairroLead\}/g,          bairroLead)
+            .replace(/\$\{concessionariaLocal\}/g, concessionariaLocal)
+            .replace(/\$\{capitalDesc\}/g,         capitalDesc)
+            .replace(/\$\{descontoEstimado\}/g,    descontoEstimado)
+            .replace(/\$\{nicheCtx\}/g,            nicheCtx ? '\nContexto do setor: ' + nicheCtx : '');
         const llmPromise = groq.chat.completions.create({
-            messages: [{
-                role: 'user',
-                content: `Você é um consultor de energia que está prospectando a empresa abaixo via WhatsApp. Escreva uma mensagem de abertura para enviar AO responsável desta empresa. Você NÃO é da empresa alvo.\n\nEmpresa alvo: ${nomeEmpresa}\nResponsável: ${primeiroNomeDono || 'não identificado'}\nNicho: ${lead.niche || 'comércio'}\nBairro: ${bairroLead}\nConcessionária: ${concessionariaLocal}\nCapital social: ${capitalDesc}\nDesconto potencial: ${descontoEstimado}%${nicheCtx ? '\nContexto do setor: ' + nicheCtx : ''}\n\nRegras obrigatórias:\n- Máx 80 caracteres no total\n- Tom casual e direto\n- Terminar com pergunta sobre quem cuida dos custos fixos\n- SEM mencionar "energia solar" ou "painel solar"\n- SEM emojis, SEM links, SEM markdown\n- NÃO se apresente com nome ou empresa — apenas crie curiosidade\nRetorne APENAS o texto da mensagem, sem aspas.`
-            }],
+            messages: [{ role: 'user', content: llmPromptFinal }],
             model: 'llama-3.1-8b-instant',
             temperature: 0.8,
             max_tokens: 80,
