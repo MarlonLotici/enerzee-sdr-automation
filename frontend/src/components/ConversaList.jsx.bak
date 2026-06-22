@@ -519,7 +519,7 @@ conversasOrdenadas.forEach(item => {     // 👈 USA conversasOrdenadas, NÃO co
                     <div style={{ display: 'flex', alignItems: 'center', gap: 7 }}>
                            <BrainCircuit size={14} color='#F59E0B' />
                         <span style={{ fontSize: 11, fontWeight: 900, color: '#fff', textTransform: 'uppercase', letterSpacing: '0.1em' }}>
-                            War Room
+                            Hub de Conversão
                         </span>
                         {conversas.length > 0 && (
                             <div style={{
@@ -560,32 +560,37 @@ conversasOrdenadas.forEach(item => {     // 👈 USA conversasOrdenadas, NÃO co
                     />
                 </div>
 
-                {/* === FILTROS POR ESTADO === */}
-                <div style={{ display: 'flex', flexWrap: 'wrap', gap: 4, marginBottom: 6 }}>
+                {/* === FILTROS TIPO PÍLULA — grade compacta com contorno Neon === */}
+                <div style={{ display: 'grid', gridTemplateColumns: 'repeat(3, 1fr)', gap: 4, marginBottom: 6 }}>
                     {FILTROS.map(f => {
                         const count = contadores[f.key] ?? 0
                         const isActive = filtro === f.key
+                        const neonColor = isActive ? f.color : 'rgba(245,158,11,0.18)'
                         return (
                             <button
                                 key={f.key}
                                 onClick={() => setFiltro(f.key)}
                                 style={{
-                                    display: 'flex', alignItems: 'center', gap: 3,
-                                    background: isActive ? f.color + '20' : 'transparent',
-                                    border: `1px solid ${isActive ? f.color + '50' : 'rgba(255,255,255,0.06)'}`,
-                                    borderRadius: '999px', padding: '2px 7px',
-                                    cursor: 'pointer', transition: 'all .15s',
+                                    display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 4,
+                                    background: isActive ? f.color + '1A' : 'rgba(255,255,255,0.02)',
+                                    border: `1px solid ${isActive ? f.color + '60' : 'rgba(245,158,11,0.12)'}`,
+                                    borderRadius: '8px', padding: '4px 7px',
+                                    cursor: 'pointer', transition: 'all .18s',
                                     fontSize: 8, fontWeight: 900,
-                                    color: isActive ? f.color : 'rgba(255,255,255,0.3)',
-                                    textTransform: 'uppercase', letterSpacing: '0.08em',
+                                    color: isActive ? f.color : 'rgba(255,255,255,0.35)',
+                                    textTransform: 'uppercase', letterSpacing: '0.07em',
+                                    boxShadow: isActive ? `0 0 6px ${f.color}22` : 'none',
+                                    whiteSpace: 'nowrap', overflow: 'hidden',
                                 }}
                             >
-                                {f.label}
+                                <span style={{ overflow: 'hidden', textOverflow: 'ellipsis' }}>{f.label}</span>
                                 {count > 0 && (
                                     <span style={{
-                                        fontSize: 7, fontWeight: 900,
-                                        color: isActive ? f.color : 'rgba(255,255,255,0.2)',
-                                        marginLeft: 1,
+                                        fontSize: 7, fontWeight: 900, flexShrink: 0,
+                                        background: isActive ? f.color + '25' : 'rgba(245,158,11,0.08)',
+                                        border: `1px solid ${isActive ? f.color + '40' : 'rgba(245,158,11,0.15)'}`,
+                                        color: isActive ? f.color : 'rgba(245,158,11,0.5)',
+                                        borderRadius: '999px', padding: '0 4px', lineHeight: '14px',
                                     }}>
                                         {count}
                                     </span>

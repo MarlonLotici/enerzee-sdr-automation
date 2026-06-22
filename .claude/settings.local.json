@@ -74,7 +74,10 @@
       "PowerShell(Copy-Item \"c:\\\\dev\\\\enerzee-sdr-automation\\\\frontend\\\\src\\\\App.jsx\" \"c:\\\\dev\\\\enerzee-sdr-automation\\\\frontend\\\\src\\\\App.jsx.bak\")",
       "PowerShell(Copy-Item \"c:\\\\dev\\\\enerzee-sdr-automation\\\\frontend\\\\src\\\\components\\\\ConversaList.jsx\" \"c:\\\\dev\\\\enerzee-sdr-automation\\\\frontend\\\\src\\\\components\\\\ConversaList.jsx.bak\")",
       "PowerShell(Copy-Item \"c:\\\\dev\\\\enerzee-sdr-automation\\\\frontend\\\\src\\\\index.css\" \"c:\\\\dev\\\\enerzee-sdr-automation\\\\frontend\\\\src\\\\index.css.bak\")",
-      "PowerShell(git -C \"c:\\\\dev\\\\enerzee-sdr-automation\" push -u origin feat/wpp-ui-refactor)"
+      "PowerShell(git -C \"c:\\\\dev\\\\enerzee-sdr-automation\" push -u origin feat/wpp-ui-refactor)",
+      "PowerShell(Copy-Item \"c:\\\\dev\\\\enerzee-sdr-automation\\\\frontend\\\\src\\\\components\\\\VisualAnalytics.jsx\" \"c:\\\\dev\\\\enerzee-sdr-automation\\\\frontend\\\\src\\\\components\\\\VisualAnalytics.jsx.bak\")",
+      "PowerShell(Copy-Item \"c:\\\\dev\\\\enerzee-sdr-automation\\\\frontend\\\\src\\\\App.jsx\" \"c:\\\\dev\\\\enerzee-sdr-automation\\\\frontend\\\\src\\\\App.jsx.bak2\")",
+      "PowerShell(Copy-Item \"c:\\\\dev\\\\enerzee-sdr-automation\\\\frontend\\\\src\\\\components\\\\AuditorDashboard.jsx\" \"c:\\\\dev\\\\enerzee-sdr-automation\\\\frontend\\\\src\\\\components\\\\AuditorDashboard.jsx.bak\")"
     ]
   }
 }
