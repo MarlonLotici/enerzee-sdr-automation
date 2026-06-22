@@ -2454,7 +2454,7 @@ if (lead.opening_template && lead.opening_template.length > 15 && lead.opening_t
         const llmPromise = groq.chat.completions.create({
             messages: [{
                 role: 'user',
-                content: `Nicho: ${lead.niche || 'comércio'}\nEmpresa: ${nomeEmpresa}\nResponsável: ${primeiroNomeDono || 'não identificado'}\nBairro: ${bairroLead}\nConcessionária: ${concessionariaLocal}\nCapital social: ${capitalDesc}\nDesconto estimado: ${descontoEstimado}%${nicheCtx ? '\nContexto do setor: ' + nicheCtx : ''}\n\nGere UMA mensagem de abertura WhatsApp B2B em português brasileiro.\nRegras: máx 80 caracteres, tom casual/direto, pergunta de qualificação no final, SEM mencionar "energia solar" ou "painel solar", SEM emojis, SEM links, SEM markdown.\nRetorne APENAS o texto da mensagem, sem aspas.`
+                content: `Você é um consultor de energia que está prospectando a empresa abaixo via WhatsApp. Escreva uma mensagem de abertura para enviar AO responsável desta empresa. Você NÃO é da empresa alvo.\n\nEmpresa alvo: ${nomeEmpresa}\nResponsável: ${primeiroNomeDono || 'não identificado'}\nNicho: ${lead.niche || 'comércio'}\nBairro: ${bairroLead}\nConcessionária: ${concessionariaLocal}\nCapital social: ${capitalDesc}\nDesconto potencial: ${descontoEstimado}%${nicheCtx ? '\nContexto do setor: ' + nicheCtx : ''}\n\nRegras obrigatórias:\n- Máx 80 caracteres no total\n- Tom casual e direto\n- Terminar com pergunta sobre quem cuida dos custos fixos\n- SEM mencionar "energia solar" ou "painel solar"\n- SEM emojis, SEM links, SEM markdown\n- NÃO se apresente com nome ou empresa — apenas crie curiosidade\nRetorne APENAS o texto da mensagem, sem aspas.`
             }],
             model: 'llama-3.1-8b-instant',
             temperature: 0.8,
