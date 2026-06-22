@@ -422,6 +422,94 @@ app.get('/api/debug-chip/:instanceId', autenticarMiddleware, async (req, res) =>
     }
 });
 
+// ============================================================================
+// 👤 CRIAÇÃO DE CONTA (ADMIN) — POST /api/admin/criar-conta
+// ============================================================================
+// Protegida por x-admin-secret. Usa service_role para chamar auth.admin.createUser,
+// que cria o usuário sem precisar de confirmação de e-mail. Logo em seguida faz
+// upsert explícito em public.profiles para contornar qualquer trigger ausente/defeituoso
+// que causaria o erro "Database error creating new user".
+// ----------------------------------------------------------------------------
+app.post('/api/admin/criar-conta', express.json(), async (req, res) => {
+    try {
+        // Guard: chave de master — define ADMIN_SECRET no Railway/env
+        const secret = req.headers['x-admin-secret'];
+        if (!secret || secret !== process.env.ADMIN_SECRET) {
+            return res.status(403).json({ error: 'Acesso negado: x-admin-secret inválido.' });
+        }
+
+        const { email, password, nome_empresa, produto } = req.body;
+
+        if (!email || !password) {
+            return res.status(400).json({ error: 'Campos obrigatórios ausentes: email, password.' });
+        }
+        if (password.length < 8) {
+            return res.status(400).json({ error: 'Senha precisa ter no mínimo 8 caracteres.' });
+        }
+
+        // 1. Criação do usuário no Supabase Auth via service_role (bypass de RLS + email confirm)
+        const { data: authData, error: authError } = await supabase.auth.admin.createUser({
+            email,
+            password,
+            email_confirm: true,
+        });
+
+        if (authError) {
+            // Loga o erro completo para diagnóstico — o campo authError.message normalmente
+            // é genérico ("Database error creating new user") mas o .status e o .cause
+            // revelam a causa real (trigger faltando coluna, FK violada, etc).
+            console.error('[ADMIN] Falha ao criar usuário Auth:', {
+                message: authError.message,
+                status:  authError.status,
+                cause:   authError.cause,
+                raw:     JSON.stringify(authError),
+            });
+            return res.status(400).json({
+                error:  authError.message,
+                code:   authError.status,
+                detail: authError.cause || 'Verifique se a tabela public.profiles tem todas as colunas esperadas pelo trigger handle_new_user (id, default_product_type, etc.) e se RLS não está bloqueando o INSERT do trigger.',
+            });
+        }
+
+        const userId = authData.user.id;
+        console.log(`✅ [ADMIN] Usuário Auth criado: ${email} → ${userId}`);
+
+        // 2. Upsert explícito em public.profiles — tolera trigger já existente (onConflict: 'id')
+        //    e garante que o perfil exista mesmo se o trigger estiver desabilitado/ausente.
+        const { error: profileError } = await supabase.from('profiles').upsert({
+            id:                   userId,
+            default_company_name: nome_empresa || null,
+            default_product_type: produto      || 'solar',
+        }, { onConflict: 'id' });
+
+        if (profileError) {
+            console.error(`[ADMIN] Erro ao criar perfil para ${userId}:`, {
+                message: profileError.message,
+                code:    profileError.code,
+                details: profileError.details,
+                hint:    profileError.hint,
+            });
+            // Não faz rollback: usuário Auth foi criado com sucesso.
+            // Perfil incompleto pode ser preenchido depois via settings.
+            return res.status(207).json({
+                ok:               false,
+                user_id:          userId,
+                email,
+                aviso:            'Usuário criado no Auth, mas houve erro ao criar o perfil.',
+                profile_error:    profileError.message,
+                profile_hint:     profileError.hint,
+            });
+        }
+
+        console.log(`✅ [ADMIN] Perfil criado para ${userId} (empresa: ${nome_empresa || '—'}, produto: ${produto || 'solar'})`);
+        return res.status(201).json({ ok: true, user_id: userId, email });
+
+    } catch (err) {
+        console.error('[ADMIN] Falha crítica na rota de criação de conta:', err);
+        return res.status(500).json({ error: 'Erro interno do servidor.', detail: err.message });
+    }
+});
+
 // Entrega o Frontend (Sempre depois das rotas de API)
 app.get(/.*/, (req, res) => {
     res.sendFile(path.join(__dirname, 'frontend', 'dist', 'index.html'));
