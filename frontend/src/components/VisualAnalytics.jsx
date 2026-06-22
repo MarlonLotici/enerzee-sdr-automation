@@ -149,7 +149,11 @@ function computeMetrics(leads, instances, realTotalLeads, realAgendados = 0, rea
     const estagioCount = [0, 0, 0, 0, 0, 0]
     leadsValidos.forEach(l => {
         if (l.status === 'new') return
-        const stage = Math.min(l.current_stage || 0, 5)
+        // Booked/closed/calendly_booked → força estágio 4+ para unificar com o card "Agendamentos"
+        const isBooked = l.status === 'booked' || l.status === 'closed' || l.calendly_booked === true
+        const stage = isBooked
+            ? Math.max(Math.min(l.current_stage || 0, 5), 4)
+            : Math.min(l.current_stage || 0, 5)
         // Acumula: um lead no stage 3 passou pelos stages 0, 1, 2 e 3
         for (let i = 0; i <= stage; i++) estagioCount[i]++
     })
@@ -237,14 +241,17 @@ function computeMetrics(leads, instances, realTotalLeads, realAgendados = 0, rea
     // Fórmula: (Em Conversa + Pausados + Hot + Agendados) / Total Abordados
     const leadsAbordados = leadsValidos.filter(l => !!l.last_contact_at)
     const leadsEngajados = leadsAbordados.filter(l =>
-        l.status === 'contact'          ||
-        l.status === 'waiting_analysis' ||
-        l.is_paused === true            ||
-        l.lead_temperature === 'hot'    ||
-        l.status === 'booked'           ||
-        l.status === 'closed'           ||
-        l.calendly_booked === true      ||
-        (l.current_stage || 0) >= 4
+        l.status !== 'dead' &&
+        (
+            l.status === 'contact'          ||
+            l.status === 'waiting_analysis' ||
+            l.is_paused === true            ||
+            l.lead_temperature === 'hot'    ||
+            l.status === 'booked'           ||
+            l.status === 'closed'           ||
+            l.calendly_booked === true      ||
+            (l.current_stage || 0) >= 4
+        )
     )
     const engagementRate = leadsAbordados.length > 0
         ? Math.round((leadsEngajados.length / leadsAbordados.length) * 100)
@@ -438,7 +445,7 @@ export default function VisualAnalytics() {
                 .or(orFilter)
                 .not('last_contact_at', 'is', null)
                 .not('status', 'in', '(invalid,blacklisted,error)')
-            if (dateFrom) aborQ = aborQ.gte('last_contact_at', dateFrom)
+            if (dateFrom) aborQ = aborQ.gte('created_at', dateFrom)
 
             const [leadsRes, countRes, agendadosRes, abordadosRes] = await Promise.all([leadsQ, countQ, agendQ, aborQ])
             const instRes = { data: instData, error: null }
