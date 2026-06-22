@@ -2511,7 +2511,10 @@ const mensagensSplit = [textoFinal];
                     await instancia.sock.sendPresenceUpdate('composing', cleanJid);
                     await delay(Math.max(4000, Math.min(tempoDigitacao, 10000))); 
                     
-                    await enviarMensagemIA(instancia.sock, cleanJid, { text: trecho });
+                    const sentMsg = await enviarMensagemIA(instancia.sock, cleanJid, { text: trecho });
+                    if (!sentMsg?.key?.id) {
+                        throw new Error(`FALHA_SILENCIOSA: Envio sem confirmacao de key.id para ${cleanJid}`);
+                    }
                     await db.saveMessage(cleanJid, 'assistant', trecho, instanceId);
 
                     if (i < mensagensSplit.length - 1) {
@@ -2547,6 +2550,18 @@ const mensagensSplit = [textoFinal];
                         liberarSemaforoChip(instanceId, chipNovo);
                     }
                     continue; // Passa pro próximo lead imediatamente — chip não é penalizado
+                }
+
+                // 🔇 FALHA SILENCIOSA: Baileys resolveu sem key.id (número fantasma, socket degradado)
+                // Não recoloca em 'new' para evitar loop eterno — descarta como invalid_number
+                if (errInner.message?.includes('FALHA_SILENCIOSA')) {
+                    console.warn(`⚠️ [SDR] Ocultando falso positivo no disparo. Marcado como invalido.`);
+                    if (currentLead) {
+                        await supabase.from('leads').update({ status: 'invalid_number' }).eq('id', currentLead.id);
+                        leadsEmProcessamento.delete(currentLead.id);
+                        liberarSemaforoChip(instanceId, chipNovo);
+                    }
+                    continue;
                 }
 
                 // Erros de rede/socket/chip — lógica original de retry
