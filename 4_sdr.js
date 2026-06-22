@@ -210,6 +210,7 @@ let sdrEventsGlobal = null; // 🛡️ Adicione esta linha aqui no topo
 // E que disparos de SAUDAÇÃO tenham prioridade sobre FOLLOW-UPs
 // ============================================================================
 const semaforoChips = new Map(); // chipId → { ocupado: boolean, ultimoDisparo: timestamp, cooldownMs: number, prioridadeAtual: string }
+global.chipsAquecidosHoje = global.chipsAquecidosHoje || new Set(); // cold-start guard por chip, por processo
 
 // Retorna delay humano randômico entre disparos.
 // Chip novo: 10-18 min — janela maior diminui a cadência detectável pelo WA.
@@ -1916,9 +1917,9 @@ if (fromMe) {
             // 🛡️ PASSO 4: BARREIRA ANTI-CRASH
             // Lemos o tamanho do arquivo nos metadados antes de iniciar o download
             const fileSize = msg.message[messageType]?.fileLength || 0;
-            const limiteMaximo = 15 * 1024 * 1024; // 15MB em bytes
+            const limiteMáximo = 15 * 1024 * 1024; // 15MB em bytes
 
-            if (fileSize > limiteMaximo) {
+            if (fileSize > limiteMáximo) {
                 console.log(`⚠️ [BARREIRA] Arquivo de ${lead.name} é muito grande (${(fileSize / 1024 / 1024).toFixed(2)}MB). Abortando download.`);
                 
                 if (!lead.is_paused) {
@@ -2356,12 +2357,16 @@ console.log(`🔒 [RESERVA] Lead ${lead.name} travado atomicamente para chip ${c
                     continue;
                 }
 
-                // ⏳ 6. JITTER SEQUENCIAL — chip novo espera mais para reduzir cadência detectável
-                const jitter = chipNovo
-                    ? Math.random() * 300000 + 300000   // novo: 5-10 min
-                    : Math.random() * 180000 + 120000;  // maduro: 2-5 min
-                console.log(`🎯 [${config.nome}] Mirando em: ${lead.name} (${enviosHoje + 1}/${config.limite}). Aguardando ${Math.round(jitter/1000)}s...`);
+                // ⏳ 6. JITTER SEQUENCIAL — cold-start uma única vez por dia; chip novo já aquecido usa jitter curto
+                const isColdStart = chipNovo && enviosHoje === 0 && !global.chipsAquecidosHoje.has(instanceId);
+                const jitter = isColdStart
+                    ? Math.random() * 300000 + 300000   // cold-start: 5-10 min (uma vez por dia)
+                    : chipNovo
+                        ? Math.random() * 120000 + 60000   // chip novo aquecido: 1-3 min
+                        : Math.random() * 180000 + 120000; // maduro: 2-5 min
+                console.log(`🎯 [${config.nome}] Mirando em: ${lead.name} (${enviosHoje + 1}/${config.limite}). Aguardando ${Math.round(jitter/1000)}s${isColdStart ? " (cold-start)" : ""}...`);
                 await delay(jitter);
+                if (isColdStart) global.chipsAquecidosHoje.add(instanceId);
 
                 // 7. Normalização do JID — derivada diretamente do banco (sem onWhatsApp)
                 const cleanJid = lead.whatsapp_id.split(':')[0].split('@')[0] + '@s.whatsapp.net';
@@ -2456,7 +2461,7 @@ if (lead.opening_template && lead.opening_template.length > 15 && lead.opening_t
         // Variáveis disponíveis no template: ${nomeEmpresa}, ${nomeDono}, ${nicho},
         // ${bairroLead}, ${concessionariaLocal}, ${capitalDesc}, ${descontoEstimado}, ${nicheCtx}
         const _llmTpl = tplsInstancia?.llm_prompt ||
-            'Você está prospectando a empresa abaixo via WhatsApp. Escreva uma mensagem de abertura para enviar AO responsável. Você NÃO é da empresa alvo.\n\nEmpresa alvo: ${nomeEmpresa}\nResponsável: ${nomeDono}\nNicho: ${nicho}\nBairro: ${bairroLead}\nCapital social: ${capitalDesc}${nicheCtx}\n\nRegras obrigatórias:\n- Máx 80 caracteres no total\n- Tom casual e direto\n- Terminar com pergunta sobre quem cuida dos custos\n- SEM emojis, SEM links, SEM markdown\n- NÃO se apresente com nome ou empresa — apenas crie curiosidade\nRetorne APENAS o texto da mensagem, sem aspas.';
+            'Aja como um especialista em redução de custos operacionais. Crie uma ÚNICA mensagem curta de WhatsApp para iniciar conversa com o decisor da empresa alvo.\n\nEmpresa: ${nomeEmpresa}\nDono: ${nomeDono}\nBairro: ${bairroLead}\n\nRegras ABSOLUTAS:\n1. Inicie EXATAMENTE com: "Opa ${nomeDono}, tudo bem?" (ou "bom dia/boa tarde").\n2. NUNCA diga seu nome, não diga "sou eu", não diga de onde você é.\n3. Vá direto ao assunto: faça um comentário curto sobre a empresa no bairro ${bairroLead} e pergunte se ele é a pessoa que cuida dos custos fixos.\n4. Máximo de 20 palavras.\n5. SEM emojis, SEM mencionar energia solar.\nRetorne APENAS o texto da mensagem.';
         const llmPromptFinal = _llmTpl
             .replace(/\$\{nomeEmpresa\}/g,        nomeEmpresa)
             .replace(/\$\{nomeDono\}/g,            primeiroNomeDono || 'não identificado')
