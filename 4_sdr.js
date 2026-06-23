@@ -257,8 +257,9 @@ function generateProxyUrl(instanceId) {
     return base.replace('SESSION_ID', sessionId);
 }
 
-// Valida o proxy fazendo GET real via ipify. Retorna o agent pronto ou null em falha.
-// Nunca crasha o processo — falha graciosamente para não derrubar outros chips.
+// Valida o proxy fazendo GET real via ipify. Retorna o agent pronto ou lança erro se o proxy falhar.
+// Se proxyUrl for null (chip sem proxy configurado), retorna null — isso é intencional.
+// Se proxyUrl for definido e falhar, ABORTA: jamais expõe o IP do Railway.
 async function validateProxy(proxyUrl, instanceId) {
     if (!proxyUrl) return null;
     let agent;
@@ -272,8 +273,8 @@ async function validateProxy(proxyUrl, instanceId) {
         return agent;
     } catch (err) {
         const safeMsg = (err.message || 'timeout').replace(/:[^:@]*@/g, ':***@');
-        console.warn(`⚠️ [PROXY FAIL] Chip ${instanceId.substring(0, 8)}: ${safeMsg}. Seguindo sem proxy.`);
-        return null;
+        console.error(`🚫 [PROXY FAIL] Chip ${instanceId.substring(0, 8)}: ${safeMsg}. Abortando conexão — IP Railway NÃO exposto.`);
+        throw new Error(`Proxy validation failed for chip ${instanceId.substring(0, 8)}: ${safeMsg}`);
     }
 }
 
@@ -1237,8 +1238,10 @@ async function startInstance(instanceId, instanceName, preloadedUserId = null) {
     // PROXY_BASE_URL define o template; SESSION_ID é substituído pelo instanceId.
     // Fallback: PROXY_URL (global) → sem proxy (Railway IP).
     const proxyUrl = generateProxyUrl(instanceId) || process.env.PROXY_URL || null;
-    const agent = await validateProxy(proxyUrl, instanceId); // retorna HttpsProxyAgent ou null
-    if (!agent) console.warn(`⚠️ [PROXY] ${instanceName} iniciando sem proxy — IP de datacenter Railway exposto.`);
+    // validateProxy lança erro se proxyUrl estiver definido mas falhar — chip não sobe sem proxy.
+    // Retorna null apenas quando proxyUrl é null (chip sem proxy configurado intencionalmente).
+    const agent = await validateProxy(proxyUrl, instanceId);
+    if (!agent) console.log(`ℹ️ [PROXY] ${instanceName} sem proxy configurado — modo direto.`);
 
     // Jitter de startup: evita burst de logins simultâneos quando Railway reinicia todos os chips de uma vez.
     const startupJitter = Math.floor(Math.random() * 30000); // 0-30s
