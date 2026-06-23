@@ -2337,6 +2337,14 @@ console.log(`🔒 [RESERVA] Lead ${lead.name} travado atomicamente para chip ${c
                     leadsEmProcessamento.delete(lead.id);
                     break; // 🛑 HÍBRIDO: Caiu o socket, desliga e espera o próximo arranque
                 }
+                // 👻 GHOST SESSION: ready=true mas WebSocket TCP morto (sem 'close' event)
+                if (instancia.sock?.ws?.readyState !== 1) {
+                    console.log(`👻 [GHOST SESSION] ${config.nome} — WebSocket morto (state: ${instancia.sock?.ws?.readyState}). Forçando reconexão.`);
+                    sessions.set(instanceId, { sock: instancia.sock, ready: false, userId: instancia.userId });
+                    await supabase.from('leads').update({ status: 'new' }).eq('id', lead.id);
+                    leadsEmProcessamento.delete(lead.id);
+                    break;
+                }
 
                 const hist = await db.getHistory(lead.whatsapp_id, instanceId);
 
@@ -2439,64 +2447,65 @@ if (lead.opening_template && lead.opening_template.length > 15 && lead.opening_t
           ];
     textoFinal = fallbacks[Math.floor(Math.random() * fallbacks.length)];
 } else {
-    // PASSO 3: Motor LLM para leads frios / padrão
-    const spintaxFallback = (tplsInstancia && Array.isArray(tplsInstancia.padrao) && tplsInstancia.padrao.length > 0)
+    // PASSO 3: Spintax padrao tem PRIORIDADE — LLM só é acionado se não houver template configurado
+    const tplsPadrao = (tplsInstancia && Array.isArray(tplsInstancia.padrao) && tplsInstancia.padrao.length > 0)
         ? tplsInstancia.padrao.map(substituirVarsAbertura)
-        : [
+        : null;
+
+    if (tplsPadrao) {
+        textoFinal = tplsPadrao[Math.floor(Math.random() * tplsPadrao.length)];
+        console.log(`📋 [SPINTAX] Abertura via template para ${lead.name}: "${textoFinal}"`);
+    } else {
+        // Sem template padrao configurado: usa LLM com fallbacks hardcoded
+        const spintaxFallback = [
             `${saudacao}, vi algo sobre a conta de energia da ${nomeEmpresa} que achei que valia te passar. Vc cuida dessa parte de contas fixas aí?`,
             `${saudacao}, dei uma olhada no cadastro da ${nomeEmpresa} e tem uma coisa sobre a conta de luz da ${concessionariaLocal} que achei que valia te avisar. Tô falando com quem cuida disso?`,
             `${saudacao}, mapeamos empresas da região que podem estar pagando a mais na ${concessionariaLocal}. A ${nomeEmpresa} apareceu na lista. Vc é quem cuida dessa parte?`
-          ];
+        ];
 
-    try {
-        const capitalDesc = !lead.capital_social_numeric ? 'não informado'
-            : lead.capital_social_numeric >= 500000 ? 'grande (R$ 500k+)'
-            : lead.capital_social_numeric >= 150000 ? 'médio (R$ 150k-500k)'
-            : 'pequeno (< R$ 150k)';
-        const descontoEstimado = MAPA_DESCONTO_REGIONAL[ufLead] ? `${Math.round(MAPA_DESCONTO_REGIONAL[ufLead] * 100)}` : '12-18';
-        const nicheCtx = gerarContextoNicho(lead.niche || '');
+        try {
+            const capitalDesc = !lead.capital_social_numeric ? 'não informado'
+                : lead.capital_social_numeric >= 500000 ? 'grande (R$ 500k+)'
+                : lead.capital_social_numeric >= 150000 ? 'médio (R$ 150k-500k)'
+                : 'pequeno (< R$ 150k)';
+            const descontoEstimado = MAPA_DESCONTO_REGIONAL[ufLead] ? `${Math.round(MAPA_DESCONTO_REGIONAL[ufLead] * 100)}` : '12-18';
+            const nicheCtx = gerarContextoNicho(lead.niche || '');
 
-        // Prompt LLM: lido do Supabase (opening_templates.llm_prompt) — editável por tenant sem deploy.
-        // Se não configurado, usa o fallback hardcoded abaixo (produto agnóstico: sem "energia solar").
-        // Variáveis disponíveis no template: ${nomeEmpresa}, ${nomeDono}, ${nicho},
-        // ${bairroLead}, ${concessionariaLocal}, ${capitalDesc}, ${descontoEstimado}, ${nicheCtx}
-        const _llmTpl = tplsInstancia?.llm_prompt ||
-            'Aja como um especialista em redução de custos operacionais. Crie uma ÚNICA mensagem curta de WhatsApp para iniciar conversa com o decisor da empresa alvo.\n\nEmpresa: ${nomeEmpresa}\nDono: ${nomeDono}\nBairro: ${bairroLead}\n\nRegras ABSOLUTAS:\n1. Inicie EXATAMENTE com: "Opa ${nomeDono}, tudo bem?" (ou "bom dia/boa tarde").\n2. NUNCA diga seu nome, não diga "sou eu", não diga de onde você é.\n3. Vá direto ao assunto: faça um comentário curto sobre a empresa no bairro ${bairroLead} e pergunte se ele é a pessoa que cuida dos custos fixos.\n4. Máximo de 20 palavras.\n5. SEM emojis, SEM mencionar energia solar.\nRetorne APENAS o texto da mensagem.';
-        const llmPromptFinal = _llmTpl
-            .replace(/\$\{nomeEmpresa\}/g,        nomeEmpresa)
-            .replace(/\$\{nomeDono\}/g,            primeiroNomeDono || 'não identificado')
-            .replace(/\$\{nicho\}/g,               lead.niche || 'comércio')
-            .replace(/\$\{bairroLead\}/g,          bairroLead)
-            .replace(/\$\{concessionariaLocal\}/g, concessionariaLocal)
-            .replace(/\$\{capitalDesc\}/g,         capitalDesc)
-            .replace(/\$\{descontoEstimado\}/g,    descontoEstimado)
-            .replace(/\$\{nicheCtx\}/g,            nicheCtx ? '\nContexto do setor: ' + nicheCtx : '');
-        const llmPromise = groq.chat.completions.create({
-            messages: [{ role: 'user', content: llmPromptFinal }],
-            model: 'llama-3.1-8b-instant',
-            temperature: 0.8,
-            max_tokens: 80,
-        });
-        const timeoutPromise = new Promise((_, reject) =>
-            setTimeout(() => reject(new Error('timeout')), 3500));
-        const llmRes = await Promise.race([llmPromise, timeoutPromise]);
-        const llmTexto = llmRes.choices[0].message.content.trim().replace(/^["'`]|["'`]$/g, '');
-        if (llmTexto && llmTexto.length > 10) {
-            textoFinal = llmTexto;
-            console.log(`🧠 [LLM] Abertura gerada para ${lead.name}: "${textoFinal}"`);
-        } else {
-            throw new Error('texto vazio');
+            // Prompt LLM: lido do Supabase (opening_templates.llm_prompt) — editável por tenant sem deploy.
+            // Variáveis disponíveis: ${nomeEmpresa}, ${nomeDono}, ${nicho},
+            // ${bairroLead}, ${concessionariaLocal}, ${capitalDesc}, ${descontoEstimado}, ${nicheCtx}
+            const _llmTpl = tplsInstancia?.llm_prompt ||
+                'Aja como um especialista em redução de custos operacionais. Crie uma ÚNICA mensagem curta de WhatsApp para iniciar conversa com o decisor da empresa alvo.\n\nEmpresa: ${nomeEmpresa}\nDono: ${nomeDono}\nBairro: ${bairroLead}\n\nRegras ABSOLUTAS:\n1. Inicie EXATAMENTE com: "Opa ${nomeDono}, tudo bem?" (ou "bom dia/boa tarde").\n2. NUNCA diga seu nome, não diga "sou eu", não diga de onde você é.\n3. Vá direto ao assunto: faça um comentário curto sobre a empresa no bairro ${bairroLead} e pergunte se ele é a pessoa que cuida dos custos fixos.\n4. Máximo de 20 palavras.\n5. SEM emojis, SEM mencionar energia solar.\nRetorne APENAS o texto da mensagem.';
+            const llmPromptFinal = _llmTpl
+                .replace(/\$\{nomeEmpresa\}/g,        nomeEmpresa)
+                .replace(/\$\{nomeDono\}/g,            primeiroNomeDono || 'não identificado')
+                .replace(/\$\{nicho\}/g,               lead.niche || 'comércio')
+                .replace(/\$\{bairroLead\}/g,          bairroLead)
+                .replace(/\$\{concessionariaLocal\}/g, concessionariaLocal)
+                .replace(/\$\{capitalDesc\}/g,         capitalDesc)
+                .replace(/\$\{descontoEstimado\}/g,    descontoEstimado)
+                .replace(/\$\{nicheCtx\}/g,            nicheCtx ? '\nContexto do setor: ' + nicheCtx : '');
+            const llmPromise = groq.chat.completions.create({
+                messages: [{ role: 'user', content: llmPromptFinal }],
+                model: 'llama-3.1-8b-instant',
+                temperature: 0.8,
+                max_tokens: 80,
+            });
+            const timeoutPromise = new Promise((_, reject) =>
+                setTimeout(() => reject(new Error('timeout')), 3500));
+            const llmRes = await Promise.race([llmPromise, timeoutPromise]);
+            const llmTexto = llmRes.choices[0].message.content.trim().replace(/^["'`]|["'`]$/g, '');
+            if (llmTexto && llmTexto.length > 10) {
+                textoFinal = llmTexto;
+                console.log(`🧠 [LLM] Abertura gerada para ${lead.name}: "${textoFinal}"`);
+            } else {
+                throw new Error('texto vazio');
+            }
+        } catch (errLLM) {
+            console.warn(`⚠️ [LLM TIMEOUT] Usando spintax para ${lead.name}: ${errLLM.message}`);
+            textoFinal = spintaxFallback[Math.floor(Math.random() * spintaxFallback.length)];
         }
-    } catch (errLLM) {
-        console.warn(`⚠️ [LLM TIMEOUT] Usando spintax para ${lead.name}: ${errLLM.message}`);
-        textoFinal = spintaxFallback[Math.floor(Math.random() * spintaxFallback.length)];
     }
-}
-
-// PASSO 4: Cap de segurança — corta na última palavra antes de 85 chars
-if (textoFinal.length > 85) {
-    const corte = textoFinal.lastIndexOf(' ', 85);
-    textoFinal = (corte > 20 ? textoFinal.substring(0, corte) : textoFinal.substring(0, 85)) + '...';
 }
 
 const mensagensSplit = [textoFinal];
