@@ -3757,11 +3757,16 @@ module.exports = {
 
         const insts = await db.getActiveInstances();
         for (const i of insts) {
-            await startInstance(i.id, i.name, i.user_id);
-            await delay(3000); 
-            
-            // 🚀 ARRANQUE INICIAL: Liga a turbina para este chip!
-            processarFilaDeAtaque(i.id); 
+            try {
+                await startInstance(i.id, i.name, i.user_id);
+                // 🚀 ARRANQUE INICIAL: Liga a turbina para este chip!
+                processarFilaDeAtaque(i.id);
+            } catch (err) {
+                // Proxy fail ou outro erro fatal neste chip — limpa o lock e continua com os demais
+                instanciasLigando.delete(i.id);
+                console.error(`🚫 [MANAGER] Chip ${i.name} abortado na inicialização: ${err.message}. Continuando com os demais.`);
+            }
+            await delay(3000);
         }
         
         // 🛑 BLINDAGEM MÁXIMA: Garante que o Vigia e o Ouvinte sejam criados UMA ÚNICA VEZ
