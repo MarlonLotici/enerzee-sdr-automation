@@ -1762,7 +1762,7 @@ if (matchClima) updates.sentiment = matchClima[1].toLowerCase();
             const enviado = await enviarMensagemIA(sock, remoteJid, { text: trecho });
 
             if (enviado) {
-                console.log(`✅ [ENVIO ${i + 1}/${mensagensSplit.length}] Balão entregue: "${trecho.substring(0, 80)}..."`);
+                console.log(`✅ [ENVIO ${i + 1}/${mensagensSplit.length}] [${cacheRegrasInstancia.get(instanceId)?.dados?.name || instanceId.slice(0,8)} → ${lead.name}] Balão entregue: "${trecho.substring(0, 80)}..."`);
 
                 // 🕒 MARCADOR DE LINK: Carimba o banco se o Calendly foi enviado
                 if (trecho.includes('calendly.com')) {
@@ -2821,6 +2821,8 @@ async function loopRecuperacaoConversas() {
                     const instancia = sessions.get(lf.instance_id);
                     if (!instancia || !instancia.ready) continue;
 
+                    const chipNome = cacheRegrasInstancia.get(lf.instance_id)?.dados?.name || lf.instance_id.slice(0, 8);
+
                     if (followupAtual === 0) {
                         let primeiroNome = lf.dono && lf.dono.trim().length > 2 ? lf.dono.trim().split(' ')[0] : 'Opa';
                         primeiroNome = primeiroNome.charAt(0).toUpperCase() + primeiroNome.slice(1);
@@ -2831,11 +2833,11 @@ async function loopRecuperacaoConversas() {
                         // 🚦 SEMÁFORO: Follow-up D1 tem prioridade 3 (cede pra saudação E recuperação)
                         const semaforoOk = await adquirirSemaforoChip(lf.instance_id, 'FOLLOWUP');
                         if (!semaforoOk) {
-                            console.log(`⏸️ [FOLLOWUP-D1] Chip ocupado por prioridade maior. Pulando ${lf.name} desta rodada.`);
+                            console.log(`⏸️ [FOLLOWUP-D1] [${chipNome}] Chip ocupado por prioridade maior. Pulando ${lf.name} desta rodada.`);
                             continue;
                         }
-                        
-                        console.log(`🔔 [FOLLOW-UP D1] Disparando para ${lf.name}`);
+
+                        console.log(`🔔 [FOLLOW-UP D1] [${chipNome} → ${lf.name}] Disparando...`);
 await instancia.sock.sendPresenceUpdate('composing', lf.whatsapp_id);
 
 // ⏳ Tempo de "digitação" proporcional ao tamanho da mensagem (humanização)
@@ -2850,7 +2852,7 @@ liberarSemaforoChip(lf.instance_id); // 🚦 Libera vaga
 
 // 🛡️ ANTI-BAN: Jitter de 3-6 minutos entre follow-ups do mesmo chip
 const jitterAntiBan = Math.floor(Math.random() * 180000) + 180000;
-console.log(`⏸️ [ANTI-BAN] Aguardando ${Math.round(jitterAntiBan/1000)}s antes do próximo follow-up...`);
+console.log(`⏸️ [ANTI-BAN] [${chipNome} → ${lf.name}] Aguardando ${Math.round(jitterAntiBan/1000)}s antes do próximo follow-up...`);
 await delay(jitterAntiBan);
                     }
                     else if (followupAtual === 1) {
@@ -2864,7 +2866,7 @@ await delay(jitterAntiBan);
                         const semaforoOk = await adquirirSemaforoChip(lf.instance_id, 'FOLLOWUP');
                         if (!semaforoOk) { continue; }
 
-                        console.log(`🔔 [FOLLOW-UP D3] Disparando para ${lf.name}`);
+                        console.log(`🔔 [FOLLOW-UP D3] [${chipNome} → ${lf.name}] Disparando...`);
                         await instancia.sock.sendPresenceUpdate('composing', lf.whatsapp_id);
                         await delay(Math.min(Math.max(msgD3.length * 80, 4000), 9000));
                         await enviarMensagemIA(instancia.sock, lf.whatsapp_id, { text: msgD3 });
@@ -2945,7 +2947,7 @@ liberarSemaforoChip(ll.instance_id); // 🚦 Libera vaga
 
 // 🛡️ ANTI-BAN: Jitter de 3-6 minutos
 const jitterAntiBan = Math.floor(Math.random() * 180000) + 180000;
-console.log(`⏸️ [ANTI-BAN] Aguardando ${Math.round(jitterAntiBan/1000)}s antes do próximo follow-up...`);
+console.log(`⏸️ [ANTI-BAN] [${cacheRegrasInstancia.get(ll.instance_id)?.dados?.name || ll.instance_id.slice(0,8)} → ${ll.name}] Aguardando ${Math.round(jitterAntiBan/1000)}s antes do próximo follow-up...`);
 await delay(jitterAntiBan);
 
                 } catch (errLink) { console.error(`❌ Erro Follow-up Link ${ll.name}:`, errLink.message); }
