@@ -2432,8 +2432,9 @@ console.log(`🔒 [RESERVA] Lead ${lead.name} travado atomicamente para chip ${c
                     break; // 🛑 HÍBRIDO: Caiu o socket, desliga e espera o próximo arranque
                 }
                 // 👻 GHOST SESSION: ready=true mas WebSocket TCP morto (sem 'close' event)
-                if (instancia.sock?.ws?.readyState !== 1) {
-                    console.log(`👻 [GHOST SESSION] ${config.nome} — WebSocket morto (state: ${instancia.sock?.ws?.readyState}). Forçando reconexão.`);
+                // sock.ws é um WebSocketClient (wrapper do Baileys) — usa .isOpen, não .readyState
+                if (!instancia.sock?.ws?.isOpen) {
+                    console.log(`👻 [GHOST SESSION] ${config.nome} — WebSocket morto (isOpen: ${instancia.sock?.ws?.isOpen}). Forçando reconexão.`);
                     sessions.set(instanceId, { sock: instancia.sock, ready: false, userId: instancia.userId });
                     await supabase.from('leads').update({ status: 'new' }).eq('id', lead.id);
                     leadsEmProcessamento.delete(lead.id);
