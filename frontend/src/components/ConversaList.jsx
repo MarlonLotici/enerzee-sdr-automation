@@ -1,6 +1,6 @@
 import React, { useState, useEffect, useCallback } from 'react'
 import { supabase } from '@/lib/supabase'
-import { Search, BrainCircuit, Clock, RefreshCw, Cpu } from 'lucide-react'
+import { Search, BrainCircuit, Clock, RefreshCw, Cpu, ChevronDown } from 'lucide-react'
 
 // ─── HELPERS ──────────────────────────────────────────────────────────────────
 function timeAgo(isoStr) {
@@ -330,6 +330,7 @@ export default function ConversaList({ onSelect, activeId, socket, instances = [
     const [loading,   setLoading]   = useState(true)
     const [filtro,    setFiltro]    = useState('todos')
     const [chipFiltro, setChipFiltro] = useState('todos')
+    const [isFiltrosOpen, setIsFiltrosOpen] = useState(false)
 
     // 🔗 Sincroniza com o chip selecionado no App principal
     useEffect(() => {
@@ -514,93 +515,112 @@ conversasOrdenadas.forEach(item => {     // 👈 USA conversasOrdenadas, NÃO co
         }}>
 
             {/* ── Header ── */}
-            <div style={{ padding: '8px 10px', borderBottom: '1px solid rgba(255,255,255,0.05)', flexShrink: 0 }}>
-                <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 8 }}>
+            <div style={{ borderBottom: '1px solid rgba(255,255,255,0.05)', flexShrink: 0 }}>
+                {/* Título — clicável para recolher filtros */}
+                <div
+                    onClick={() => setIsFiltrosOpen(o => !o)}
+                    style={{
+                        display: 'flex', justifyContent: 'space-between', alignItems: 'center',
+                        padding: '8px 10px', cursor: 'pointer', userSelect: 'none',
+                        transition: 'background 0.15s',
+                    }}
+                    onMouseEnter={e => e.currentTarget.style.background = 'rgba(245,158,11,0.04)'}
+                    onMouseLeave={e => e.currentTarget.style.background = 'transparent'}
+                >
                     <div style={{ display: 'flex', alignItems: 'center', gap: 7 }}>
-                           <BrainCircuit size={14} color='#F59E0B' />
+                        <BrainCircuit size={14} color='#F59E0B' />
                         <span style={{ fontSize: 11, fontWeight: 900, color: '#fff', textTransform: 'uppercase', letterSpacing: '0.1em' }}>
                             Hub de Conversão
                         </span>
                         {conversas.length > 0 && (
                             <div style={{
-                            background: 'rgba(245,158,11,0.15)', border: '1px solid rgba(245,158,11,0.3)',
+                                background: 'rgba(245,158,11,0.15)', border: '1px solid rgba(245,158,11,0.3)',
                                 borderRadius: '999px', padding: '1px 7px',
-                           fontSize: 9, fontWeight: 900, color: '#FBBF24',
-}}>
+                                fontSize: 9, fontWeight: 900, color: '#FBBF24',
+                            }}>
                                 {conversasOrdenadas.length}{filtro !== 'todos' ? `/${conversas.length}` : ''}
                             </div>
                         )}
                     </div>
-                    <button
-                        onClick={fetchConversas}
-                        disabled={loading}
-                        style={{ background: 'none', border: 'none', cursor: 'pointer', color: 'rgba(255,255,255,0.3)', padding: 4 }}
-                        title="Atualizar"
-                    >
-                        <RefreshCw size={11} style={{ animation: loading ? 'spin 1s linear infinite' : 'none' }} />
-                    </button>
+                    <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
+                        <button
+                            onClick={e => { e.stopPropagation(); fetchConversas() }}
+                            disabled={loading}
+                            style={{ background: 'none', border: 'none', cursor: 'pointer', color: 'rgba(255,255,255,0.3)', padding: 4 }}
+                            title="Atualizar"
+                        >
+                            <RefreshCw size={11} style={{ animation: loading ? 'spin 1s linear infinite' : 'none' }} />
+                        </button>
+                        <ChevronDown
+                            size={13}
+                            color="rgba(255,255,255,0.25)"
+                            style={{ transform: isFiltrosOpen ? 'rotate(180deg)' : 'rotate(0deg)', transition: 'transform 0.2s' }}
+                        />
+                    </div>
                 </div>
 
-                {/* Campo de busca */}
-                <div style={{ position: 'relative', marginBottom: 8 }}>
-                    <Search size={11} style={{ position: 'absolute', left: 9, top: '50%', transform: 'translateY(-50%)', color: 'rgba(255,255,255,0.25)' }} />
-                    <input
-                        value={busca}
-                        onChange={e => setBusca(e.target.value)}
-                        placeholder="Buscar conversa..."
-                        style={{
-                            width: '100%', boxSizing: 'border-box',
-                            height: 28, paddingLeft: 26, paddingRight: 10,
-                            background: 'rgba(255,255,255,0.04)',
-                            border: '1px solid rgba(255,255,255,0.08)',
-                            borderRadius: '0.4rem',
-                            color: '#fff', fontSize: 10, fontWeight: 600,
-                            outline: 'none', fontFamily: 'inherit',
-                        }}
-                    />
-                </div>
-
-                {/* === FILTROS TIPO PÍLULA — grade compacta com contorno Neon === */}
-                <div style={{ display: 'grid', gridTemplateColumns: 'repeat(3, 1fr)', gap: 4, marginBottom: 6 }}>
-                    {FILTROS.map(f => {
-                        const count = contadores[f.key] ?? 0
-                        const isActive = filtro === f.key
-                        const neonColor = isActive ? f.color : 'rgba(245,158,11,0.18)'
-                        return (
-                            <button
-                                key={f.key}
-                                onClick={() => setFiltro(f.key)}
+                {/* Busca + Filtros — recolhíveis */}
+                {isFiltrosOpen && (
+                    <div style={{ padding: '0 10px 8px' }}>
+                        {/* Campo de busca */}
+                        <div style={{ position: 'relative', marginBottom: 8 }}>
+                            <Search size={11} style={{ position: 'absolute', left: 9, top: '50%', transform: 'translateY(-50%)', color: 'rgba(255,255,255,0.25)' }} />
+                            <input
+                                value={busca}
+                                onChange={e => setBusca(e.target.value)}
+                                placeholder="Buscar conversa..."
                                 style={{
-                                    display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 4,
-                                    background: isActive ? f.color + '1A' : 'rgba(255,255,255,0.02)',
-                                    border: `1px solid ${isActive ? f.color + '60' : 'rgba(245,158,11,0.12)'}`,
-                                    borderRadius: '8px', padding: '4px 7px',
-                                    cursor: 'pointer', transition: 'all .18s',
-                                    fontSize: 8, fontWeight: 900,
-                                    color: isActive ? f.color : 'rgba(255,255,255,0.35)',
-                                    textTransform: 'uppercase', letterSpacing: '0.07em',
-                                    boxShadow: isActive ? `0 0 6px ${f.color}22` : 'none',
-                                    whiteSpace: 'nowrap', overflow: 'hidden',
+                                    width: '100%', boxSizing: 'border-box',
+                                    height: 28, paddingLeft: 26, paddingRight: 10,
+                                    background: 'rgba(255,255,255,0.04)',
+                                    border: '1px solid rgba(255,255,255,0.08)',
+                                    borderRadius: '0.4rem',
+                                    color: '#fff', fontSize: 10, fontWeight: 600,
+                                    outline: 'none', fontFamily: 'inherit',
                                 }}
-                            >
-                                <span style={{ overflow: 'hidden', textOverflow: 'ellipsis' }}>{f.label}</span>
-                                {count > 0 && (
-                                    <span style={{
-                                        fontSize: 7, fontWeight: 900, flexShrink: 0,
-                                        background: isActive ? f.color + '25' : 'rgba(245,158,11,0.08)',
-                                        border: `1px solid ${isActive ? f.color + '40' : 'rgba(245,158,11,0.15)'}`,
-                                        color: isActive ? f.color : 'rgba(245,158,11,0.5)',
-                                        borderRadius: '999px', padding: '0 4px', lineHeight: '14px',
-                                    }}>
-                                        {count}
-                                    </span>
-                                )}
-                            </button>
-                        )
-                    })}
-                </div>
+                            />
+                        </div>
 
-               
+                        {/* Filtros tipo pílula */}
+                        <div style={{ display: 'grid', gridTemplateColumns: 'repeat(3, 1fr)', gap: 4 }}>
+                            {FILTROS.map(f => {
+                                const count = contadores[f.key] ?? 0
+                                const isActive = filtro === f.key
+                                return (
+                                    <button
+                                        key={f.key}
+                                        onClick={() => setFiltro(f.key)}
+                                        style={{
+                                            display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 4,
+                                            background: isActive ? f.color + '1A' : 'rgba(255,255,255,0.02)',
+                                            border: `1px solid ${isActive ? f.color + '60' : 'rgba(245,158,11,0.12)'}`,
+                                            borderRadius: '8px', padding: '4px 7px',
+                                            cursor: 'pointer', transition: 'all .18s',
+                                            fontSize: 8, fontWeight: 900,
+                                            color: isActive ? f.color : 'rgba(255,255,255,0.35)',
+                                            textTransform: 'uppercase', letterSpacing: '0.07em',
+                                            boxShadow: isActive ? `0 0 6px ${f.color}22` : 'none',
+                                            whiteSpace: 'nowrap', overflow: 'hidden',
+                                        }}
+                                    >
+                                        <span style={{ overflow: 'hidden', textOverflow: 'ellipsis' }}>{f.label}</span>
+                                        {count > 0 && (
+                                            <span style={{
+                                                fontSize: 7, fontWeight: 900, flexShrink: 0,
+                                                background: isActive ? f.color + '25' : 'rgba(245,158,11,0.08)',
+                                                border: `1px solid ${isActive ? f.color + '40' : 'rgba(245,158,11,0.15)'}`,
+                                                color: isActive ? f.color : 'rgba(245,158,11,0.5)',
+                                                borderRadius: '999px', padding: '0 4px', lineHeight: '14px',
+                                            }}>
+                                                {count}
+                                            </span>
+                                        )}
+                                    </button>
+                                )
+                            })}
+                        </div>
+                    </div>
+                )}
             </div>
 
             {/* ── Lista agrupada por chip ── */}

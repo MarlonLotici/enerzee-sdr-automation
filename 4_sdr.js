@@ -168,6 +168,7 @@ function calcularAncoraDinamica(lead) {
 const HORAS_DE_TRABALHO = 2; // X horas disparando
 const MINUTOS_DE_DESCANSO = 40; // X minutos parado em repouso
 const controleFadiga = new Map(); // Armazena o início do turno de cada chip
+const pausasIntradiarias = new Map(); // instanceId → { dataGerada, breaks: [{inicio,fim}] }
 
 // --- CONFIGURAÇÃO E SEGURANÇA ---
 const supabase = createClient(process.env.SUPABASE_URL, process.env.SUPABASE_KEY);
@@ -377,24 +378,50 @@ function getModoOperacional(instanceId = null) {
     const baseVazia = instanceId ? isBaseVazia(instanceId) : [...baseEstaVaziaMap.values()].some(v => v);
     if (baseVazia) {
         const t = agora.horas * 60 + agora.minutos;
-        if (t >= 480 && t <= 1080) return 'FOLLOWUP';
+        if (t >= 480 && t <= 1200) return 'FOLLOWUP';
         return 'DESCANSO';
     }
-    
-    // 📅 JANELAS PADRÃO (segunda a sexta) — 80% SAUDAÇÃO / 20% FOLLOW-UP
+
+    // 📅 JANELA DE ATAQUE (segunda a sexta) — 09:00 às 20:00, sem interrupções
+    // Follow-ups D1/D3 são gerenciados pelo worker de mensagens (BullMQ), não por esta janela.
     const t = agora.horas * 60 + agora.minutos;
-    
-    // Antes de 08:00 ou depois de 18:00 → DESCANSO
-    if (t < 480 || t > 1080) return 'DESCANSO';
-    
-    // 10:00-11:00 → FOLLOW-UP (janela 1)
-    if (t >= 600 && t < 660) return 'FOLLOWUP';
-    
-    // 17:00-18:00 → FOLLOW-UP (janela 2)
-    if (t >= 1020 && t <= 1080) return 'FOLLOWUP';
-    
-    // Resto do tempo → SAUDAÇÃO
+    if (t < 540 || t >= 1200) return 'DESCANSO'; // antes de 09:00 ou 20:00+
     return 'SAUDACAO';
+}
+
+// ============================================================================
+// ☕ PAUSAS INTRADIÁRIAS — janelas de descanso humano, aleatórias por chip
+// Simula comportamento de SDR real: café manhã, almoço, café tarde.
+// Cada chip recebe um schedule independente renovado a cada dia em BRT.
+// ============================================================================
+function gerarPausasDoDia(instanceId) {
+    const hoje = new Date(Date.now() - 3 * 60 * 60 * 1000).toISOString().split('T')[0];
+    const cached = pausasIntradiarias.get(instanceId);
+    if (cached?.dataGerada === hoje) return cached.breaks;
+
+    const r = (min, max) => Math.floor(Math.random() * (max - min + 1)) + min;
+    const fmt = t => `${Math.floor(t / 60)}h${String(t % 60).padStart(2, '0')}`;
+
+    // Três janelas fixas de comportamento humano, com offsets aleatórios por chip:
+    // janela 1 — café manhã: 09:30–10:30, dura 8–18 min
+    // janela 2 — almoço:     11:45–13:30, dura 22–42 min
+    // janela 3 — café tarde: 15:00–16:30, dura 8–20 min
+    const breaks = [
+        { inicio: r(570, 630), duracao: r(8, 18)  },
+        { inicio: r(705, 810), duracao: r(22, 42) },
+        { inicio: r(900, 990), duracao: r(8, 20)  },
+    ].map(b => ({ inicio: b.inicio, fim: Math.min(b.inicio + b.duracao, 1199) }));
+
+    pausasIntradiarias.set(instanceId, { dataGerada: hoje, breaks });
+    console.log(`📅 [MICRO-PAUSAS] ${instanceId.slice(0, 8)} — schedule: ${breaks.map(b => `${fmt(b.inicio)}-${fmt(b.fim)}`).join(' | ')}`);
+    return breaks;
+}
+
+function verificarPausaIntradiaria(instanceId) {
+    const breaks = gerarPausasDoDia(instanceId);
+    const { horas, minutos } = getHoraBrasil();
+    const t = horas * 60 + minutos;
+    return breaks.find(b => t >= b.inicio && t < b.fim) || null;
 }
 
 async function salvarDecisor(numeroRaw, leadOrigem, instanceId) {
@@ -2278,6 +2305,18 @@ async function processarFilaDeAtaque(instanceId) {
                     agente: instanceData.agent_name || "Agente",
                     empresa: instanceData.company_name || "nossa empresa"
                 };
+
+                // ☕ MICRO-PAUSA INTRADIÁRIA — janela de descanso deste chip
+                const pausaAtiva = verificarPausaIntradiaria(instanceId);
+                if (pausaAtiva) {
+                    const { horas: hP, minutos: mP } = getHoraBrasil();
+                    const tAtual = hP * 60 + mP;
+                    const msRestantes = Math.min((pausaAtiva.fim - tAtual) * 60000 + 30000, 60 * 60000);
+                    const fimFmt = `${Math.floor(pausaAtiva.fim / 60)}h${String(pausaAtiva.fim % 60).padStart(2, '0')}`;
+                    console.log(`☕ [MICRO-PAUSA] ${config.nome} descansando até ${fimFmt} (${Math.round(msRestantes / 60000)}min). Anti-ban ativo.`);
+                    await delay(msRestantes);
+                    continue;
+                }
 
                // ⚡ RESERVA ATÔMICA: SELECT + UPDATE em uma única operação
 // Previne que dois chips peguem o mesmo lead ao mesmo tempo

@@ -213,7 +213,8 @@ const [botLogs, setBotLogs] = useState([]);
     const [showSettings, setShowSettings] = useState(false);
     const [settingsForm, setSettingsForm] = useState({ calendly_link: '', default_agent_name: '', default_company_name: '', default_daily_limit: '', opening_a: '', opening_b: '', opening_c: '' });
     const [savingSettings, setSavingSettings] = useState(false);
-    const [copiedVar, setCopiedVar] = useState(null);
+    const [copiedVar, setCopiedVar] = useState(null)
+    const [isAtencaoOpen, setIsAtencaoOpen] = useState(false);
     const [notesContent, setNotesContent] = useState(() => localStorage.getItem('radar_notes') ?? '');
     const [showExportMenu, setShowExportMenu] = useState(false);
 
@@ -1337,33 +1338,39 @@ return (
         const handoffLeads = leads.filter(l => (l.is_paused || l.manual_pause) && l.status !== 'closed' && l.status !== 'invalid').slice(0, 4);
         if (handoffLeads.length === 0) return null;
         return (
-            <div className="shrink-0 max-h-48 flex flex-col border-b border-amber-500/10 bg-amber-950/10">
-                <div className="px-3 pt-2.5 pb-1 flex items-center gap-2 shrink-0">
+            <div className="shrink-0 flex flex-col border-b border-amber-500/10 bg-amber-950/10">
+                <div
+                    onClick={() => setIsAtencaoOpen(o => !o)}
+                    className="px-3 pt-2.5 pb-2 flex items-center gap-2 shrink-0 cursor-pointer hover:bg-amber-500/5 transition-colors select-none"
+                >
                     <AlertTriangle className="h-2.5 w-2.5 text-amber-500 shrink-0" />
                     <span className="text-[8px] font-black text-amber-500/80 uppercase tracking-widest">Atenção Humana</span>
                     <span className="ml-auto text-[7px] font-black bg-amber-500/15 border border-amber-500/25 text-amber-400 rounded-full px-1.5 py-0.5">
                         {handoffLeads.length}
                     </span>
+                    <ChevronDown className={`h-3 w-3 text-amber-500/50 transition-transform duration-200 ${isAtencaoOpen ? 'rotate-180' : ''}`} />
                 </div>
-                <div className="px-2 pb-2 space-y-1 overflow-y-auto">
-                    {handoffLeads.map(l => (
-                        <div
-                            key={l.id}
-                            onClick={() => setActiveChat(l)}
-                            className="handoff-pulse rounded-lg border border-amber-500/20 bg-amber-900/10 px-2.5 py-2 cursor-pointer hover:border-amber-500/40 hover:bg-amber-900/20 transition-all"
-                        >
-                            <div className="flex items-center justify-between gap-2 mb-0.5">
-                                <span className="text-[10px] font-black text-white truncate">{l.name}</span>
-                                {l.bairro && <span className="text-[8px] text-amber-400/60 font-bold shrink-0">{l.bairro}</span>}
+                {isAtencaoOpen && (
+                    <div className="px-2 pb-2 space-y-1 overflow-y-auto max-h-44">
+                        {handoffLeads.map(l => (
+                            <div
+                                key={l.id}
+                                onClick={() => setActiveChat(l)}
+                                className="handoff-pulse rounded-lg border border-amber-500/20 bg-amber-900/10 px-2.5 py-2 cursor-pointer hover:border-amber-500/40 hover:bg-amber-900/20 transition-all"
+                            >
+                                <div className="flex items-center justify-between gap-2 mb-0.5">
+                                    <span className="text-[10px] font-black text-white truncate">{l.name}</span>
+                                    {l.bairro && <span className="text-[8px] text-amber-400/60 font-bold shrink-0">{l.bairro}</span>}
+                                </div>
+                                {l.internal_notes && (
+                                    <p className="text-[8px] text-amber-200/50 leading-snug line-clamp-2">
+                                        {l.internal_notes}
+                                    </p>
+                                )}
                             </div>
-                            {l.internal_notes && (
-                                <p className="text-[8px] text-amber-200/50 leading-snug line-clamp-2">
-                                    {l.internal_notes}
-                                </p>
-                            )}
-                        </div>
-                    ))}
-                </div>
+                        ))}
+                    </div>
+                )}
             </div>
         );
     })()}

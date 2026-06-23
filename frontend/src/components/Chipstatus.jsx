@@ -51,7 +51,7 @@ function ChipCard({ instance, dailyCount, statusInfo, onReconnect, qrCode, onLim
         setSaving(false)
     }
 
-    const limit    = localLimit
+    const limit    = Math.max(localLimit || 1, 1)
     const pct      = Math.min(Math.round(dailyCount / limit * 100), 100)
     const isMaxed  = pct >= 100
 
