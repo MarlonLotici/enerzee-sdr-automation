@@ -221,17 +221,20 @@ function getHumanCooldown(isWarmup = false) {
 }
 
 // Curva de aquecimento diária. Começa em 2/dia e escala ao longo de 3 semanas.
-// Substitui o binário "< 7 dias → 10" que ainda era agressivo nos primeiros dias.
+// Override manual: se daily_limit estiver definido no banco (não null), usa direto sem curva.
+// Útil para chips que foram reconectados depois de já estarem mornos.
 function calcularLimiteDiario(instanceData) {
-    const cap = Math.min(instanceData?.daily_limit || 30, 30);
-    if (!instanceData?.created_at) return cap;
+    if (instanceData?.daily_limit != null) {
+        return instanceData.daily_limit; // controle manual via painel
+    }
+    if (!instanceData?.created_at) return 30;
     const idadeDias = Math.floor((Date.now() - new Date(instanceData.created_at).getTime()) / 86400000);
     if (idadeDias <= 1)  return 2;    // dia 1: 2 mensagens
     if (idadeDias <= 3)  return 5;    // dias 2-3: 5
     if (idadeDias <= 5)  return 8;    // dias 4-5: 8
     if (idadeDias <= 7)  return 12;   // dias 6-7: 12
     if (idadeDias <= 14) return 20;   // semana 2: 20
-    return cap;                        // semana 3+: configurado no painel (max 30)
+    return 30;                         // semana 3+: padrão 30
 }
 
 // Chip com menos de 7 dias de vida é tratado como novo: limite reduzido para aquecimento gradual.

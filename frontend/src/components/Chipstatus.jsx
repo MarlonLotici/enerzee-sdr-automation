@@ -1,7 +1,7 @@
 import React, { useState, useEffect, useCallback } from 'react'
 import { supabase } from '@/lib/supabase'
 import { QRCodeSVG } from 'qrcode.react'
-import { Cpu, Wifi, WifiOff, Loader2, RefreshCw, Zap, User, Building2, Target, Clock, RotateCcw, X } from 'lucide-react'
+import { Cpu, Wifi, WifiOff, Loader2, RefreshCw, Zap, User, Building2, Target, Clock, RotateCcw, X, Pencil, Check } from 'lucide-react'
 
 // ─── PALETA ───────────────────────────────────────────────────────────────────
 const C = {
@@ -36,8 +36,22 @@ function timeAgo(isoStr) {
 }
 
 // ─── CHIP CARD ────────────────────────────────────────────────────────────────
-function ChipCard({ instance, dailyCount, statusInfo, onReconnect, qrCode }) {
-    const limit    = instance.daily_limit || 55
+function ChipCard({ instance, dailyCount, statusInfo, onReconnect, qrCode, onLimitChange }) {
+    const [editingLimit, setEditingLimit] = useState(false)
+    const [localLimit,   setLocalLimit]   = useState(instance.daily_limit ?? 30)
+    const [saving,       setSaving]       = useState(false)
+
+    useEffect(() => { setLocalLimit(instance.daily_limit ?? 30) }, [instance.daily_limit])
+
+    const saveLimit = async () => {
+        setEditingLimit(false)
+        if (localLimit === (instance.daily_limit ?? 30)) return
+        setSaving(true)
+        await onLimitChange?.(instance.id, localLimit)
+        setSaving(false)
+    }
+
+    const limit    = localLimit
     const pct      = Math.min(Math.round(dailyCount / limit * 100), 100)
     const isMaxed  = pct >= 100
 
@@ -183,9 +197,36 @@ function ChipCard({ instance, dailyCount, statusInfo, onReconnect, qrCode }) {
                         <span style={{ fontSize: 16, fontWeight: 900, color: isMaxed ? C.disconnected : '#fff', lineHeight: 1 }}>
                             {dailyCount}
                         </span>
-                        <span style={{ fontSize: 9, color: 'rgba(255,255,255,0.3)', fontWeight: 700 }}>
-                            / {limit}
-                        </span>
+                        <span style={{ fontSize: 9, color: 'rgba(255,255,255,0.3)', fontWeight: 700 }}>/</span>
+                        {editingLimit ? (
+                            <div style={{ display: 'flex', alignItems: 'center', gap: 3 }}>
+                                <input
+                                    type="number"
+                                    min={1}
+                                    max={200}
+                                    value={localLimit}
+                                    onChange={e => setLocalLimit(Number(e.target.value))}
+                                    onBlur={saveLimit}
+                                    onKeyDown={e => e.key === 'Enter' && saveLimit()}
+                                    autoFocus
+                                    style={{
+                                        width: 42, background: 'rgba(255,255,255,0.08)',
+                                        border: `1px solid ${C.brand}60`, borderRadius: 4,
+                                        color: '#fff', fontSize: 11, fontWeight: 700,
+                                        textAlign: 'center', padding: '1px 4px', outline: 'none',
+                                    }}
+                                />
+                                <Check size={10} color={C.brand} style={{ cursor: 'pointer' }} onClick={saveLimit} />
+                            </div>
+                        ) : (
+                            <span
+                                onClick={() => setEditingLimit(true)}
+                                title="Clique para editar o limite diário"
+                                style={{ fontSize: 9, color: saving ? C.brand : 'rgba(255,255,255,0.3)', fontWeight: 700, cursor: 'pointer', display: 'flex', alignItems: 'center', gap: 3 }}
+                            >
+                                {limit} <Pencil size={8} color="rgba(255,255,255,0.25)" />
+                            </span>
+                        )}
                         <span style={{ fontSize: 9, color: barColor, fontWeight: 900, marginLeft: 4 }}>
                             {pct}%
                         </span>
@@ -323,10 +364,14 @@ export default function ChipStatus({ instances = [], socket }) {
         }, 30000)
     }, [socket])
 
+    const handleLimitChange = useCallback(async (instanceId, newLimit) => {
+        await supabase.from('instances').update({ daily_limit: newLimit }).eq('id', instanceId)
+    }, [])
+
     // ── Sumários globais ──────────────────────────────────────────────────────
     const totalConectados = instances.filter(i => i.whatsapp_status === 'CONNECTED').length
     const totalDisparos   = Object.values(dailyCounts).reduce((s, v) => s + v, 0)
-    const totalLimite     = instances.reduce((s, i) => s + (i.daily_limit || 55), 0)
+    const totalLimite     = instances.reduce((s, i) => s + (i.daily_limit ?? 30), 0)
 
     return (
         <div style={{ fontFamily: "'DM Sans', system-ui, sans-serif", color: '#fff' }}>
@@ -399,6 +444,7 @@ export default function ChipStatus({ instances = [], socket }) {
                             dailyCount={dailyCounts[inst.id] ?? 0}
                             statusInfo={resolveStatus(inst, connectingSet)}
                             onReconnect={handleReconnect}
+                            onLimitChange={handleLimitChange}
                             qrCode={qrMap[inst.id] || null}
                         />
                     ))}
