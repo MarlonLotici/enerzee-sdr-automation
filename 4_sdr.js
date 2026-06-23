@@ -2307,7 +2307,7 @@ async function processarFilaDeAtaque(instanceId) {
             
             if (isBaseVazia(instanceId)) {
                 setBaseVazia(instanceId, false);
-                console.log(`✨ [FALLBACK] Base voltou a ter leads para ${config.nome}. Modo SAUDAÇÃO retomado.`);
+                console.log(`✨ [FALLBACK] Base voltou a ter leads para ${instanceId.slice(0,8)}. Modo SAUDAÇÃO retomado.`);
             }
             
             // --- 🛡️ TRAVA DE FADIGA (TURNO DE TRABALHO) ---
@@ -2599,7 +2599,7 @@ if (lead.opening_template && lead.opening_template.length > 15 && lead.opening_t
     }
 }
 
-const mensagensSplit = [textoFinal];
+const mensagensSplit = textoFinal.split('[QUEBRA]').map(t => t.trim()).filter(t => t.length > 0);
 
                 // 9. FATIADOR HUMANO E ENVIO (Com interrupção intacta!)
                 
