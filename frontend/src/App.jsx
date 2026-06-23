@@ -214,7 +214,9 @@ const [botLogs, setBotLogs] = useState([]);
     const [settingsForm, setSettingsForm] = useState({ calendly_link: '', default_agent_name: '', default_company_name: '', default_daily_limit: '', opening_a: '', opening_b: '', opening_c: '' });
     const [savingSettings, setSavingSettings] = useState(false);
     const [copiedVar, setCopiedVar] = useState(null)
-    const [isAtencaoOpen, setIsAtencaoOpen] = useState(false);
+    const [isAtencaoOpen, setIsAtencaoOpen] = useState(false)
+    const [showFollowUpPicker, setShowFollowUpPicker] = useState(false)
+    const [followUpDateTime, setFollowUpDateTime] = useState('');
     const [notesContent, setNotesContent] = useState(() => localStorage.getItem('radar_notes') ?? '');
     const [showExportMenu, setShowExportMenu] = useState(false);
 
@@ -620,8 +622,8 @@ if (session?.user?.id) checkBriefing()
         if (!text || !activeChat) return;
         setMessageInput('');
 
-        await supabase.from('leads').update({ is_paused: true }).eq('id', activeChat.id);
-        setActiveChat(prev => ({ ...prev, is_paused: true }));
+        await supabase.from('leads').update({ is_paused: true, manual_pause: true }).eq('id', activeChat.id);
+        setActiveChat(prev => ({ ...prev, is_paused: true, manual_pause: true }));
 
         try {
             const { data: { session: s } } = await supabase.auth.getSession();
@@ -642,6 +644,22 @@ if (session?.user?.id) checkBriefing()
             alert(`Erro de rede: ${e.message}`);
         }
     };
+
+    const handleAgendarFollowUp = async () => {
+        if (!followUpDateTime || !activeChat) return
+        const isoDate = new Date(followUpDateTime).toISOString()
+        const { error } = await supabase.from('leads').update({
+            is_paused:    true,
+            manual_pause: true,
+            follow_up_at: isoDate,
+            internal_notes: `Follow-up agendado para ${new Date(followUpDateTime).toLocaleString('pt-BR')} via painel`
+        }).eq('id', activeChat.id)
+        if (!error) {
+            setActiveChat(prev => ({ ...prev, is_paused: true, manual_pause: true, follow_up_at: isoDate }))
+            setShowFollowUpPicker(false)
+            setFollowUpDateTime('')
+        }
+    }
 
     // Toggle manual de pausa da IA
     const handleTogglePause = async () => {
@@ -1498,14 +1516,50 @@ return (
 
                     {/* Input */}
                     <div className="shrink-0 px-3 py-2.5 bg-[#0d0d0f]/90 border-t border-white/5 flex items-center gap-2">
-                        {/* Ação futura: Follow-up agendado */}
-                        <button
-                            title="Agendar Follow-up (em breve)"
-                            className="shrink-0 h-9 w-9 rounded-lg bg-white/[0.03] border border-white/8 flex items-center justify-center hover:border-amber-500/30 hover:bg-amber-900/15 transition-all"
-                            onClick={() => {/* TODO: abrir picker de follow-up */}}
-                        >
-                            <Calendar className="h-3.5 w-3.5 text-slate-500 hover:text-amber-400" />
-                        </button>
+                        {/* Botão agendar follow-up */}
+                        <div className="relative shrink-0">
+                            <button
+                                title="Agendar Follow-up"
+                                onClick={() => { setShowFollowUpPicker(o => !o); setFollowUpDateTime('') }}
+                                className={`h-9 w-9 rounded-lg border flex items-center justify-center transition-all ${showFollowUpPicker ? 'bg-amber-600/25 border-amber-500/50' : 'bg-white/[0.03] border-white/8 hover:border-amber-500/30 hover:bg-amber-900/15'}`}
+                            >
+                                <Calendar className={`h-3.5 w-3.5 ${showFollowUpPicker ? 'text-amber-400' : 'text-slate-500'}`} />
+                            </button>
+                            {showFollowUpPicker && (
+                                <div className="absolute bottom-full left-0 mb-2 z-50 bg-[#0f0f13] border border-white/10 rounded-xl p-3 shadow-2xl" style={{ minWidth: 240 }}>
+                                    <p className="text-[8px] font-black text-amber-500/80 uppercase tracking-widest mb-2">Agendar Follow-up</p>
+                                    <input
+                                        type="datetime-local"
+                                        value={followUpDateTime}
+                                        onChange={e => setFollowUpDateTime(e.target.value)}
+                                        min={new Date().toISOString().slice(0, 16)}
+                                        style={{
+                                            width: '100%', boxSizing: 'border-box',
+                                            background: 'rgba(255,255,255,0.04)',
+                                            border: '1px solid rgba(255,255,255,0.1)',
+                                            borderRadius: '0.5rem',
+                                            color: '#fff', fontSize: 11, padding: '6px 8px',
+                                            outline: 'none', colorScheme: 'dark',
+                                        }}
+                                    />
+                                    <div className="flex gap-2 mt-2">
+                                        <button
+                                            onClick={handleAgendarFollowUp}
+                                            disabled={!followUpDateTime}
+                                            className="flex-1 py-1.5 rounded-lg bg-amber-600 hover:bg-amber-500 text-[10px] font-black text-white disabled:opacity-40 transition-all"
+                                        >
+                                            Confirmar
+                                        </button>
+                                        <button
+                                            onClick={() => setShowFollowUpPicker(false)}
+                                            className="px-3 py-1.5 rounded-lg bg-white/5 hover:bg-white/10 text-[10px] text-slate-400 transition-all"
+                                        >
+                                            ✕
+                                        </button>
+                                    </div>
+                                </div>
+                            )}
+                        </div>
                         <Input
                             className="flex-1 h-9 rounded-lg bg-black/30 border-white/8 text-[11px] text-slate-200 placeholder:text-slate-600"
                             placeholder="Intervenção humana — digite e pressione Enter..."

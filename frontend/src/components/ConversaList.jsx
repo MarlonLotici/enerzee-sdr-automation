@@ -250,15 +250,27 @@ function ConversaCard({ lead, ultimaMsg, isActive, onClick, onUpdate }) {
                 })()}
             </div>
 
-            {/* Indicador de não-lida: última msg é do lead e IA ainda não respondeu */}
+            {/* Badge AGUARDANDO AÇÃO — sempre visível, não some no hover */}
 {isUser && !lead.is_paused && !lead.manual_pause && (
     <div style={{
-        position: 'absolute', top: 10, right: 10,
-        width: 8, height: 8, borderRadius: '50%',
-        background: '#10B981',
-        boxShadow: '0 0 8px #10B981',
-        animation: 'pulse 1.5s infinite',
-    }} className="quick-action-indicator" />
+        position: 'absolute', top: 8, right: 8,
+        display: 'flex', alignItems: 'center', gap: 3,
+        background: 'rgba(16,185,129,0.15)',
+        border: '1px solid rgba(16,185,129,0.35)',
+        borderRadius: '999px', padding: '2px 6px',
+        pointerEvents: 'none',
+    }}>
+        <div style={{
+            width: 5, height: 5, borderRadius: '50%',
+            background: '#10B981',
+            boxShadow: '0 0 6px #10B981',
+            animation: 'pulse 1.5s infinite',
+            flexShrink: 0,
+        }} />
+        <span style={{ fontSize: 7, fontWeight: 900, color: '#10B981', textTransform: 'uppercase', letterSpacing: '0.1em' }}>
+            Aguardando
+        </span>
+    </div>
 )}
 
 {/* 🎯 Quick Actions — aparecem no hover */}
@@ -466,14 +478,14 @@ function calcularPrioridade({ lead, ultimaMsg }) {
 const conversasOrdenadas = [...conversasFiltradas].sort((a, b) => {
     const prioA = calcularPrioridade(a)
     const prioB = calcularPrioridade(b)
-    
-    // Se prioridade igual, desempata pelo last_contact_at mais recente
+
+    // Tiebreaker por timestamp real da última mensagem (movimentação mais recente primeiro)
     if (prioA === prioB) {
-        const tA = new Date(a.lead.last_contact_at || 0).getTime()
-        const tB = new Date(b.lead.last_contact_at || 0).getTime()
+        const tA = new Date(a.ultimaMsg?.created_at || a.lead.last_contact_at || 0).getTime()
+        const tB = new Date(b.ultimaMsg?.created_at || b.lead.last_contact_at || 0).getTime()
         return tB - tA
     }
-    
+
     return prioA - prioB
 })
 

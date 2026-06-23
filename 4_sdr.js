@@ -343,6 +343,21 @@ function liberarSemaforoChip(chipId, isWarmup = false) {
     });
 }
 
+/**
+ * 🚦 Libera o semáforo SEM reiniciar o cooldown.
+ * Usado quando o envio falhou por número inexistente — nenhuma mensagem foi entregue,
+ * então o timer do último disparo real deve ser preservado.
+ */
+function liberarSemaforoSemCooldown(chipId) {
+    const estado = semaforoChips.get(chipId);
+    semaforoChips.set(chipId, {
+        ocupado: false,
+        ultimoDisparo: estado?.ultimoDisparo ?? 0,
+        cooldownMs:    estado?.cooldownMs    ?? 0,
+        prioridadeAtual: null,
+    });
+}
+
 // ============================================================================
 // 🎚️ MODO OPERACIONAL DINÂMICO — 80% SAUDAÇÃO / 20% FOLLOW-UP
 // ============================================================================
@@ -1526,6 +1541,30 @@ async function enviarAudioTTS(sock, remoteJid, texto, lead, instanceId, voz = nu
 }
 
 
+// Converte texto de data em português para ISO 8601 (BRT) via Groq rápido.
+// Retorna string ISO ou null em caso de falha.
+async function extrairDataISO(textoData) {
+    try {
+        const agora = new Date(Date.now() - 3 * 60 * 60 * 1000); // BRT
+        const hoje  = agora.toISOString().split('T')[0];
+        const res   = await groq.chat.completions.create({
+            model:       'llama-3.1-8b-instant',
+            temperature: 0,
+            max_tokens:  25,
+            messages: [{
+                role:    'system',
+                content: `Converta a expressão de data/hora "${textoData}" para ISO 8601 no fuso UTC-3 (BRT). Hoje é ${hoje}. Responda APENAS com a string ISO (ex: 2026-06-24T15:00:00-03:00), sem nenhum texto adicional.`
+            }]
+        });
+        const iso = res.choices[0]?.message?.content?.trim();
+        if (!iso) return null;
+        const d = new Date(iso);
+        return isNaN(d.getTime()) ? null : d.toISOString();
+    } catch {
+        return null;
+    }
+}
+
 // ============================================================================
 // 🧠 NÚCLEO UNIFICADO DE RESPOSTA — elimina duplicação entre processarMensagem
 // e processarMensagemManual. Toda lógica de áudio e envio vive aqui.
@@ -1551,7 +1590,17 @@ async function filtrarEEnviarResposta(sock, remoteJid, resposta, historico, lead
                 }).eq('id', lead.id);
                 console.log(`⏳ [FOLLOW-UP] Lead ${lead.name} pausado até ${followUpAt.toLocaleString('pt-BR')}.`);
             } else {
-                console.warn(`⚠️ [FOLLOW-UP] Data inválida na tag: "${_matchFollowUp[1]}". Tag será removida sem salvar.`);
+                // Data em português natural ("amanhã às 15h") — converter via Groq
+                const isoResolvida = await extrairDataISO(_matchFollowUp[1].trim());
+                if (isoResolvida) {
+                    await supabase.from('leads').update({
+                        is_paused:    true,
+                        follow_up_at: isoResolvida,
+                    }).eq('id', lead.id);
+                    console.log(`⏳ [FOLLOW-UP] Lead ${lead.name} pausado (data natural) até ${new Date(isoResolvida).toLocaleString('pt-BR')}.`);
+                } else {
+                    console.warn(`⚠️ [FOLLOW-UP] Não foi possível interpretar a data: "${_matchFollowUp[1]}". Tag removida sem salvar.`);
+                }
             }
         } catch (errFU) {
             console.error(`❌ [FOLLOW-UP] Erro ao salvar follow-up para ${lead?.name}:`, errFU.message);
@@ -2587,7 +2636,8 @@ const mensagensSplit = [textoFinal];
                 falhasConsecutivas = 0;
 
             } catch (errInner) {
-                // 🚫 ANTI-BAN: Número inexistente no WA — descarta lead sem penalizar o chip
+                // 🚫 ANTI-BAN: Número inexistente no WA — descarta lead SEM penalizar o chip
+                // Nenhuma mensagem foi entregue → não reinicia cooldown, não conta no limite diário
                 if (isNumeroInexistente(errInner)) {
                     if (currentLead) {
                         if (!currentLead.backup_tried && currentLead.backup_whatsapp_id) {
@@ -2599,23 +2649,23 @@ const mensagensSplit = [textoFinal];
                                 status: 'new',
                             }).eq('id', currentLead.id);
                         } else {
-                            console.log(`🚫 [ANTI-BAN FILTRO] Número inválido detectado no envio: ${currentLead.phone || currentLead.whatsapp_id}. Descartando...`);
+                            console.log(`🚫 [INVÁLIDO] ${currentLead.name} (${currentLead.phone || currentLead.whatsapp_id}) sem WhatsApp. Descartando sem cooldown.`);
                             await supabase.from('leads').update({ status: 'invalid_number' }).eq('id', currentLead.id);
                         }
                         leadsEmProcessamento.delete(currentLead.id);
-                        liberarSemaforoChip(instanceId, chipNovo);
+                        liberarSemaforoSemCooldown(instanceId); // ⚡ sem penalidade de tempo
                     }
-                    continue; // Passa pro próximo lead imediatamente — chip não é penalizado
+                    continue; // próximo lead imediatamente
                 }
 
-                // 🔇 FALHA SILENCIOSA: Baileys resolveu sem key.id (número fantasma, socket degradado)
-                // Não recoloca em 'new' para evitar loop eterno — descarta como invalid_number
+                // 🔇 FALHA SILENCIOSA: Baileys sem key.id (número fantasma, socket degradado)
+                // Não recoloca em 'new' para evitar loop eterno — descarta sem penalizar cooldown
                 if (errInner.message?.includes('FALHA_SILENCIOSA')) {
-                    console.warn(`⚠️ [SDR] Ocultando falso positivo no disparo. Marcado como invalido.`);
+                    console.warn(`⚠️ [FALHA SILENCIOSA] ${currentLead?.name} — sem confirmação de entrega. Descartando sem cooldown.`);
                     if (currentLead) {
                         await supabase.from('leads').update({ status: 'invalid_number' }).eq('id', currentLead.id);
                         leadsEmProcessamento.delete(currentLead.id);
-                        liberarSemaforoChip(instanceId, chipNovo);
+                        liberarSemaforoSemCooldown(instanceId); // ⚡ sem penalidade de tempo
                     }
                     continue;
                 }
@@ -3377,15 +3427,28 @@ if (!promptResolvido) {
         calendlyLink: instanceData?.calendly_link,
         instanceType: instanceData?.product_type || 'solar'
     });
-    // A extração de [FOLLOW_UP] e a pausa do lead são feitas em filtrarEEnviarResposta (etapa 0).
-    // Fallback: se o closer não gerou a tag, pausa preventivamente para não reenviar.
+    // [FOLLOW_UP] já é extraído e salvo em filtrarEEnviarResposta (etapa 0).
+    // Fallback: se o closer esqueceu a tag, tenta extrair a data da última mensagem do lead.
     if (resposta && !resposta.match(/\[FOLLOW_UP:/i)) {
-        await supabase.from('leads').update({
-            is_paused:      true,
-            internal_notes: `Lead pediu retorno posterior. Pausado em ${new Date().toLocaleString('pt-BR')}.`
-        }).eq('id', lead.id);
-        console.log(`⏸️ [AGENDA_RETORNO] Sem tag FOLLOW_UP. Lead ${lead.name} pausado preventivamente.`);
-        emitirEventoHandoff(lead, 'Lead pediu retorno posterior — sem data extraída automaticamente', historico).catch(() => {});
+        const ultimaMsgUser = [...historico].reverse().find(m => m.role === 'user');
+        const isoExtraida   = ultimaMsgUser
+            ? await extrairDataISO(ultimaMsgUser.content).catch(() => null)
+            : null;
+        if (isoExtraida) {
+            await supabase.from('leads').update({
+                is_paused:      true,
+                follow_up_at:   isoExtraida,
+                internal_notes: `Follow-up extraído da msg do lead em ${new Date().toLocaleString('pt-BR')}.`
+            }).eq('id', lead.id);
+            console.log(`⏳ [AGENDA_RETORNO] Data extraída da mensagem: ${new Date(isoExtraida).toLocaleString('pt-BR')} → lead ${lead.name} pausado.`);
+        } else {
+            await supabase.from('leads').update({
+                is_paused:      true,
+                internal_notes: `Lead pediu retorno posterior. Pausado em ${new Date().toLocaleString('pt-BR')}.`
+            }).eq('id', lead.id);
+            console.log(`⏸️ [AGENDA_RETORNO] Sem data identificável. Lead ${lead.name} pausado preventivamente.`);
+            emitirEventoHandoff(lead, 'Lead pediu retorno posterior — sem data extraída automaticamente', historico).catch(() => {});
+        }
     }
 
 } else if (intencao === 'COMPRA') {
@@ -3779,9 +3842,10 @@ module.exports = {
                 // 4. Salva a mensagem no banco de dados para o histórico do front-end
                 await db.saveMessage(whatsappId, 'assistant', texto, instanceId);
 
-                // 5. PAUSA A IA (Intervenção Humana): Dá o tempo de 10 minutos para você falar
+                // 5. PAUSA A IA (Intervenção Humana): pausa manual — robô não volta sem /ativar
                 await supabase.from('leads').update({
                     is_paused: true,
+                    manual_pause: true,
                     last_human_interaction: new Date().toISOString(),
                     internal_notes: `Intervenção humana via Dashboard em ${new Date().toLocaleString('pt-BR')}`
                 }).eq('whatsapp_id', whatsappId);
