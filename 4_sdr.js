@@ -2719,15 +2719,20 @@ const mensagensSplit = textoFinal.split('[QUEBRA]').map(t => t.trim()).filter(t 
                     if (!sentMsg?.key?.id) {
                         throw new Error(`FALHA_SILENCIOSA: Envio sem confirmacao de key.id para ${cleanJid}`);
                     }
+                    // Marca 'contact' logo após confirmação do último chunk — fecha janela de race condition
+                    // onde um erro em saveMessage causaria devolution do lead já contatado
+                    if (i === mensagensSplit.length - 1) {
+                        await supabase.from('leads').update({ status: 'contact', last_contact_at: new Date().toISOString(), opening_template: textoFinal }).eq('id', lead.id);
+                    }
                     await db.saveMessage(cleanJid, 'assistant', trecho, instanceId);
 
                     if (i < mensagensSplit.length - 1) {
                         await instancia.sock.sendPresenceUpdate('paused', cleanJid);
-                        await delay(Math.random() * 2000 + 2500); 
+                        await delay(Math.random() * 2000 + 2500);
                     }
                 }
 
-                // 10. CONCLUSÃO E SUCESSO
+                // 10. CONCLUSÃO E SUCESSO (cobre caso de break antecipado — lead respondeu antes do último chunk)
                 await supabase.from('leads').update({ status: 'contact', last_contact_at: new Date().toISOString(), opening_template: textoFinal }).eq('id', lead.id);
                 console.log(`✅ [SUCESSO REAL] Entregue por ${config.nome} para ${lead.name}!`);
                 leadsEmProcessamento.delete(lead.id);
@@ -4094,8 +4099,10 @@ module.exports = {
         sessions.delete(instanceId);
         cacheRegrasInstancia.delete(instanceId);
 
-        // 3. Limpa credenciais do Redis — garante que Baileys gera novo QR em vez de reconectar silenciosamente
+        // 3. Limpa credenciais do Redis E Supabase — sessão completamente zerada garante QR novo e sessão WA válida
         await clearRedisSession(redisConnection, instanceId);
+        await supabase.from('whatsapp_sessions').delete().eq('id', instanceId);
+        await supabase.from('whatsapp_keys').delete().eq('instance_id', instanceId);
         await db.updateInstanceStatus(instanceId, 'DISCONNECTED');
 
         // 4. Aguarda handlers de close processarem antes de iniciar novo socket
