@@ -1220,6 +1220,16 @@ async function startInstance(instanceId, instanceName, preloadedUserId = null) {
     // Safety net: qualquer exceção antes do socket subir limpa o lock para permitir retry
     const _cleanupLock = (err) => { instanciasLigando.delete(instanceId); throw err; };
 
+    // Encerra socket anterior se existir (evita dois sockets concorrentes no mesmo chip).
+    // Usa instanciasEncerrandoManualmente para silenciar o handler de close e impedir
+    // que o socket antigo sobrescreva as sessions com ready:false quando fechar.
+    const sessaoExistente = sessions.get(instanceId);
+    if (sessaoExistente?.sock) {
+        instanciasEncerrandoManualmente.add(instanceId);
+        try { sessaoExistente.sock.end(); } catch (_) {}
+        sessions.delete(instanceId);
+    }
+
     console.log(`[MANAGER] 🚀 Ligando SDR: ${instanceName}`);
 
     // ─── CASCATA DE RESOLUÇÃO DO USER_ID ────────────────────────────────────
