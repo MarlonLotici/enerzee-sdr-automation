@@ -1556,11 +1556,38 @@ async function startInstance(instanceId, instanceName, preloadedUserId = null) {
 // ============================================================================
 // 🛡️ PASSO 1: O "CARIMBO" E RASTREIO DIGITAL DO ROBÔ (NATIVO E SEGURO)
 // ============================================================================
+
+// Aguarda SERVER_ACK (status ≥ 2) do WA server para a mensagem específica.
+// Se não chegar em timeoutMs, lança ACK_TIMEOUT — indica sessão stale.
+// ACK chega em 1-3s em sessões saudáveis; ausência = chip conectado TCP mas WA recusando.
+function esperarAckServidor(sock, messageId, timeoutMs = 15000) {
+    return new Promise((resolve, reject) => {
+        const timer = setTimeout(() => {
+            sock.ev.off('messages.update', handler);
+            reject(new Error(`ACK_TIMEOUT: WA server não confirmou msg ${messageId} em ${timeoutMs / 1000}s`));
+        }, timeoutMs);
+
+        function handler(updates) {
+            for (const upd of updates) {
+                if (upd.key?.id === messageId && (upd.update?.status ?? 0) >= 2) {
+                    clearTimeout(timer);
+                    sock.ev.off('messages.update', handler);
+                    resolve();
+                    return;
+                }
+            }
+        }
+
+        sock.ev.on('messages.update', handler);
+    });
+}
+
 async function enviarMensagemIA(sock, jid, content) {
     const sentMsg = await sock.sendMessage(jid, content);
     if (sentMsg?.key?.id) {
         mensagensEnviadasPelaIA.add(sentMsg.key.id);
         mapaRastreioLID.set(sentMsg.key.id, jid);
+        await esperarAckServidor(sock, sentMsg.key.id);
     }
     return sentMsg;
 }
@@ -2772,6 +2799,20 @@ const mensagensSplit = textoFinal.split('[QUEBRA]').map(t => t.trim()).filter(t 
                         liberarSemaforoSemCooldown(instanceId); // ⚡ sem penalidade de tempo
                     }
                     continue;
+                }
+
+                // ⏱️ ACK_TIMEOUT: WA server não confirmou — sessão stale detectada automaticamente
+                // Lead volta a 'new', socket forçado a fechar → handler de 'close' limpa Redis+Supabase e pede novo QR
+                if (errInner.message?.includes('ACK_TIMEOUT')) {
+                    console.error(`⏱️ [ACK TIMEOUT] ${config.nome} — WA server não confirmou entrega. Sessão stale. Forçando reconexão com novo QR...`);
+                    if (currentLead) {
+                        await supabase.from('leads').update({ status: 'new' }).eq('id', currentLead.id).eq('status', 'reservado');
+                        leadsEmProcessamento.delete(currentLead.id);
+                        liberarSemaforoSemCooldown(instanceId);
+                    }
+                    const _instAtual = sessions.get(instanceId);
+                    if (_instAtual?.sock) { try { _instAtual.sock.end(); } catch(_) {} }
+                    break;
                 }
 
                 // Erros de rede/socket/chip — lógica original de retry
