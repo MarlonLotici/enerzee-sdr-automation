@@ -2806,7 +2806,7 @@ const mensagensSplit = textoFinal.split('[QUEBRA]').map(t => t.trim()).filter(t 
                 // ⏱️ ACK_TIMEOUT: WA server não confirmou — sessão stale detectada automaticamente
                 // Lead volta a 'new', socket forçado a fechar → handler de 'close' limpa Redis+Supabase e pede novo QR
                 if (errInner.message?.includes('ACK_TIMEOUT')) {
-                    console.error(`⏱️ [ACK TIMEOUT] ${config.nome} — WA server não confirmou entrega. Sessão stale. Forçando reconexão com novo QR...`);
+                    console.error(`⏱️ [ACK TIMEOUT] ${instanceId} — WA server não confirmou entrega. Sessão stale. Forçando reconexão com novo QR...`);
                     if (currentLead) {
                         await supabase.from('leads').update({ status: 'new' }).eq('id', currentLead.id).eq('status', 'reservado');
                         leadsEmProcessamento.delete(currentLead.id);
