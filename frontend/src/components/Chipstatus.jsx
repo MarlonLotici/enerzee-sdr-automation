@@ -22,6 +22,9 @@ function resolveStatus(instance, connectingSet) {
     if (instance.whatsapp_status === 'CONNECTED') {
         return { color: C.connected,    label: 'Conectado',  icon: 'on'  }
     }
+    if (instance.whatsapp_status === 'NEEDS_REAUTH') {
+        return { color: '#f59e0b', label: 'Re-escanear QR', icon: 'off' }
+    }
     return     { color: C.disconnected, label: 'Offline',    icon: 'off' }
 }
 

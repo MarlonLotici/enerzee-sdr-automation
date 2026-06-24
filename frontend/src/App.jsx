@@ -373,11 +373,27 @@ if (session?.user?.id) checkBriefing()
         });
 
         socket.on('whatsapp_status', (statusData) => {
-            if (statusData.status === 'CONNECTED') {
+            const { status, instanceId } = statusData;
+            if (status === 'CONNECTED') {
                 setQrCodeData(null);
                 setIsConnected(true);
-                socket.emit('get_instances'); // Atualiza a lista para mostrar a bolinha verde
+                socket.emit('get_instances');
+            } else {
+                // Feedback imediato: vermelho na hora, sem esperar o DB
+                setInstances(prev => prev.map(i =>
+                    i.id === instanceId ? { ...i, whatsapp_status: 'DISCONNECTED' } : i
+                ));
+                // Re-sincroniza com DB após 2s (DB é atualizado de forma assíncrona no backend)
+                setTimeout(() => socket.emit('get_instances'), 2000);
             }
+        });
+
+        socket.on('chip_needs_reauth', ({ instanceId, instanceName }) => {
+            // Chip foi deslogado/banido — marca vermelho e exibe aviso específico
+            setInstances(prev => prev.map(i =>
+                i.id === instanceId ? { ...i, whatsapp_status: 'NEEDS_REAUTH' } : i
+            ));
+            console.warn(`[REAUTH] Chip ${instanceName} precisa re-escanear QR`);
         });
 
         socket.on('instance_removed', (removedId) => {

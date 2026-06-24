@@ -77,7 +77,9 @@
       "PowerShell(git -C \"c:\\\\dev\\\\enerzee-sdr-automation\" push -u origin feat/wpp-ui-refactor)",
       "PowerShell(Copy-Item \"c:\\\\dev\\\\enerzee-sdr-automation\\\\frontend\\\\src\\\\components\\\\VisualAnalytics.jsx\" \"c:\\\\dev\\\\enerzee-sdr-automation\\\\frontend\\\\src\\\\components\\\\VisualAnalytics.jsx.bak\")",
       "PowerShell(Copy-Item \"c:\\\\dev\\\\enerzee-sdr-automation\\\\frontend\\\\src\\\\App.jsx\" \"c:\\\\dev\\\\enerzee-sdr-automation\\\\frontend\\\\src\\\\App.jsx.bak2\")",
-      "PowerShell(Copy-Item \"c:\\\\dev\\\\enerzee-sdr-automation\\\\frontend\\\\src\\\\components\\\\AuditorDashboard.jsx\" \"c:\\\\dev\\\\enerzee-sdr-automation\\\\frontend\\\\src\\\\components\\\\AuditorDashboard.jsx.bak\")"
+      "PowerShell(Copy-Item \"c:\\\\dev\\\\enerzee-sdr-automation\\\\frontend\\\\src\\\\components\\\\AuditorDashboard.jsx\" \"c:\\\\dev\\\\enerzee-sdr-automation\\\\frontend\\\\src\\\\components\\\\AuditorDashboard.jsx.bak\")",
+      "Bash(node -e \"const now = new Date\\(Date.now\\(\\) - 3*60*60*1000\\); const h = now.getUTCHours\\(\\); const m = now.getUTCMinutes\\(\\); const t = h*60+m; console.log\\('BRT:', h+':'+String\\(m\\).padStart\\(2,'0'\\), '| t='+t+'min'\\); if\\(t<540||t>=1200\\) console.log\\('MODO: DESCANSO'\\); else console.log\\('MODO: SAUDACAO \\(ataque livre\\)'\\);\")",
+      "Bash(node -e \"const b = require\\('./node_modules/@whiskeysockets/baileys'\\); const s = b.makeWASocket\\({printQRInTerminal:false}\\); console.log\\('ws type:', typeof s.ws\\); console.log\\('ws keys:', s.ws ? Object.keys\\(s.ws\\).slice\\(0,10\\) : 'null'\\); s.end\\(\\);\")"
     ]
   }
 }

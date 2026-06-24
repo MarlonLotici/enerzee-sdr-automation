@@ -198,6 +198,8 @@ const filaMensagensIA = new Queue('FilaIA', { connection: redisConnection });
 const leadsEmProcessamento = new Set();
 const mensagensEnviadasPelaIA = new Set(); // 🛡️ PASSO 1: A Memória Anti-Eco do Robô
 const iaRespondendo = new Set();
+const inboundAtivo = new Map(); // instanceId → nº de jobs inbound em fila/processamento (fast-lane guard)
+const tentativasReconexao = new Map(); // instanceId → contador de tentativas automáticas (Phase 4)
 const mapaRastreioLID = new Map();
 const gavetaDeMensagens = new Map(); // 🧠 OUVIDO PACIENTE: Gaveta temporária de mensagens
 const mensagensJaProcessadas = new Map(); // 🛡️ DEDUP: Previne reprocessamento de msg.key.id do Baileys
@@ -239,7 +241,10 @@ function calcularLimiteDiario(instanceData) {
 }
 
 // Chip com menos de 7 dias de vida é tratado como novo: limite reduzido para aquecimento gradual.
+// Exceção: se daily_limit foi definido manualmente no painel, o operador assumiu o controle —
+// respeita a mesma lógica de override que calcularLimiteDiario() já usa.
 function isChipNovo(instanceData) {
+    if (instanceData?.daily_limit != null) return false; // override manual → modo maduro
     if (!instanceData?.created_at) return false;
     const idadeMs = Date.now() - new Date(instanceData.created_at).getTime();
     return idadeMs < 7 * 24 * 60 * 60 * 1000;
@@ -977,6 +982,7 @@ const concessionariaLocal = (MAPA_CONCESSIONARIAS[contextoLead.estado] || 'conce
             : 'https://antix.com.br/agendar');
 
     const isSolar = !instanceData?.product_type || instanceData.product_type === 'solar';
+    const isB2C   = instanceData?.b2c_mode === true; // leads são pessoas físicas/alunos, não empresas
 
     const secaoIdentidade = isSolar
         ? `[IDENTIDADE]
@@ -988,6 +994,10 @@ Você é ${agentName}, representante da ${companyName}.
 Seu objetivo é qualificar o interesse do lead e levá-lo a agendar uma conversa com o time.
 Você se comunica como um ser humano no WhatsApp — direto, sem formalidade excessiva, sem robótica.`;
 
+    const diretrizGatekeeper = isB2C
+        ? `- B2C OBRIGATÓRIO: Quem responde É o próprio aluno/decisor. NUNCA pergunte por "responsável" ou "quem cuida". Se perguntarem de onde somos: explique que é o acompanhamento pós-venda do produto adquirido.`
+        : `- EMPATIA COM GATEKEEPER (REGRA DE OURO): Quando alguém disser que não é o decisor, NUNCA pule direto para "vai passar o contato?". Primeiro: agradeça a atenção da pessoa com genuinidade ("que legal que me atendeu", "obrigado pelo tempo"). Só então, de forma leve e natural, pergunte se consegue uma ponte com o responsável. A venda começa com a pessoa que te atendeu — ela pode abrir ou fechar a porta.`;
+
     const secaoDiretrizes = `[DIRETRIZES DE FECHAMENTO]
 - Mensagens curtas: máximo 2 balões por resposta, 15-35 palavras cada. Balões separados por [QUEBRA].
 - Simule digitação humana: uma ideia por vez, sem listas numeradas ou marcadores.
@@ -997,7 +1007,7 @@ Você se comunica como um ser humano no WhatsApp — direto, sem formalidade exc
 - Texto puro: sem asteriscos, sem markdown.
 - Termine SEMPRE com uma pergunta ("?"), exceto em REPASSE e REVEAL.
 - Tags obrigatórias no final de toda resposta: [ESTAGIO:N] e [CLIMA:X].
-- EMPATIA COM GATEKEEPER (REGRA DE OURO): Quando alguém disser que não é o decisor, NUNCA pule direto para "vai passar o contato?". Primeiro: agradeça a atenção da pessoa com genuinidade ("que legal que me atendeu", "obrigado pelo tempo"). Só então, de forma leve e natural, pergunte se consegue uma ponte com o responsável. A venda começa com a pessoa que te atendeu — ela pode abrir ou fechar a porta.`;
+${diretrizGatekeeper}`;
 
     const secaoRegional = isSolar
         ? `[INTELIGÊNCIA REGIONAL]
@@ -1006,7 +1016,11 @@ Você se comunica como um ser humano no WhatsApp — direto, sem formalidade exc
 - Economia anual estimada: ${economiaAnualFormatada}/ano (use APENAS este valor — nunca mencione o valor mensal)
 - Contexto regional: ${contextoBairro}
 - ${perfilComportamental}`
-        : `[CONTEXTO DO LEAD]
+        : isB2C
+            ? `[CONTEXTO DO LEAD]
+- Produto adquirido: ${nomeEmpresa}
+- CONTEXTO B2C: O lead é uma pessoa física que já comprou o produto. NÃO há empresa envolvida. Ele é o aluno e o decisor. Modo: acompanhamento pós-venda, não prospecção B2B.`
+            : `[CONTEXTO DO LEAD]
 - Localização: ${bairroLead}
 - Empresa: ${nomeEmpresa}
 - ${perfilComportamental}`;
@@ -1200,6 +1214,8 @@ function calcularEconomiaRegional(analise) {
 async function startInstance(instanceId, instanceName, preloadedUserId = null) {
     if (instanciasLigando.has(instanceId)) return; // Se já está ligando, ignora
     instanciasLigando.add(instanceId);
+    // Safety net: qualquer exceção antes do socket subir limpa o lock para permitir retry
+    const _cleanupLock = (err) => { instanciasLigando.delete(instanceId); throw err; };
 
     console.log(`[MANAGER] 🚀 Ligando SDR: ${instanceName}`);
 
@@ -1240,7 +1256,12 @@ async function startInstance(instanceId, instanceName, preloadedUserId = null) {
     const proxyUrl = generateProxyUrl(instanceId) || process.env.PROXY_URL || null;
     // validateProxy lança erro se proxyUrl estiver definido mas falhar — chip não sobe sem proxy.
     // Retorna null apenas quando proxyUrl é null (chip sem proxy configurado intencionalmente).
-    const agent = await validateProxy(proxyUrl, instanceId);
+    let agent;
+    try {
+        agent = await validateProxy(proxyUrl, instanceId);
+    } catch (err) {
+        return _cleanupLock(err); // limpa instanciasLigando e re-lança
+    }
     if (!agent) console.log(`ℹ️ [PROXY] ${instanceName} sem proxy configurado — modo direto.`);
 
     // Jitter de startup: evita burst de logins simultâneos quando Railway reinicia todos os chips de uma vez.
@@ -1297,10 +1318,15 @@ async function startInstance(instanceId, instanceName, preloadedUserId = null) {
         if (connection === 'open') {
             console.log(`✅ [SDR] Canal Pronto e Estável: ${instanceName}`);
             cancelarDebounceChip(instanceId); // Chip voltou — cancela alerta de desconexão se ainda no debounce
-            sessions.set(instanceId, { sock, ready: true, userId: instanceUserId }); // <--- LIBERADO PARA ENVIO
+            tentativasReconexao.delete(instanceId); // Fase 4: conexão bem-sucedida — zera o contador
+            sessions.set(instanceId, { sock, ready: true, userId: instanceUserId, name: instanceName }); // <--- LIBERADO PARA ENVIO
             instanciasLigando.delete(instanceId);
-            await db.updateInstanceStatus(instanceId, 'CONNECTED');
+            // Emit imediato ao frontend — não depende do DB para não bloquear a UI
             if (ioSocket && instanceUserId) ioSocket.to(`user:${instanceUserId}`).emit('whatsapp_status', { status: 'CONNECTED', instanceId });
+            // DB update separado: falha silenciosa não afeta o emit nem o motor
+            db.updateInstanceStatus(instanceId, 'CONNECTED').catch(e =>
+                console.error(`⚠️ [STATUS-DB] Falha ao gravar CONNECTED para ${instanceName}: ${e.message}`)
+            );
             // Realoca leads órfãos do mesmo tenant para este chip
             setTimeout(() => redistribuirLeadsOrfaos(), 3000);
             // Liga o motor de ataque deste chip se ainda não estiver rodando.
@@ -1322,7 +1348,7 @@ async function startInstance(instanceId, instanceName, preloadedUserId = null) {
                 return; // 🛑 Mata a execução aqui!
             }
 
-            sessions.set(instanceId, { sock, ready: false, userId: instanceUserId });
+            sessions.set(instanceId, { sock, ready: false, userId: instanceUserId, name: instanceName });
             instanciasLigando.delete(instanceId);
             const reason = (lastDisconnect?.error)?.output?.statusCode;
 
@@ -1342,8 +1368,27 @@ async function startInstance(instanceId, instanceName, preloadedUserId = null) {
                 console.log(`🔴 [FATAL ${reason}] ${instanceName} foi rejeitado ou deslogado. Limpando sessão Redis para novo QR...`);
                 await clearRedisSession(redisConnection, instanceId);
                 await db.updateInstanceStatus(instanceId, 'DISCONNECTED');
+                // Fase 2: avisa frontend para mostrar botão "re-escanear QR" específico
+                if (ioSocket && instanceUserId) ioSocket.to(`user:${instanceUserId}`).emit('chip_needs_reauth', { instanceId, instanceName });
+                tentativasReconexao.delete(instanceId); // reseta counter — nova sessão começa do zero
                 return; // 🛑 MATA O LOOP AQUI! Sem setTimeout, sem insistir.
             }
+
+            // Fase 4: helper para tentar reconexão com limite de 10 tentativas
+            const tentarReconexao = (delayMs, motivo) => {
+                const tentativas = (tentativasReconexao.get(instanceId) || 0) + 1;
+                if (tentativas > 10) {
+                    console.error(`🚫 [RECONEXÃO] ${instanceName} atingiu 10 tentativas sem sucesso. Abandonando — intervenção manual necessária.`);
+                    enviarAlerta(`🚫 *Chip parado*: ${instanceName} falhou 10x seguidas e precisa de atenção manual.`).catch(() => {});
+                    tentativasReconexao.delete(instanceId);
+                    return;
+                }
+                tentativasReconexao.set(instanceId, tentativas);
+                console.log(`🔄 [RECONEXÃO] ${instanceName} — tentativa ${tentativas}/10 (${motivo}) em ${delayMs/1000}s...`);
+                setTimeout(() => startInstance(instanceId, instanceName).catch(e =>
+                    console.error(`❌ [RECONEXÃO] startInstance falhou para ${instanceName}: ${e.message}`)
+                ), delayMs);
+            };
 
             // 🔴 Sessão corrompida localmente (Bad Session)
             if (reason === DisconnectReason.badSession) {
@@ -1351,7 +1396,7 @@ async function startInstance(instanceId, instanceName, preloadedUserId = null) {
                 await supabase.from('whatsapp_sessions').delete().eq('id', instanceId);
                 await supabase.from('whatsapp_keys').delete().eq('instance_id', instanceId);
                 await db.updateInstanceStatus(instanceId, 'DISCONNECTED');
-                setTimeout(() => startInstance(instanceId, instanceName), 3000);
+                tentarReconexao(3000, 'bad session');
                 return;
             }
 
@@ -1364,10 +1409,9 @@ async function startInstance(instanceId, instanceName, preloadedUserId = null) {
 
             // Timeout de conexão → reconecta com backoff
             if (reason === DisconnectReason.timedOut || reason === DisconnectReason.connectionLost) {
-                const delay = Math.min(5000 * (2 ** (instanciasLigando.size || 1)), 60000); // backoff: 10s → 20s → max 60s
-                console.log(`⏱️ [TIMEOUT] ${instanceName} perdeu conexão. Reconectando em ${delay/1000}s...`);
+                const backoffMs = Math.min(5000 * (2 ** (instanciasLigando.size || 1)), 60000);
                 await db.updateInstanceStatus(instanceId, 'DISCONNECTED');
-                setTimeout(() => startInstance(instanceId, instanceName), delay);
+                tentarReconexao(backoffMs, 'timeout/connection lost');
                 return;
             }
 
@@ -1375,7 +1419,7 @@ async function startInstance(instanceId, instanceName, preloadedUserId = null) {
             const delayMs = reason === undefined ? 15000 : 5000;
             console.log(`🔄 [SDR] Conexão instável em ${instanceName} (reason: ${reason ?? 'desconhecido'}). Reiniciando em ${delayMs/1000}s...`);
             await db.updateInstanceStatus(instanceId, 'DISCONNECTED');
-            setTimeout(() => startInstance(instanceId, instanceName), delayMs);
+            tentarReconexao(delayMs, `reason ${reason ?? 'desconhecido'}`);
         }
     });
     
@@ -1469,8 +1513,6 @@ async function startInstance(instanceId, instanceName, preloadedUserId = null) {
 
             console.log(`⏳ [OUVIDO PACIENTE] Lead ${remoteJid.split('@')[0]} enviou mensagem. Aguardando 15s para ver se ele manda mais...`);
 
-            // Inicia o cronômetro de 15 segundos
-
             gaveta.timer = setTimeout(async () => {
                 try {
                     const textoConsolidado = gaveta.textos.join(' \n');
@@ -1485,7 +1527,7 @@ async function startInstance(instanceId, instanceName, preloadedUserId = null) {
                     console.error(`❌ [GAVETA] Erro ao processar bloco consolidado:`, errGaveta.message);
                     gavetaDeMensagens.delete(gavetaKey); // Limpa mesmo com erro
                 }
-            }, 15000);// <-- 15 segundos de paciência
+            }, 15000); // 15s para consolidar mensagens picotadas antes de processar
         }
     });
    
@@ -1981,13 +2023,19 @@ if (fromMe) {
         }
 
         // 🧠 CAMADA 2: padrão histórico de bot (muitas msgs do SDR, zero sinal humano)
-        const histParaBot = await db.getHistory(lead.whatsapp_id, instanceId);
-        if (await avaliarRiscoRoboComHistorico(histParaBot)) {
-            console.log(`🤖 [SILÊNCIO POR PADRÃO] Histórico indica bot para ${lead.name}. Pausando.`);
-            await db.saveMessage(lead.whatsapp_id, 'user', `[SUSPEITA_BOT] ${texto}`, instanceId);
-            await supabase.from('leads').update({ is_paused: true }).eq('id', lead.id);
-            await enviarAlerta(`🤖 *Bot por Padrão Histórico*\n*Lead:* ${lead.name}\n*Chip:* ${instanceId}\nSDR enviou várias msgs sem resposta humana. Lead pausado.`);
-            return;
+        // Chips B2C (bot_detection_enabled=false) não passam por esta camada — clientes de curso
+        // respondem de forma natural mas sem vocabulário B2B (kWh, CNPJ, "nossa empresa")
+        const instanceDataBot = await getRegrasEmCache(instanceId);
+        const botDetectionAtivo = instanceDataBot?.bot_detection_enabled !== false;
+        if (botDetectionAtivo) {
+            const histParaBot = await db.getHistory(lead.whatsapp_id, instanceId);
+            if (await avaliarRiscoRoboComHistorico(histParaBot)) {
+                console.log(`🤖 [SILÊNCIO POR PADRÃO] Histórico indica bot para ${lead.name}. Pausando.`);
+                await db.saveMessage(lead.whatsapp_id, 'user', `[SUSPEITA_BOT] ${texto}`, instanceId);
+                await supabase.from('leads').update({ is_paused: true }).eq('id', lead.id);
+                await enviarAlerta(`🤖 *Bot por Padrão Histórico*\n*Lead:* ${lead.name}\n*Chip:* ${instanceId}\nSDR enviou várias msgs sem resposta humana. Lead pausado.`);
+                return;
+            }
         }
         }
     }
@@ -2186,16 +2234,18 @@ if (fromMe) {
         }
         await supabase.from('leads').update(atualizacaoLead).eq('id', lead.id);
 
-        // 3. JOGA NA FILA DO REDIS (Delega o peso pro Worker)
+        // 3. JOGA NA FILA DO REDIS — priority:1 garante que inbound sempre fura a fila do outbound
+        inboundAtivo.set(instanceId, (inboundAtivo.get(instanceId) || 0) + 1);
         await filaMensagensIA.add('gerar_resposta', {
             leadId: lead.id,
             whatsappId: lead.whatsapp_id,
             instanceId: instanceId,
             remoteJid: remoteJid
         }, {
-            attempts: 3,           // Se o Llama cair, o sistema tenta de novo sozinho 3x
+            priority: 1,
+            attempts: 3,
             backoff: { type: 'exponential', delay: 5000 },
-            removeOnComplete: true // Mantém a memória do servidor limpa
+            removeOnComplete: true
         });
 
     } catch (erroFila) {
@@ -2468,6 +2518,17 @@ console.log(`🔒 [RESERVA] Lead ${lead.name} travado atomicamente para chip ${c
                         ? Math.random() * 120000 + 60000   // chip novo aquecido: 1-3 min
                         : Math.random() * 180000 + 120000; // maduro: 2-5 min
                 console.log(`🎯 [${config.nome}] Mirando em: ${lead.name} (${enviosHoje + 1}/${config.limite}). Aguardando ${Math.round(jitter/1000)}s${isColdStart ? " (cold-start)" : ""}...`);
+
+                // ⚡ FAST-LANE CHECK 1: antes de entrar no jitter, verifica se chegou inbound neste chip
+                // Se sim, devolve o lead e cede a via — chip responde primeiro, prospeta depois
+                if (inboundAtivo.has(instanceId)) {
+                    console.log(`⚡ [FAST-LANE] ${config.nome} tem inbound pendente. Devolvendo ${lead.name} à fila e aguardando 10s.`);
+                    leadsEmProcessamento.delete(lead.id);
+                    await supabase.from('leads').update({ status: 'new' }).eq('id', lead.id);
+                    await delay(10000);
+                    continue;
+                }
+
                 await delay(jitter);
                 if (isColdStart) global.chipsAquecidosHoje.add(instanceId);
 
@@ -2480,13 +2541,26 @@ console.log(`🔒 [RESERVA] Lead ${lead.name} travado atomicamente para chip ${c
 
               // 8. MONTAGEM DA SAUDAÇÃO — BALÃO ÚNICO (FIX #1 + #2 + #10)
               
+              // ⚡ FAST-LANE CHECK 2: segundo checkpoint antes do semáforo — inbound tem precedência absoluta
+              if (inboundAtivo.has(instanceId)) {
+                  console.log(`⚡ [FAST-LANE] ${config.nome} tem inbound ativo. Abortando disparo frio de ${lead.name} e cedendo por 5s.`);
+                  leadsEmProcessamento.delete(lead.id);
+                  await supabase.from('leads').update({ status: 'new' }).eq('id', lead.id);
+                  await delay(5000);
+                  continue;
+              }
+
               // 🚦 SEMÁFORO: Saudação tem PRIORIDADE 1 — toma vaga de qualquer follow-up rodando
               const semaforoOk = await adquirirSemaforoChip(instanceId, 'SAUDACAO');
               if (!semaforoOk) {
-                  console.log(`⏸️ [SAUDACAO] Chip ${config.nome} ocupado/cooldown. Devolvendo ${lead.name} pra fila e aguardando 30s...`);
-                  await supabase.from('leads').update({ status: 'new' }).eq('id', lead.id);
+                  // Calcula o tempo real restante de cooldown para não reutilizar o mesmo lead em loop
+                  const _sem = semaforoChips.get(instanceId);
+                  const _elapsed = _sem?.ultimoDisparo ? Date.now() - _sem.ultimoDisparo : 0;
+                  const _restante = _sem?.cooldownMs ? Math.max(5000, _sem.cooldownMs - _elapsed) : 60000;
+                  console.log(`⏸️ [SAUDACAO] Chip ${config.nome} em cooldown. Devolvendo ${lead.name} e aguardando ${Math.round(_restante/1000)}s reais...`);
                   leadsEmProcessamento.delete(lead.id);
-                  await delay(30000);
+                  await supabase.from('leads').update({ status: 'new' }).eq('id', lead.id);
+                  await delay(_restante + 2000);
                   continue;
               }
 
@@ -2831,6 +2905,12 @@ async function loopRecuperacaoConversas() {
 
                         const msgFollowUp = `${primeiroNome}, conseguiu dar uma olhada na mensagem acima? Como a gente tem poucas vagas com isenção pra região, queria confirmar se faz sentido pra ${nomeEmpresa} antes de liberar o espaço.`;
 
+                        // ⚡ FAST-LANE: não dispara follow-up enquanto há inbound pendente no chip
+                        if (inboundAtivo.has(lf.instance_id)) {
+                            console.log(`⚡ [FAST-LANE] ${chipNome} tem inbound pendente. Pulando follow-up D1 de ${lf.name}.`);
+                            continue;
+                        }
+
                         // 🚦 SEMÁFORO: Follow-up D1 tem prioridade 3 (cede pra saudação E recuperação)
                         const semaforoOk = await adquirirSemaforoChip(lf.instance_id, 'FOLLOWUP');
                         if (!semaforoOk) {
@@ -2863,6 +2943,11 @@ await delay(jitterAntiBan);
                         const nomeEmpresa = (lf.name || 'empresa').replace(/\s(LTDA|ME|EIRELI|S\.A|LIMITED)\b/gi, '').trim();
 
                         const msgD3 = `${primeiroNome}, última tentativa da minha parte. Se a conversa sobre a ${nomeEmpresa} ainda fizer sentido, é só me responder aqui. Se não for a hora certa, sem problema — desejo sucesso pra vcs!`;
+
+                        if (inboundAtivo.has(lf.instance_id)) {
+                            console.log(`⚡ [FAST-LANE] ${chipNome} tem inbound pendente. Pulando follow-up D3 de ${lf.name}.`);
+                            continue;
+                        }
 
                         const semaforoOk = await adquirirSemaforoChip(lf.instance_id, 'FOLLOWUP');
                         if (!semaforoOk) { continue; }
@@ -2926,6 +3011,12 @@ await delay(jitterAntiBan);
                     primeiroNome = primeiroNome.charAt(0).toUpperCase() + primeiroNome.slice(1);
                     
                     const msgFollowUpLink = `${primeiroNome}, meu sistema de agenda deu uma travada hoje. Vc conseguiu travar o seu horário lá no link ou deu erro aí também?`;
+
+                 // ⚡ FAST-LANE: follow-up de link tem prioridade mínima — cede para inbound imediatamente
+                    if (inboundAtivo.has(ll.instance_id)) {
+                        console.log(`⚡ [FAST-LANE] Chip tem inbound pendente. Pulando follow-up link de ${ll.name}.`);
+                        continue;
+                    }
 
                  // 🚦 SEMÁFORO: Follow-up Link tem prioridade 4 (a mais baixa, cede pra todos)
                     const semaforoOk = await adquirirSemaforoChip(ll.instance_id, 'FOLLOWUP_LINK');
@@ -3543,8 +3634,9 @@ if (!resposta) {
         enviarAlerta("⚠️ ERRO NA IA (WORKER)", `Falha ao responder o lead.\nErro: ${error.message}`, 15158332);
         throw error; // Força o BullMQ a tentar de novo (Retry)
     } finally {
-        // 5. Destranca o cérebro deste lead para que ele possa receber novas mensagens
         iaRespondendo.delete(whatsappId);
+        const _restantes = (inboundAtivo.get(instanceId) || 1) - 1;
+        if (_restantes <= 0) inboundAtivo.delete(instanceId); else inboundAtivo.set(instanceId, _restantes);
         console.log(`🔓 [WORKER-TRAVA] IA pronta para ${whatsappId} novamente.`);
     }
 }, { 
@@ -3789,6 +3881,32 @@ module.exports = {
 
             // 📅 DESPERTADOR DE FOLLOW-UPS: verifica a cada 1 minuto
             setInterval(verificarFollowUpsVencidos, 60 * 1000);
+
+            // 💓 HEARTBEAT: verifica WebSocket de cada chip a cada 4 minutos
+            setInterval(async () => {
+                for (const [instanceId, instancia] of sessions) {
+                    if (!instancia.ready) continue;
+                    // Verifica WebSocket sem tráfego WA
+                    const chipNome = instancia.name || instanceId.slice(0, 8);
+                    if (!instancia.sock?.ws?.isOpen) {
+                        console.warn(`💔 [HEARTBEAT] ${chipNome} WebSocket fechado. Reconectando...`);
+                        startInstance(instanceId, chipNome, instancia.userId).catch(e =>
+                            console.error(`❌ [HEARTBEAT] reconexão falhou para ${chipNome}: ${e.message}`)
+                        );
+                        continue;
+                    }
+                    // Envia presença somente em horário comercial para manter sessão viva
+                    if (!dentroDaJanelaDeDisparo(instanceId)) continue;
+                    try {
+                        await instancia.sock.sendPresenceUpdate('available', 'status@broadcast');
+                    } catch (e) {
+                        console.warn(`💔 [HEARTBEAT] ${chipNome} sem resposta ao ping. Forçando reconexão.`);
+                        startInstance(instanceId, chipNome, instancia.userId).catch(err =>
+                            console.error(`❌ [HEARTBEAT] reconexão falhou para ${chipNome}: ${err.message}`)
+                        );
+                    }
+                }
+            }, 4 * 60 * 1000);
 
             // 🔔 OUVINTE DO ALARME RAM: Escuta o grito do Scraper
             if (sdrEvents) {
