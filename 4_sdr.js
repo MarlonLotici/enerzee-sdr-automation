@@ -1305,7 +1305,7 @@ async function startInstance(instanceId, instanceName, preloadedUserId = null) {
             keepAliveIntervalMs: keepAliveMs,
             connectTimeoutMs: 60000,
             markOnlineOnConnect: false,
-            retryRequestDelayMs: 2000,
+            retryRequestDelayMs: 3000 + Math.floor(Math.random() * 7000), // 3-10s jitter humano
             ...(agent ? { agent } : {}),
         });
     } catch (socketErr) {
