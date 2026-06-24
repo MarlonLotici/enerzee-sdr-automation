@@ -6,6 +6,16 @@
 // 🚀 FIX V13: Declaração global para injeção dinâmica (Bypass do erro ESM)
 let makeWASocket, useMultiFileAuthState, DisconnectReason, delay, fetchLatestBaileysVersion, makeCacheableSignalKeyStore, downloadMediaMessage, generateMessageID, Browsers;
 
+// 🔇 Suprime logs internos do libsignal (chaves privadas efêmeras do Double Ratchet)
+// Esses blocos não são erros — são ciclos normais do Signal Protocol, mas expõem material criptográfico nos logs de produção
+const _origConsoleLog = console.log.bind(console);
+console.log = (...args) => {
+    const first = String(args[0] ?? '');
+    if (first.startsWith('Closing session:') || first.startsWith('  _chains:') ||
+        first.includes('privKey:') || first.includes('SessionEntry')) return;
+    _origConsoleLog(...args);
+};
+
 const pino = require('pino');
 const fs = require('fs');
 const axios = require('axios');
@@ -214,6 +224,7 @@ let sdrEventsGlobal = null; // 🛡️ Adicione esta linha aqui no topo
 // ============================================================================
 const semaforoChips = new Map(); // chipId → { ocupado: boolean, ultimoDisparo: timestamp, cooldownMs: number, prioridadeAtual: string }
 global.chipsAquecidosHoje = global.chipsAquecidosHoje || new Set(); // cold-start guard por chip, por processo
+const sucessosPorSessao = new Map(); // instanceId → nº de envios com SERVER_ACK confirmado nesta sessão WA ativa
 
 // Retorna delay humano randômico entre disparos.
 // Chip novo: 10-18 min — janela maior diminui a cadência detectável pelo WA.
@@ -1372,6 +1383,7 @@ async function startInstance(instanceId, instanceName, preloadedUserId = null) {
 
             sessions.set(instanceId, { sock, ready: false, userId: instanceUserId, name: instanceName });
             instanciasLigando.delete(instanceId);
+            sucessosPorSessao.delete(instanceId); // sessão encerrada — contador zerado para a próxima sessão
             const reason = (lastDisconnect?.error)?.output?.statusCode;
 
             // Notifica frontend imediatamente (sem esperar o DB)
@@ -1395,6 +1407,7 @@ async function startInstance(instanceId, instanceName, preloadedUserId = null) {
                 // Fase 2: avisa frontend para mostrar botão "re-escanear QR" específico
                 if (ioSocket && instanceUserId) ioSocket.to(`user:${instanceUserId}`).emit('chip_needs_reauth', { instanceId, instanceName });
                 tentativasReconexao.delete(instanceId); // reseta counter — nova sessão começa do zero
+                sucessosPorSessao.delete(instanceId);
                 return; // 🛑 MATA O LOOP AQUI! Sem setTimeout, sem insistir.
             }
 
@@ -2766,6 +2779,7 @@ const mensagensSplit = textoFinal.split('[QUEBRA]').map(t => t.trim()).filter(t 
                 // 10. CONCLUSÃO E SUCESSO (cobre caso de break antecipado — lead respondeu antes do último chunk)
                 await supabase.from('leads').update({ status: 'contact', last_contact_at: new Date().toISOString(), opening_template: textoFinal }).eq('id', lead.id);
                 console.log(`✅ [SUCESSO REAL] Entregue por ${config.nome} para ${lead.name}!`);
+                sucessosPorSessao.set(instanceId, (sucessosPorSessao.get(instanceId) || 0) + 1);
                 leadsEmProcessamento.delete(lead.id);
                 liberarSemaforoChip(instanceId, chipNovo); // 🚦 warmup=chipNovo → 6-10 min; maduro → 4-7 min
                 falhasConsecutivas = 0;
@@ -2805,11 +2819,25 @@ const mensagensSplit = textoFinal.split('[QUEBRA]').map(t => t.trim()).filter(t 
                     continue;
                 }
 
-                // ⏱️ ACK_TIMEOUT: WA server não confirmou — sessão stale detectada automaticamente
-                // Limpa credenciais Redis+Supabase ANTES de fechar o socket para que a reconexão
-                // gere novo QR em vez de reconectar com as mesmas credenciais stale (loop infinito)
+                // ⏱️ ACK_TIMEOUT: WA server não confirmou entrega em 15s.
+                // BIFURCAÇÃO: distingue sessão stale real de falha isolada no lead.
                 if (errInner.message?.includes('ACK_TIMEOUT')) {
-                    console.error(`⏱️ [ACK TIMEOUT] ${instanceId} — sessão stale. Limpando credenciais e pedindo novo QR...`);
+                    const sucessosNestaSessao = sucessosPorSessao.get(instanceId) || 0;
+
+                    if (sucessosNestaSessao > 0) {
+                        // Sessão tem histórico de sucesso → problema é o lead específico (número sem WA,
+                        // Signal keys incompatíveis, destinatário inacessível). NÃO destruir sessão.
+                        console.warn(`⚠️ [ACK TIMEOUT ISOLADO] ${instanceId} — sessão saudável (${sucessosNestaSessao} envios OK). Lead ${currentLead?.name} descartado como inválido.`);
+                        if (currentLead) {
+                            await supabase.from('leads').update({ status: 'invalid_number' }).eq('id', currentLead.id);
+                            leadsEmProcessamento.delete(currentLead.id);
+                            liberarSemaforoSemCooldown(instanceId);
+                        }
+                        continue; // próximo lead, sessão intacta
+                    }
+
+                    // Sessão nunca validou um envio nesta sessão WA → stale real → limpar credenciais
+                    console.error(`⏱️ [ACK TIMEOUT] ${instanceId} — sessão stale (0 envios confirmados). Limpando credenciais e pedindo novo QR...`);
                     if (currentLead) {
                         await supabase.from('leads').update({ status: 'new' }).eq('id', currentLead.id).eq('status', 'reservado');
                         leadsEmProcessamento.delete(currentLead.id);
