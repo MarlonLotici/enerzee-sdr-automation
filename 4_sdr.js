@@ -1385,8 +1385,10 @@ async function startInstance(instanceId, instanceName, preloadedUserId = null) {
 
             // 🔴 ERROS FATAIS (Deslogado, Banido, ou Rejeitado pela Meta)
             if (reason === DisconnectReason.loggedOut || reason === 403 || reason === 401) {
-                console.log(`🔴 [FATAL ${reason}] ${instanceName} foi rejeitado ou deslogado. Limpando sessão Redis para novo QR...`);
+                console.log(`🔴 [FATAL ${reason}] ${instanceName} foi rejeitado ou deslogado. Limpando sessão Redis + Supabase para novo QR...`);
                 await clearRedisSession(redisConnection, instanceId);
+                await supabase.from('whatsapp_sessions').delete().eq('id', instanceId);
+                await supabase.from('whatsapp_keys').delete().eq('instance_id', instanceId);
                 await db.updateInstanceStatus(instanceId, 'DISCONNECTED');
                 // Fase 2: avisa frontend para mostrar botão "re-escanear QR" específico
                 if (ioSocket && instanceUserId) ioSocket.to(`user:${instanceUserId}`).emit('chip_needs_reauth', { instanceId, instanceName });
