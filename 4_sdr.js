@@ -1066,7 +1066,10 @@ ${diretrizGatekeeper}`;
         .replaceAll('${economiaAnual}', economiaAnualFormatada)
         .replaceAll('${calendlyLink}', calendlyResolvido);
 
-    return `${secaoModular}\n\n${constituicaoResolvida}`;
+    // use_modular_sections=false no banco → apenas o system_prompt do tenant, sem injeção hardcoded
+    if (instanceData?.use_modular_sections === false) return constituicaoResolvida;
+    // Hardcoded vem DEPOIS do system_prompt — tenant tem precedência, seções modulares são complemento
+    return `${constituicaoResolvida}\n\n${secaoModular}`;
 }
 // ============================================================================
 // 🧠 NÚCLEO IA: "THE ARCHITECT" - STATE OF THE ART SDR V3.0 (MULTI-TENANT REAL)
