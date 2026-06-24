@@ -1322,6 +1322,13 @@ async function startInstance(instanceId, instanceName, preloadedUserId = null) {
             console.log(`✅ [SDR] Canal Pronto e Estável: ${instanceName}`);
             cancelarDebounceChip(instanceId); // Chip voltou — cancela alerta de desconexão se ainda no debounce
             tentativasReconexao.delete(instanceId); // Fase 4: conexão bem-sucedida — zera o contador
+            // Encerra socket fantasma: se havia um socket diferente registrado (ex: QR re-scan sem Remove+Add),
+            // fecha o antigo antes de registrar o novo — impede que mensagens saiam pelo socket morto
+            const sessaoAnterior = sessions.get(instanceId);
+            if (sessaoAnterior && sessaoAnterior.sock !== sock) {
+                try { sessaoAnterior.sock.end(); } catch (_) {}
+                console.log(`🔁 [SOCKET] ${instanceName} — socket antigo encerrado, novo ativo.`);
+            }
             sessions.set(instanceId, { sock, ready: true, userId: instanceUserId, name: instanceName }); // <--- LIBERADO PARA ENVIO
             instanciasLigando.delete(instanceId);
             // Emit imediato ao frontend — não depende do DB para não bloquear a UI
@@ -2588,6 +2595,7 @@ const bairroLead = lead.bairro || lead.cidade || 'sua região';
 
 // Substitui variáveis nos templates vindos do Supabase
 const substituirVarsAbertura = (tpl) => resolverSpintax(tpl
+    .replace(/\[Nome\]/gi, primeiroNomeDono || 'você') // alias legado — aceita [Nome] além de ${nomeDono}
     .replace(/\$\{saudacao\}/g, saudacao)
     .replace(/\$\{nomeDono\}/g, primeiroNomeDono || 'você')
     .replace(/\$\{nomeEmpresa\}/g, nomeEmpresa)
@@ -3954,18 +3962,27 @@ module.exports = {
         try {
             // 1. Pega o canal de comunicação correto do chip
             const instancia = sessions.get(instanceId);
-            
+
             if (!instancia || !instancia.ready) {
-                console.error(`❌ [FRONTEND] Erro: Chip ${instanceId} não está conectado.`);
+                console.error(`❌ [FRONTEND] Chip ${instanceId} não está pronto (ready=false ou ausente).`);
                 return { success: false, error: 'Chip offline ou não conectado.' };
             }
 
-            console.log(`👤 [FRONTEND] Enviando mensagem manual para ${whatsappId}...`);
+            // Verificação extra: WebSocket precisa estar aberto no nível TCP
+            // (ready=true no Map não garante que o socket não está fantasma)
+            if (!instancia.sock.ws?.isOpen) {
+                console.error(`❌ [FRONTEND] Chip ${instanceId} tem ready=true mas WebSocket fechado — socket fantasma detectado.`);
+                // Marca como não-pronto para evitar tentativas futuras até reconexão
+                instancia.ready = false;
+                return { success: false, error: 'Conexão WhatsApp inativa. Aguarde a reconexão automática ou reconecte o chip.' };
+            }
+
+            console.log(`👤 [FRONTEND] Enviando mensagem manual para ${whatsappId} via chip ${instanceId}...`);
 
             // 2. Simula o "Digitando..." para o lead
-            await instancia.sock.sendPresenceUpdate('composing', whatsappId);
+            await instancia.sock.sendPresenceUpdate('composing', whatsappId).catch(() => {});
             await delay(1500);
-            await instancia.sock.sendPresenceUpdate('paused', whatsappId);
+            await instancia.sock.sendPresenceUpdate('paused', whatsappId).catch(() => {});
 
             // 3. Envia a mensagem usando a função interna para registrar na memória viva (evita eco do bot)
             const sentMsg = await enviarMensagemIA(instancia.sock, whatsappId, { text: texto });
