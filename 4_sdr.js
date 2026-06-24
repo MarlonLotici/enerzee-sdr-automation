@@ -2806,14 +2806,18 @@ const mensagensSplit = textoFinal.split('[QUEBRA]').map(t => t.trim()).filter(t 
                 }
 
                 // ⏱️ ACK_TIMEOUT: WA server não confirmou — sessão stale detectada automaticamente
-                // Lead volta a 'new', socket forçado a fechar → handler de 'close' limpa Redis+Supabase e pede novo QR
+                // Limpa credenciais Redis+Supabase ANTES de fechar o socket para que a reconexão
+                // gere novo QR em vez de reconectar com as mesmas credenciais stale (loop infinito)
                 if (errInner.message?.includes('ACK_TIMEOUT')) {
-                    console.error(`⏱️ [ACK TIMEOUT] ${instanceId} — WA server não confirmou entrega. Sessão stale. Forçando reconexão com novo QR...`);
+                    console.error(`⏱️ [ACK TIMEOUT] ${instanceId} — sessão stale. Limpando credenciais e pedindo novo QR...`);
                     if (currentLead) {
                         await supabase.from('leads').update({ status: 'new' }).eq('id', currentLead.id).eq('status', 'reservado');
                         leadsEmProcessamento.delete(currentLead.id);
                         liberarSemaforoSemCooldown(instanceId);
                     }
+                    await clearRedisSession(redisConnection, instanceId).catch(() => {});
+                    await supabase.from('whatsapp_sessions').delete().eq('id', instanceId);
+                    await supabase.from('whatsapp_keys').delete().eq('instance_id', instanceId);
                     const _instAtual = sessions.get(instanceId);
                     if (_instAtual?.sock) { try { _instAtual.sock.end(); } catch(_) {} }
                     break;
