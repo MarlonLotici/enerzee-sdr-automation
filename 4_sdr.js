@@ -1289,10 +1289,9 @@ async function startInstance(instanceId, instanceName, preloadedUserId = null) {
     const { state, saveCreds } = await useRedisAuthState(redisConnection, instanceId);
     const { version } = await fetchLatestBaileysVersion();
 
-    // keepAlive curto para manter o túnel TCP do proxy residencial vivo.
-    // Roteadores domésticos (IPRoyal) têm NAT timeout de ~30-60s — 15-25s garante que
-    // o frame WebSocket chega antes do NAT expirar e matar o túnel silenciosamente.
-    const keepAliveMs = 15000 + Math.floor(Math.random() * 10000); // 15-25s
+    // keepAlive dentro do range do WA Web real (~25-30s) mas seguro para NAT de proxy residencial.
+    // Ubuntu/IPRoyal têm timeout ~30-60s — 20-28s mantém o túnel sem parecer agressivo.
+    const keepAliveMs = 20000 + Math.floor(Math.random() * 8000); // 20-28s
 
     let sock;
     try {
@@ -1301,11 +1300,14 @@ async function startInstance(instanceId, instanceName, preloadedUserId = null) {
             auth: { creds: state.creds, keys: makeCacheableSignalKeyStore(state.keys, pino({ level: 'silent' })) },
             printQRInTerminal: false,
             logger: pino({ level: 'silent' }),
-            browser: Browsers.ubuntu('Chrome'),  // fingerprint real Ubuntu/Chrome
+            browser: Browsers.windows('Chrome'), // Windows é o OS mais comum entre usuários reais de WA Web
             keepAliveIntervalMs: keepAliveMs,
             connectTimeoutMs: 60000,
             markOnlineOnConnect: false,
-            retryRequestDelayMs: 3000 + Math.floor(Math.random() * 7000), // 3-10s jitter humano
+            retryRequestDelayMs: 3000 + Math.floor(Math.random() * 7000),
+            syncFullHistory: false,              // não sincroniza histórico — bots fazem isso, humanos não
+            generateHighQualityLinkPreview: false, // não gera preview instantâneo — padrão de bot
+            getMessage: async () => undefined,   // desativa retry automático interno — ACK_TIMEOUT cuida
             ...(agent ? { agent } : {}),
         });
     } catch (socketErr) {
