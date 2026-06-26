@@ -1607,15 +1607,11 @@ function esperarAckServidor(sock, messageId, timeoutMs = 15000) {
 }
 
 async function enviarMensagemIA(sock, jid, content) {
-    // Pré-gera o messageId e registra o listener ANTES de sendMessage para evitar a race condition
-    // onde o ACK chega entre o envio e o registro do listener (sessões muito rápidas / baixa latência).
-    const msgId = generateMessageID();
-    const ackPromise = esperarAckServidor(sock, msgId);
-    const sentMsg = await sock.sendMessage(jid, content, { messageId: msgId });
+    const sentMsg = await sock.sendMessage(jid, content);
     if (sentMsg?.key?.id) {
         mensagensEnviadasPelaIA.add(sentMsg.key.id);
         mapaRastreioLID.set(sentMsg.key.id, jid);
-        await ackPromise;
+        await esperarAckServidor(sock, sentMsg.key.id);
     }
     return sentMsg;
 }
