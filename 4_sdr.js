@@ -231,6 +231,7 @@ let sdrEventsGlobal = null; // 🛡️ Adicione esta linha aqui no topo
 const semaforoChips = new Map(); // chipId → { ocupado: boolean, ultimoDisparo: timestamp, cooldownMs: number, prioridadeAtual: string }
 global.chipsAquecidosHoje = global.chipsAquecidosHoje || new Set(); // cold-start guard por chip, por processo
 const sucessosPorSessao = new Map(); // instanceId → nº de envios com SERVER_ACK confirmado nesta sessão WA ativa
+const staleContador = new Map(); // instanceId → falhas ACK_TIMEOUT stale consecutivas (0 confirms); reseta no SUCESSO REAL ou hard restart
 
 // Retorna delay humano randômico entre disparos.
 // Chip novo: 10-18 min — janela maior diminui a cadência detectável pelo WA.
@@ -617,7 +618,12 @@ function detectarSinalHumano(texto) {
         /\b(eu|minha?|meu|noss[ao]|nossa\s+empresa|minha\s+empresa)\b/i.test(t) ||
         /\b(tô|tá|num|tava|tamo|né|cara|ó|oxe|poxa|caramba|rapaz|véi)\b/i.test(t) || // gírias BR
         /R\$\s*[\d.,]+/.test(t) ||           // menciona valor monetário
-        /\d{4,}/.test(t)                     // número concreto longo (kWh, CNPJ, CEP etc.)
+        /\d{4,}/.test(t) ||                  // número concreto longo (kWh, CNPJ, CEP etc.)
+        /\?/.test(t) ||                      // pergunta — quase sempre fala humana
+        /\b(hoje|agora|ontem|ainda|j[aá]|nunca|sempre|semana|esta\s+semana)\b/i.test(t) || // marcadores temporais pessoais
+        /\b(n[ãa]o\s+)?(comec[ea]\w*|us[ao]\w*|fiz|sei|entend\w*|consig[ao]\w*|conect\w*|abr[ií]\w*|mex\w*|acesso|acess\w+)\b/i.test(t) || // verbos 1ª pessoa (comecei, usei, fiz, sei...)
+        /\b(preciso|quero|gostaria|tento|estou|tô\s+(?:com|sem)|tenho\s+(?:uma?\s+)?d[uú]vida)\b/i.test(t) || // intenção/estado pessoal
+        (/\b(sim|n[ãa]o|ok|certo|exato|legal|show|boa|beleza|claro|combinado|perfeito)\b/i.test(t) && t.split(/\s+/).length <= 5) // confirmação curta humana (≤5 palavras)
     );
 }
 
@@ -625,20 +631,21 @@ function detectarSinalHumano(texto) {
 // Só ativa após o SDR já ter enviado mensagens suficientes para haver padrão
 async function avaliarRiscoRoboComHistorico(historico) {
     const respostasSdr = historico.filter(m => m.role === 'assistant').length;
-    if (respostasSdr < 3) return false; // cedo demais para detectar padrão
+    if (respostasSdr < 5) return false; // aumentado 3→5: evita disparo prematuro em conversas curtas
 
     const mensagensLead = historico.filter(m => m.role === 'user')
         .filter(m => !m.content.startsWith('[AUTORESPOSTA]') && !m.content.startsWith('[SUSPEITA_BOT]'));
 
     if (mensagensLead.length === 0) return false;
 
-    // Nenhuma mensagem do lead mostrou sinal humano após 4+ respostas do SDR → bot silencioso
+    // Nenhuma mensagem do lead mostrou sinal humano após 6+ respostas do SDR → bot silencioso
     const algumSinalHumano = mensagensLead.some(m => detectarSinalHumano(m.content));
-    if (respostasSdr >= 4 && !algumSinalHumano) return true;
+    if (respostasSdr >= 6 && !algumSinalHumano) return true; // aumentado 4→6
 
-    // Últimas 3 mensagens do lead: todas curtas (< 25 chars) e sem sinal humano
+    // Últimas 3 mensagens do lead: todas curtas (< 25 chars) e sem sinal humano.
+    // Exige mínimo de 4 mensagens do lead para ter padrão confiável (evita marcar conversas iniciantes).
     const ultimas3 = mensagensLead.slice(-3);
-    if (ultimas3.length >= 3 && ultimas3.every(m =>
+    if (mensagensLead.length >= 4 && ultimas3.length >= 3 && ultimas3.every(m =>
         m.content.trim().length < 25 && !detectarSinalHumano(m.content)
     )) return true;
 
@@ -1245,6 +1252,10 @@ async function startInstance(instanceId, instanceName, preloadedUserId = null) {
         instanciasEncerrandoManualmente.add(instanceId);
         try { sessaoExistente.sock.end(); } catch (_) {}
         sessions.delete(instanceId);
+        // Aguarda 100ms para o close event do socket antigo disparar (e ser silenciado),
+        // depois limpa a flag para que o NOVO socket não receba SHUTDOWN SILENCIOSO se falhar rápido.
+        await new Promise(r => setTimeout(r, 100));
+        instanciasEncerrandoManualmente.delete(instanceId);
     }
 
     console.log(`[MANAGER] 🚀 Ligando SDR: ${instanceName}`);
@@ -1584,7 +1595,7 @@ async function startInstance(instanceId, instanceName, preloadedUserId = null) {
 // Aguarda SERVER_ACK (status ≥ 2) do WA server para a mensagem específica.
 // Se não chegar em timeoutMs, lança ACK_TIMEOUT — indica sessão stale.
 // ACK chega em 1-3s em sessões saudáveis; ausência = chip conectado TCP mas WA recusando.
-function esperarAckServidor(sock, messageId, timeoutMs = 15000) {
+function esperarAckServidor(sock, messageId, timeoutMs = 30000) {
     return new Promise((resolve, reject) => {
         const timer = setTimeout(() => {
             sock.ev.off('messages.update', handler);
@@ -2787,6 +2798,7 @@ const mensagensSplit = textoFinal.split('[QUEBRA]').map(t => t.trim()).filter(t 
                 await supabase.from('leads').update({ status: 'contact', last_contact_at: new Date().toISOString(), opening_template: textoFinal }).eq('id', lead.id);
                 console.log(`✅ [SUCESSO REAL] Entregue por ${config.nome} para ${lead.name}!`);
                 sucessosPorSessao.set(instanceId, (sucessosPorSessao.get(instanceId) || 0) + 1);
+                staleContador.delete(instanceId); // envio confirmado — zera contador de falhas stale consecutivas
                 leadsEmProcessamento.delete(lead.id);
                 liberarSemaforoChip(instanceId, chipNovo); // 🚦 warmup=chipNovo → 6-10 min; maduro → 4-7 min
                 falhasConsecutivas = 0;
@@ -2843,13 +2855,28 @@ const mensagensSplit = textoFinal.split('[QUEBRA]').map(t => t.trim()).filter(t 
                         continue; // próximo lead, sessão intacta
                     }
 
-                    // Sessão nunca validou um envio nesta sessão WA → stale real → limpar credenciais
-                    console.error(`⏱️ [ACK TIMEOUT] ${instanceId} — sessão stale (0 envios confirmados). Limpando credenciais e pedindo novo QR...`);
+                    // Sessão nunca validou um envio → pode ser proxy lento ou rate-limiting do WA.
+                    // 1ª falha: soft restart (reinicia socket, preserva credenciais — evita wipe desnecessário).
+                    // 2ª falha consecutiva: hard restart (wipe completo + novo QR).
+                    const stalesFalhas = (staleContador.get(instanceId) || 0) + 1;
+                    staleContador.set(instanceId, stalesFalhas);
+
                     if (currentLead) {
                         await supabase.from('leads').update({ status: 'new' }).eq('id', currentLead.id).eq('status', 'reservado');
                         leadsEmProcessamento.delete(currentLead.id);
                         liberarSemaforoSemCooldown(instanceId);
                     }
+
+                    if (stalesFalhas < 2) {
+                        console.warn(`⏱️ [ACK TIMEOUT - SOFT] ${instanceId} — falha stale ${stalesFalhas}/2. Reiniciando socket sem apagar credenciais...`);
+                        const _instAtual = sessions.get(instanceId);
+                        if (_instAtual?.sock) { try { _instAtual.sock.end(); } catch(_) {} }
+                        break;
+                    }
+
+                    // 2ª falha consecutiva → wipe completo
+                    console.error(`⏱️ [ACK TIMEOUT - HARD] ${instanceId} — ${stalesFalhas} falhas stale consecutivas. Limpando credenciais e pedindo novo QR...`);
+                    staleContador.delete(instanceId);
                     await clearRedisSession(redisConnection, instanceId).catch(() => {});
                     await supabase.from('whatsapp_sessions').delete().eq('id', instanceId);
                     await supabase.from('whatsapp_keys').delete().eq('instance_id', instanceId);
@@ -3984,6 +4011,27 @@ module.exports = {
             setInterval(async () => {
                 console.log("⏰ [VIGIA] Varredura de segurança ativada...");
                 await redistribuirLeadsOrfaos();
+
+                // Auto-reconecta chips DISCONNECTED que estão no DB mas sem sessão ativa
+                try {
+                    const instsAtivas = await db.getActiveInstances();
+                    for (const inst of instsAtivas) {
+                        const sessao = sessions.get(inst.id);
+                        const estaConectado = sessao?.ready === true;
+                        const estaConectando = instanciasLigando.has(inst.id);
+                        if (!estaConectado && !estaConectando) {
+                            console.log(`🔄 [VIGIA] Auto-reconectando chip desconectado: ${inst.name}`);
+                            staleContador.delete(inst.id); // fresh start no auto-reconnect
+                            startInstance(inst.id, inst.name, inst.user_id).catch(e =>
+                                console.error(`❌ [VIGIA] Falha ao reconectar ${inst.name}:`, e.message)
+                            );
+                            await delay(2000); // escalonamento para evitar burst de reconexões simultâneas
+                        }
+                    }
+                } catch (e) {
+                    console.error('❌ [VIGIA] Erro no auto-reconnect:', e.message);
+                }
+
                 for (const id of sessions.keys()) {
                     processarFilaDeAtaque(id);
                 }
@@ -4196,6 +4244,7 @@ module.exports = {
         instanciasEncerrandoManualmente.delete(instanceId);
 
         // 6. Inicia nova sessão — sem credenciais no Redis, Baileys vai gerar QR code
+        staleContador.delete(instanceId); // reconexão manual começa com contador zerado
         startInstance(instanceId, name);
     },
 
