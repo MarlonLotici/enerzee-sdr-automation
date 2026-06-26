@@ -7,13 +7,19 @@
 let makeWASocket, useMultiFileAuthState, DisconnectReason, delay, fetchLatestBaileysVersion, makeCacheableSignalKeyStore, downloadMediaMessage, generateMessageID, Browsers;
 
 // 🔇 Suprime logs internos do libsignal (chaves privadas efêmeras do Double Ratchet)
-// Esses blocos não são erros — são ciclos normais do Signal Protocol, mas expõem material criptográfico nos logs de produção
-const _origConsoleLog = console.log.bind(console);
-console.log = (...args) => {
-    const first = String(args[0] ?? '');
-    if (first.startsWith('Closing session:') || first.startsWith('  _chains:') ||
-        first.includes('privKey:') || first.includes('SessionEntry')) return;
-    _origConsoleLog(...args);
+// Esses blocos não são erros — são ciclos normais do Signal Protocol, mas expõem material criptográfico nos logs de produção.
+// Usamos process.stdout.write em vez de console.log porque o libsignal captura a referência de console.log
+// antes do nosso override (no momento do require), então só interceptamos na camada inferior.
+const _origStdoutWrite = process.stdout.write.bind(process.stdout);
+process.stdout.write = function(chunk, encoding, callback) {
+    const text = typeof chunk === 'string' ? chunk : chunk.toString('utf8');
+    if (text.startsWith('Closing session:') || text.includes('privKey:') ||
+        text.includes('SessionEntry') || text.startsWith('  _chains:')) {
+        if (typeof encoding === 'function') encoding();
+        else if (typeof callback === 'function') callback();
+        return true;
+    }
+    return _origStdoutWrite(chunk, encoding, callback);
 };
 
 const pino = require('pino');
@@ -1484,8 +1490,9 @@ async function startInstance(instanceId, instanceName, preloadedUserId = null) {
     sock.ev.on('messages.update', async (updates) => {
         for (const update of updates) {
             // status 3 = Visualizado/Visto (setinhas azuis)
-            if (update.update.status === 3 || update.update.status === 4) { 
+            if (update.update.status === 3 || update.update.status === 4) {
                 const jid = update.key.remoteJid;
+                if (!jid) continue;
                 const cleanJid = jid.split(':')[0].split('@')[0] + (jid.includes('@lid') ? '@lid' : '@s.whatsapp.net');
 
                 try {
@@ -1600,11 +1607,15 @@ function esperarAckServidor(sock, messageId, timeoutMs = 15000) {
 }
 
 async function enviarMensagemIA(sock, jid, content) {
-    const sentMsg = await sock.sendMessage(jid, content);
+    // Pré-gera o messageId e registra o listener ANTES de sendMessage para evitar a race condition
+    // onde o ACK chega entre o envio e o registro do listener (sessões muito rápidas / baixa latência).
+    const msgId = generateMessageID();
+    const ackPromise = esperarAckServidor(sock, msgId);
+    const sentMsg = await sock.sendMessage(jid, content, { messageId: msgId });
     if (sentMsg?.key?.id) {
         mensagensEnviadasPelaIA.add(sentMsg.key.id);
         mapaRastreioLID.set(sentMsg.key.id, jid);
-        await esperarAckServidor(sock, sentMsg.key.id);
+        await ackPromise;
     }
     return sentMsg;
 }
