@@ -1617,12 +1617,16 @@ function esperarAckServidor(sock, messageId, timeoutMs = 30000) {
     });
 }
 
-async function enviarMensagemIA(sock, jid, content) {
+async function enviarMensagemIA(sock, jid, content, instanceId = null) {
     const sentMsg = await sock.sendMessage(jid, content);
     if (sentMsg?.key?.id) {
         mensagensEnviadasPelaIA.add(sentMsg.key.id);
         mapaRastreioLID.set(sentMsg.key.id, jid);
         await esperarAckServidor(sock, sentMsg.key.id);
+        if (instanceId) {
+            sucessosPorSessao.set(instanceId, (sucessosPorSessao.get(instanceId) || 0) + 1);
+            staleContador.delete(instanceId);
+        }
     }
     return sentMsg;
 }
@@ -1883,7 +1887,7 @@ if (matchClima) updates.sentiment = matchClima[1].toLowerCase();
             await delay(tempoBase);
             // Salva no banco ANTES de enviar: se o job retentar, o anti-loop de 3 msgs bloqueia reenvio
             await db.saveMessage(lead.whatsapp_id, 'assistant', trecho, instanceId);
-            const enviado = await enviarMensagemIA(sock, remoteJid, { text: trecho });
+            const enviado = await enviarMensagemIA(sock, remoteJid, { text: trecho }, instanceId);
 
             if (enviado) {
                 console.log(`✅ [ENVIO ${i + 1}/${mensagensSplit.length}] [${cacheRegrasInstancia.get(instanceId)?.dados?.name || instanceId.slice(0,8)} → ${lead.name}] Balão entregue: "${trecho.substring(0, 80)}..."`);
@@ -2777,7 +2781,7 @@ const mensagensSplit = textoFinal.split('[QUEBRA]').map(t => t.trim()).filter(t 
                     await instancia.sock.sendPresenceUpdate('composing', cleanJid);
                     await delay(Math.max(4000, Math.min(tempoDigitacao, 10000))); 
                     
-                    const sentMsg = await enviarMensagemIA(instancia.sock, cleanJid, { text: trecho });
+                    const sentMsg = await enviarMensagemIA(instancia.sock, cleanJid, { text: trecho }, instanceId);
                     if (!sentMsg?.key?.id) {
                         throw new Error(`FALHA_SILENCIOSA: Envio sem confirmacao de key.id para ${cleanJid}`);
                     }
@@ -3062,7 +3066,7 @@ await instancia.sock.sendPresenceUpdate('composing', lf.whatsapp_id);
 const tempoDigitacao = Math.min(Math.max(msgFollowUp.length * 80, 4000), 9000);
 await delay(tempoDigitacao);
 
-await enviarMensagemIA(instancia.sock, lf.whatsapp_id, { text: msgFollowUp });
+await enviarMensagemIA(instancia.sock, lf.whatsapp_id, { text: msgFollowUp }, lf.instance_id);
 await db.saveMessage(lf.whatsapp_id, 'assistant', msgFollowUp, lf.instance_id);
 
 await supabase.from('leads').update({ followup_count: 1, last_contact_at: dataAgoraDate.toISOString() }).eq('id', lf.id);
@@ -3092,7 +3096,7 @@ await delay(jitterAntiBan);
                         console.log(`🔔 [FOLLOW-UP D3] [${chipNome} → ${lf.name}] Disparando...`);
                         await instancia.sock.sendPresenceUpdate('composing', lf.whatsapp_id);
                         await delay(Math.min(Math.max(msgD3.length * 80, 4000), 9000));
-                        await enviarMensagemIA(instancia.sock, lf.whatsapp_id, { text: msgD3 });
+                        await enviarMensagemIA(instancia.sock, lf.whatsapp_id, { text: msgD3 }, lf.instance_id);
                         await db.saveMessage(lf.whatsapp_id, 'assistant', msgD3, lf.instance_id);
                         await supabase.from('leads').update({ followup_count: 2, last_contact_at: dataAgoraDate.toISOString() }).eq('id', lf.id);
                         liberarSemaforoChip(lf.instance_id);
@@ -3168,7 +3172,7 @@ await instancia.sock.sendPresenceUpdate('composing', ll.whatsapp_id);
 const tempoDigitacaoLink = Math.min(Math.max(msgFollowUpLink.length * 80, 4000), 9000);
 await delay(tempoDigitacaoLink);
 
-await enviarMensagemIA(instancia.sock, ll.whatsapp_id, { text: msgFollowUpLink });
+await enviarMensagemIA(instancia.sock, ll.whatsapp_id, { text: msgFollowUpLink }, ll.instance_id);
 await db.saveMessage(ll.whatsapp_id, 'assistant', msgFollowUpLink, ll.instance_id);
 
 await supabase.from('leads').update({ last_followup_type: 'link_abandoned' }).eq('id', ll.id);
@@ -3257,7 +3261,7 @@ await delay(jitterAntiBan);
                     const msgLembrete = instanceData?.opening_templates?.lembrete_reuniao
                         || `${nome}, só passando pra lembrar da nossa conversa amanhã às ${horaF}. Até lá!`;
 
-                    await enviarMensagemIA(instanciaL.sock, lr.whatsapp_id, { text: msgLembrete });
+                    await enviarMensagemIA(instanciaL.sock, lr.whatsapp_id, { text: msgLembrete }, lr.instance_id);
                     await db.saveMessage(lr.whatsapp_id, 'assistant', msgLembrete, lr.instance_id);
                     await supabase.from('leads').update({ reminder_sent: new Date().toISOString() }).eq('id', lr.id);
                     console.log(`🔔 [LEMBRETE] Enviado para ${lr.name} — reunião às ${horaF}`);
@@ -3941,7 +3945,7 @@ async function verificarFollowUpsVencidos() {
                 await delay(2000 + Math.random() * 2000);
                 await instancia.sock.sendPresenceUpdate('paused', cleanJid);
 
-                await enviarMensagemIA(instancia.sock, cleanJid, { text: msgReativacao });
+                await enviarMensagemIA(instancia.sock, cleanJid, { text: msgReativacao }, lead.instance_id);
                 await db.saveMessage(cleanJid, 'assistant', msgReativacao, lead.instance_id);
 
                 console.log(`✅ [FOLLOW-UP] Mensagem de reativação enviada para ${lead.name}.`);
@@ -4095,7 +4099,7 @@ module.exports = {
                         const tplConfirmacao = instanceData?.opening_templates?.confirmacao_agendamento
                             || `Perfeito, ${primeiroNome}! Reunião confirmada pra ${dataFormatada} às ${horaFormatada}. Te vejo lá!`;
 
-                        await enviarMensagemIA(instancia.sock, lead.whatsapp_id, { text: tplConfirmacao });
+                        await enviarMensagemIA(instancia.sock, lead.whatsapp_id, { text: tplConfirmacao }, instanceId);
                         await db.saveMessage(lead.whatsapp_id, 'assistant', tplConfirmacao, instanceId);
                         console.log(`✅ [CONFIRMAÇÃO] Mensagem de confirmação enviada para ${lead.name}.`);
                     } else {
@@ -4132,7 +4136,7 @@ module.exports = {
             await instancia.sock.sendPresenceUpdate('paused', whatsappId).catch(() => {});
 
             // 3. Envia a mensagem usando a função interna para registrar na memória viva (evita eco do bot)
-            const sentMsg = await enviarMensagemIA(instancia.sock, whatsappId, { text: texto });
+            const sentMsg = await enviarMensagemIA(instancia.sock, whatsappId, { text: texto }, instanceId);
 
             if (sentMsg) {
                 // 4. Salva a mensagem no banco de dados para o histórico do front-end
@@ -4246,6 +4250,21 @@ module.exports = {
         // 6. Inicia nova sessão — sem credenciais no Redis, Baileys vai gerar QR code
         staleContador.delete(instanceId); // reconexão manual começa com contador zerado
         startInstance(instanceId, name);
+    },
+
+    acordarChips: () => {
+        let acordados = 0;
+        for (const [id, sessao] of sessions) {
+            if (!sessao.ready) continue;
+            cacheRegrasInstancia.delete(id); // força releitura do daily_limit do DB
+            if (!motoresEmExecucao.has(id)) {
+                console.log(`⚡ [ACORDA] Bypassing cold-start para ${sessao.name || id}`);
+                processarFilaDeAtaque(id);
+                acordados++;
+            }
+        }
+        console.log(`⚡ [ACORDA] ${acordados} chip(s) despertados imediatamente.`);
+        return { acordados };
     },
 
     getDiagnosticoChip: async (instanceId) => {

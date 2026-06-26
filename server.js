@@ -408,6 +408,13 @@ app.post('/webhook/calendly', express.json(), async (req, res) => {
 // ============================================================
 // 🔍 DIAGNÓSTICO DE CHIP FANTASMA
 // ============================================================
+app.post('/api/acordar-chips', autenticarMiddleware, async (req, res) => {
+    if (!sdr?.acordarChips)
+        return res.status(503).json({ error: 'Motor SDR não inicializado.' });
+    const resultado = sdr.acordarChips();
+    res.json({ ok: true, ...resultado });
+});
+
 app.get('/api/debug-chip/:instanceId', autenticarMiddleware, async (req, res) => {
     try {
         if (!sdr?.getDiagnosticoChip)
