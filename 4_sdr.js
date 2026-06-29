@@ -45,11 +45,30 @@ const { enviarAlerta, alertaHandoff, alertaCalendly, alertaChipOffline, cancelar
 const { getNicheData, inicializarCache } = require('./nicheCache');
 const instanciasEncerrandoManualmente = new Set(); // 🛑 Flag para silenciar alertas no Discord ao remover chip
 
-// Registrado uma única vez no nível do módulo — evita MaxListeners leak ao reconectar chips
-process.on('unhandledRejection', (reason) => {
+// ============================================================================
+// 🚨 CAMADA 1 — CAIXA PRETA: Crash handlers de nível Node.js
+// Captura qualquer erro não tratado antes que o processo morra.
+// ============================================================================
+process.on('uncaughtException', (err, origin) => {
+    const mem = process.memoryUsage();
+    console.error('🚨🚨🚨 [CRASH FATAL] Exceção não tratada derrubou o Node!');
+    console.error(`  origin: ${origin}`);
+    console.error(`  message: ${err?.message}`);
+    console.error(`  stack:\n${err?.stack}`);
+    console.error(`  heap: ${Math.round(mem.heapUsed / 1024 / 1024)}MB / ${Math.round(mem.heapTotal / 1024 / 1024)}MB`);
+    console.error(`  uptime: ${Math.round(process.uptime())}s`);
+    // Não fazemos process.exit() — deixamos o Railway decidir. O log acima aparece antes da morte.
+});
+
+process.on('unhandledRejection', (reason, promise) => {
     const msg = String(reason?.message || reason);
+    // Filtra ruído criptográfico normal do libsignal
     if (msg.includes('Bad MAC') || msg.includes('Failed to decrypt')) return;
-    console.error('⚠️ [UNHANDLED]:', reason);
+    const mem = process.memoryUsage();
+    console.error('🚨 [UNHANDLED REJECTION] Promessa rejeitada não tratada:');
+    console.error(`  message: ${msg}`);
+    if (reason?.stack) console.error(`  stack:\n${reason.stack}`);
+    console.error(`  heap: ${Math.round(mem.heapUsed / 1024 / 1024)}MB | uptime: ${Math.round(process.uptime())}s`);
 });
 
 const MAPA_CONCESSIONARIAS = {
@@ -4010,12 +4029,74 @@ module.exports = {
         // 🛑 BLINDAGEM MÁXIMA: Garante que o Vigia e o Ouvinte sejam criados UMA ÚNICA VEZ
         if (!loopIniciado) {
             loopIniciado = true;
-            loopRecuperacaoConversas(); 
+            loopRecuperacaoConversas();
             loopAuditor();
+
+            // ============================================================================
+            // 🩺 CAMADA 2 — HEARTBEAT DE SAÚDE: snapshot do processo a cada 5 minutos
+            // Permite detectar quando o servidor está vivo mas chips estão todos mortos.
+            // ============================================================================
+            setInterval(() => {
+                const mem = process.memoryUsage();
+                const totalSessions = sessions.size;
+                const prontos = [...sessions.values()].filter(s => s.ready).length;
+                const ligando = instanciasLigando.size;
+                const motores = motoresEmExecucao.size;
+                const heapMB = Math.round(mem.heapUsed / 1024 / 1024);
+                const heapTotalMB = Math.round(mem.heapTotal / 1024 / 1024);
+                const rss = Math.round(mem.rss / 1024 / 1024);
+                const uptime = Math.round(process.uptime() / 60);
+
+                console.log(`💓 [HEARTBEAT] uptime=${uptime}min | heap=${heapMB}/${heapTotalMB}MB rss=${rss}MB`);
+                console.log(`💓 [HEARTBEAT] chips: total=${totalSessions} prontos=${prontos} ligando=${ligando} motores=${motores}`);
+
+                // Snapshot por chip
+                for (const [id, sess] of sessions) {
+                    const nome = sess.name || id.slice(0, 8);
+                    const estado = sess.ready ? 'PRONTO' : 'OFFLINE';
+                    const motor = motoresEmExecucao.has(id) ? 'MOTOR_ON' : 'MOTOR_OFF';
+                    const stale = staleContador.get(id) || 0;
+                    const sucessos = sucessosPorSessao.get(id) || 0;
+                    const tentativas = tentativasReconexao.get(id) || 0;
+                    console.log(`   🔌 ${nome} | ${estado} | ${motor} | stale=${stale} | sucessos=${sucessos} | reconexoes=${tentativas}`);
+                }
+
+                // Alerta se heap > 80%
+                if (heapMB / heapTotalMB > 0.8) {
+                    console.error(`⚠️ [HEARTBEAT] ALERTA: heap em ${Math.round(heapMB / heapTotalMB * 100)}% — risco de OOM`);
+                }
+                // Alerta silencioso: processo vivo mas nenhum chip pronto
+                if (totalSessions > 0 && prontos === 0 && ligando === 0) {
+                    console.error(`⚠️ [HEARTBEAT] ALERTA: ${totalSessions} chips no Map mas NENHUM pronto e nenhum conectando — sistema morto em silêncio!`);
+                }
+            }, 5 * 60 * 1000);
             
             // ⏰ VIGIA NOTURNO: Varredura de segurança a cada 30 minutos
             setInterval(async () => {
+                // ============================================================================
+                // 🔭 CAMADA 3 — SNAPSHOT DO VIGIA: estado completo de todos os chips
+                // ============================================================================
                 console.log("⏰ [VIGIA] Varredura de segurança ativada...");
+                const mem = process.memoryUsage();
+                console.log(`🔭 [VIGIA-SNAP] uptime=${Math.round(process.uptime()/60)}min | heap=${Math.round(mem.heapUsed/1024/1024)}MB | rss=${Math.round(mem.rss/1024/1024)}MB`);
+                try {
+                    const instsDB = await db.getActiveInstances();
+                    for (const inst of instsDB) {
+                        const sess = sessions.get(inst.id);
+                        const pronto = sess?.ready === true;
+                        const wsAberto = sess?.sock?.ws?.isOpen === true;
+                        const motor = motoresEmExecucao.has(inst.id);
+                        const ligando = instanciasLigando.has(inst.id);
+                        const stale = staleContador.get(inst.id) || 0;
+                        const suc = sucessosPorSessao.get(inst.id) || 0;
+                        const tent = tentativasReconexao.get(inst.id) || 0;
+                        const icone = pronto ? '✅' : (ligando ? '⏳' : '❌');
+                        console.log(`${icone} [VIGIA-SNAP] ${inst.name} | pronto=${pronto} ws=${wsAberto} motor=${motor} ligando=${ligando} stale=${stale} suc=${suc} recon=${tent}`);
+                    }
+                } catch (e) {
+                    console.error(`❌ [VIGIA-SNAP] Erro ao gerar snapshot:`, e.message);
+                }
+
                 await redistribuirLeadsOrfaos();
 
                 // Auto-reconecta chips DISCONNECTED que estão no DB mas sem sessão ativa
