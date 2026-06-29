@@ -4066,9 +4066,9 @@ module.exports = {
                     console.log(`   🔌 ${nome} | ${estado} | ${motor} | stale=${stale} | sucessos=${sucessos} | reconexoes=${tentativas}`);
                 }
 
-                // Alerta se heap > 80%
-                if (heapMB / heapTotalMB > 0.8) {
-                    console.error(`⚠️ [HEARTBEAT] ALERTA: heap em ${Math.round(heapMB / heapTotalMB * 100)}% — risco de OOM`);
+                // Alerta se heap absoluto > 400MB (V8 pode crescer heapTotal até 512MB — % relativo é enganoso)
+                if (heapMB > 400) {
+                    console.error(`⚠️ [HEARTBEAT] ALERTA: heap em ${heapMB}MB/${heapTotalMB}MB — risco de OOM`);
                 }
                 // Alerta silencioso: processo vivo mas nenhum chip pronto
                 if (totalSessions > 0 && prontos === 0 && ligando === 0) {
