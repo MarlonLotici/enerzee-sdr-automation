@@ -1464,6 +1464,7 @@ async function startInstance(instanceId, instanceName, preloadedUserId = null) {
             // Timeout de conexão → reconecta com backoff
             if (reason === DisconnectReason.timedOut || reason === DisconnectReason.connectionLost) {
                 const backoffMs = Math.min(5000 * (2 ** (instanciasLigando.size || 1)), 60000);
+                console.warn(`🔬 [CONN-DIAG] ${instanceName} | reason=${reason} | tentativas=${tentativasReconexao.get(instanceId) || 0} | ligando=${instanciasLigando.size} | backoff=${backoffMs}ms`);
                 await db.updateInstanceStatus(instanceId, 'DISCONNECTED');
                 tentarReconexao(backoffMs, 'timeout/connection lost');
                 return;
@@ -2846,6 +2847,7 @@ const mensagensSplit = textoFinal.split('[QUEBRA]').map(t => t.trim()).filter(t 
                 // BIFURCAÇÃO: distingue sessão stale real de falha isolada no lead.
                 if (errInner.message?.includes('ACK_TIMEOUT')) {
                     const sucessosNestaSessao = sucessosPorSessao.get(instanceId) || 0;
+                    console.warn(`🔬 [ACK-DIAG] ${instanceId.slice(0,8)} | sucessos=${sucessosNestaSessao} | stale=${staleContador.get(instanceId) || 0} | lead="${currentLead?.name}" | jid=${currentLead?.whatsapp_id}`);
 
                     if (sucessosNestaSessao > 0) {
                         // Sessão tem histórico de sucesso → problema é o lead específico (número sem WA,
