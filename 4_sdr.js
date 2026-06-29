@@ -4342,7 +4342,9 @@ module.exports = {
 
         // 6. Inicia nova sessão — sem credenciais no Redis, Baileys vai gerar QR code
         staleContador.delete(instanceId); // reconexão manual começa com contador zerado
-        startInstance(instanceId, name);
+        startInstance(instanceId, name).catch(err =>
+            console.error(`❌ [RECONEXÃO MANUAL] Falha ao iniciar chip "${name}" (proxy/sessão): ${err.message}. Tente reconectar novamente.`)
+        );
     },
 
     acordarChips: () => {
