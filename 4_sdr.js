@@ -1289,10 +1289,10 @@ async function startInstance(instanceId, instanceName, preloadedUserId = null) {
         if (instanceUserId) console.log(`⚡ [CACHE] userId de ${instanceName} resolvido via Redis.`);
     }
 
-    // Nível 3: Supabase (fallback — busca user_id + created_at para cold-start delay)
+    // Nível 3: Supabase (fallback — busca user_id + created_at + daily_limit para cold-start delay)
     const { data: instData } = await supabase
         .from('instances')
-        .select('user_id, created_at')
+        .select('user_id, created_at, daily_limit')
         .eq('id', instanceId)
         .maybeSingle();
 
