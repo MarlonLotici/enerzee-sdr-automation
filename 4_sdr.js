@@ -1480,10 +1480,11 @@ async function startInstance(instanceId, instanceName, preloadedUserId = null) {
                 return;
             }
 
-            // Timeout de conexão → reconecta com backoff
+            // Timeout de conexão → reconecta com backoff por tentativa + jitter (desincroniza chips)
             if (reason === DisconnectReason.timedOut || reason === DisconnectReason.connectionLost) {
-                const backoffMs = Math.min(5000 * (2 ** (instanciasLigando.size || 1)), 60000);
-                console.warn(`🔬 [CONN-DIAG] ${instanceName} | reason=${reason} | tentativas=${tentativasReconexao.get(instanceId) || 0} | ligando=${instanciasLigando.size} | backoff=${backoffMs}ms`);
+                const tentativasAtuais = (tentativasReconexao.get(instanceId) || 0) + 1;
+                const backoffMs = Math.min(5000 * (tentativasAtuais ** 2) + Math.floor(Math.random() * 5000), 60000);
+                console.warn(`🔬 [CONN-DIAG] ${instanceName} | reason=${reason} | tentativas=${tentativasAtuais} | ligando=${instanciasLigando.size} | backoff=${backoffMs}ms`);
                 await db.updateInstanceStatus(instanceId, 'DISCONNECTED');
                 tentarReconexao(backoffMs, 'timeout/connection lost');
                 return;
@@ -2892,15 +2893,17 @@ const mensagensSplit = textoFinal.split('[QUEBRA]').map(t => t.trim()).filter(t 
                         liberarSemaforoSemCooldown(instanceId);
                     }
 
-                    if (stalesFalhas < 2) {
-                        console.warn(`⏱️ [ACK TIMEOUT - SOFT] ${instanceId} — falha stale ${stalesFalhas}/2. Reiniciando socket sem apagar credenciais...`);
+                    // Chips virgens (sem histórico outbound) recebem 4 chances; chips com histórico recebem 2
+                    const limiteStale = (sucessosPorSessao.get(instanceId) || 0) === 0 ? 4 : 2;
+                    if (stalesFalhas < limiteStale) {
+                        console.warn(`⏱️ [ACK TIMEOUT - SOFT] ${instanceId} — falha stale ${stalesFalhas}/${limiteStale}. Reiniciando socket sem apagar credenciais...`);
                         const _instAtual = sessions.get(instanceId);
                         if (_instAtual?.sock) { try { _instAtual.sock.end(); } catch(_) {} }
                         break;
                     }
 
-                    // 2ª falha consecutiva → wipe completo
-                    console.error(`⏱️ [ACK TIMEOUT - HARD] ${instanceId} — ${stalesFalhas} falhas stale consecutivas. Limpando credenciais e pedindo novo QR...`);
+                    // Limite atingido → wipe completo
+                    console.error(`⏱️ [ACK TIMEOUT - HARD] ${instanceId} — ${stalesFalhas} falhas stale (limite=${limiteStale}). Limpando credenciais e pedindo novo QR...`);
                     staleContador.delete(instanceId);
                     await clearRedisSession(redisConnection, instanceId).catch(() => {});
                     await supabase.from('whatsapp_sessions').delete().eq('id', instanceId);
@@ -4023,9 +4026,11 @@ module.exports = {
                 instanciasLigando.delete(i.id);
                 console.error(`🚫 [MANAGER] Chip ${i.name} abortado na inicialização: ${err.message}. Continuando com os demais.`);
             }
-            await delay(3000);
+            const arranqueDelay = Math.floor(Math.random() * 5000) + 10000; // 10–15s por chip — anti-burst de deploy
+            console.log(`⏳ [ARRANQUE] Aguardando ${Math.round(arranqueDelay / 1000)}s antes do próximo chip...`);
+            await delay(arranqueDelay);
         }
-        
+
         // 🛑 BLINDAGEM MÁXIMA: Garante que o Vigia e o Ouvinte sejam criados UMA ÚNICA VEZ
         if (!loopIniciado) {
             loopIniciado = true;
@@ -4295,8 +4300,13 @@ module.exports = {
 
         if (data) {
             await saveOwnerToRedis(redisConnection, data.id, userId);
-            await startInstance(data.id, data.name, userId);
-            processarFilaDeAtaque(data.id);
+            try {
+                await startInstance(data.id, data.name, userId);
+                processarFilaDeAtaque(data.id);
+            } catch (err) {
+                console.error(`❌ [INSTÂNCIA] Falha ao iniciar chip "${n}" (proxy/sessão): ${err.message}. Chip criado no DB — reconecte manualmente.`);
+                instanciasLigando.delete(data.id);
+            }
         }
         return data;
     },
