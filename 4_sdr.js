@@ -442,10 +442,10 @@ function getModoOperacional(instanceId = null) {
         return 'DESCANSO';
     }
 
-    // 📅 JANELA DE ATAQUE (segunda a sexta) — 09:00 às 20:00, sem interrupções
+    // 📅 JANELA DE ATAQUE (segunda a sexta) — 09:00 às 21:00, sem interrupções
     // Follow-ups D1/D3 são gerenciados pelo worker de mensagens (BullMQ), não por esta janela.
     const t = agora.horas * 60 + agora.minutos;
-    if (t < 540 || t >= 1200) return 'DESCANSO'; // antes de 09:00 ou 20:00+
+    if (t < 540 || t >= 1260) return 'DESCANSO'; // antes de 09:00 ou 21:00+
     return 'SAUDACAO';
 }
 
