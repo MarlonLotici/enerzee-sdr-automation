@@ -2913,13 +2913,13 @@ const mensagensSplit = textoFinal.split('[QUEBRA]').map(t => t.trim()).filter(t 
 
                         if (falhasEsteLead >= 2) {
                             // Mesmo lead falhou 2x nesta sessão — quebra o loop marcando como inválido
-                            console.warn(`🔁 [ACK-LOOP QUEBRADO] Lead "${currentLead.name}" causou ACK_TIMEOUT ${falhasEsteLead}x em ${instanceData?.name || instanceId.slice(0,8)} sem nenhum sucesso. Marcando inválido para evitar loop infinito.`);
+                            console.warn(`🔁 [ACK-LOOP QUEBRADO] Lead "${currentLead.name}" causou ACK_TIMEOUT ${falhasEsteLead}x em ${instanceId.slice(0,8)} sem nenhum sucesso. Marcando inválido para evitar loop infinito.`);
                             await supabase.from('leads').update({ status: 'invalid_number' }).eq('id', currentLead.id);
                             leadsEmProcessamento.delete(currentLead.id);
                             falhasLeadPorSessao.delete(chaveLeadSessao);
                             liberarSemaforoSemCooldown(instanceId);
                         } else {
-                            console.warn(`🔁 [ACK-LOOP] Lead "${currentLead.name}" falhou 1ª vez em ${instanceData?.name || instanceId.slice(0,8)} (stale). Retornando à fila — será marcado inválido na 2ª falha.`);
+                            console.warn(`🔁 [ACK-LOOP] Lead "${currentLead.name}" falhou 1ª vez em ${instanceId.slice(0,8)} (stale). Retornando à fila — será marcado inválido na 2ª falha.`);
                             await supabase.from('leads').update({ status: 'new' }).eq('id', currentLead.id).eq('status', 'reservado');
                             leadsEmProcessamento.delete(currentLead.id);
                             liberarSemaforoSemCooldown(instanceId);
