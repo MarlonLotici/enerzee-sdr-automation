@@ -771,9 +771,11 @@ async function getRegrasEmCache(instanceId) {
     const cache = cacheRegrasInstancia.get(instanceId);
 
     if (cache && (agora - cache.timestamp < 1800000)) {
+        console.log(`📦 [CACHE-HIT] ${instanceId.slice(0,8)} — status="${cache.dados?.whatsapp_status}" idade=${Math.round((agora - cache.timestamp)/1000)}s`);
         return cache.dados;
     }
 
+    console.log(`🔍 [CACHE-MISS] ${instanceId.slice(0,8)} — buscando regras do DB`);
     const regrasDoBanco = await db.getInstanceRules(instanceId);
 
     // 🛡️ Blindagem: se o db.getInstanceRules não trouxer user_id, busca e injeta
@@ -1387,6 +1389,7 @@ async function startInstance(instanceId, instanceName, preloadedUserId = null) {
             for (const key of falhasLeadPorSessao.keys()) { // limpa contadores de falha por lead desta instância
                 if (key.startsWith(instanceId + ':')) falhasLeadPorSessao.delete(key);
             }
+            cacheRegrasInstancia.delete(instanceId); // força releitura do DB no próximo ciclo — garante whatsapp_status=CONNECTED após reconexão
             // Encerra socket fantasma: se havia um socket diferente registrado (ex: QR re-scan sem Remove+Add),
             // fecha o antigo antes de registrar o novo — impede que mensagens saiam pelo socket morto
             const sessaoAnterior = sessions.get(instanceId);
@@ -1399,9 +1402,9 @@ async function startInstance(instanceId, instanceName, preloadedUserId = null) {
             // Emit imediato ao frontend — não depende do DB para não bloquear a UI
             if (ioSocket && instanceUserId) ioSocket.to(`user:${instanceUserId}`).emit('whatsapp_status', { status: 'CONNECTED', instanceId });
             // DB update separado: falha silenciosa não afeta o emit nem o motor
-            db.updateInstanceStatus(instanceId, 'CONNECTED').catch(e =>
-                console.error(`⚠️ [STATUS-DB] Falha ao gravar CONNECTED para ${instanceName}: ${e.message}`)
-            );
+            db.updateInstanceStatus(instanceId, 'CONNECTED')
+                .then(() => console.log(`✅ [STATUS-DB] ${instanceName} gravado como CONNECTED no banco`))
+                .catch(e => console.error(`⚠️ [STATUS-DB] Falha ao gravar CONNECTED para ${instanceName}: ${e.message}`));
             // Realoca leads órfãos do mesmo tenant para este chip
             setTimeout(() => redistribuirLeadsOrfaos(), 3000);
             // Liga o motor de ataque deste chip se ainda não estiver rodando.
@@ -2515,6 +2518,7 @@ async function processarFilaDeAtaque(instanceId) {
                     console.log(`🔕 [MOTOR SILENCIADO] Chip ${instanceId} ignorado. DB="${instanceData?.whatsapp_status}" | mem.ready=${sessaoMem?.ready} | mem.ws=${sessaoMem?.sock?.ws?.isOpen} — ${sessaoMem?.ready ? 'cache desatualizado (DB atrás da memória)' : 'chip genuinamente offline'}`);
                     break; // 🛑 HÍBRIDO: Morre aqui se não estiver conectado
                 }
+                console.log(`⚡ [MOTOR ATIVO] Chip ${instanceData.name || instanceId.slice(0,8)} — status CONNECTED confirmado, iniciando ciclo de disparo`);
 
                 chipNovo = isChipNovo(instanceData);
                 const limiteAdaptativo = calcularLimiteDiario(instanceData);
