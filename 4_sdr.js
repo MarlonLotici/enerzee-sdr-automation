@@ -251,6 +251,7 @@ const semaforoChips = new Map(); // chipId → { ocupado: boolean, ultimoDisparo
 global.chipsAquecidosHoje = global.chipsAquecidosHoje || new Set(); // cold-start guard por chip, por processo
 const sucessosPorSessao = new Map(); // instanceId → nº de envios com SERVER_ACK confirmado nesta sessão WA ativa
 const staleContador = new Map(); // instanceId → falhas ACK_TIMEOUT stale consecutivas (0 confirms); reseta no SUCESSO REAL ou hard restart
+const ultimoHardRestart = new Map(); // instanceId → timestamp do último HARD restart; bloqueia reconexão por 5min
 
 // Retorna delay humano randômico entre disparos.
 // Chip novo: 10-18 min — janela maior diminui a cadência detectável pelo WA.
@@ -1381,6 +1382,7 @@ async function startInstance(instanceId, instanceName, preloadedUserId = null) {
             console.log(`✅ [SDR] Canal Pronto e Estável: ${instanceName}`);
             cancelarDebounceChip(instanceId); // Chip voltou — cancela alerta de desconexão se ainda no debounce
             tentativasReconexao.delete(instanceId); // Fase 4: conexão bem-sucedida — zera o contador
+            staleContador.delete(instanceId); // sessão nova = stale zerado; contador anterior de sessão morta não conta
             // Encerra socket fantasma: se havia um socket diferente registrado (ex: QR re-scan sem Remove+Add),
             // fecha o antigo antes de registrar o novo — impede que mensagens saiam pelo socket morto
             const sessaoAnterior = sessions.get(instanceId);
@@ -1457,10 +1459,17 @@ async function startInstance(instanceId, instanceName, preloadedUserId = null) {
                     return;
                 }
                 tentativasReconexao.set(instanceId, tentativas);
-                console.log(`🔄 [RECONEXÃO] ${instanceName} — tentativa ${tentativas}/10 (${motivo}) em ${delayMs/1000}s...`);
+                // Após HARD restart, WA fica suspeito: aguarda mínimo 5min antes de reconectar
+                const msDesdeHard = Date.now() - (ultimoHardRestart.get(instanceId) || 0);
+                const COOLDOWN_HARD = 5 * 60 * 1000;
+                const delayFinal = msDesdeHard < COOLDOWN_HARD
+                    ? Math.max(delayMs, COOLDOWN_HARD - msDesdeHard)
+                    : delayMs;
+                if (delayFinal > delayMs) console.warn(`⏳ [HARD-COOLDOWN] ${instanceName} — aguardando ${Math.round(delayFinal/1000)}s para não estressar o WA após wipe de sessão.`);
+                console.log(`🔄 [RECONEXÃO] ${instanceName} — tentativa ${tentativas}/10 (${motivo}) em ${Math.round(delayFinal/1000)}s...`);
                 setTimeout(() => startInstance(instanceId, instanceName).catch(e =>
                     console.error(`❌ [RECONEXÃO] startInstance falhou para ${instanceName}: ${e.message}`)
-                ), delayMs);
+                ), delayFinal);
             };
 
             // 🔴 Sessão corrompida localmente (Bad Session)
@@ -1616,7 +1625,7 @@ async function startInstance(instanceId, instanceName, preloadedUserId = null) {
 // Aguarda SERVER_ACK (status ≥ 2) do WA server para a mensagem específica.
 // Se não chegar em timeoutMs, lança ACK_TIMEOUT — indica sessão stale.
 // ACK chega em 1-3s em sessões saudáveis; ausência = chip conectado TCP mas WA recusando.
-function esperarAckServidor(sock, messageId, timeoutMs = 30000) {
+function esperarAckServidor(sock, messageId, timeoutMs = 45000) {
     return new Promise((resolve, reject) => {
         const timer = setTimeout(() => {
             sock.ev.off('messages.update', handler);
@@ -2905,6 +2914,8 @@ const mensagensSplit = textoFinal.split('[QUEBRA]').map(t => t.trim()).filter(t 
                     // Limite atingido → wipe completo
                     console.error(`⏱️ [ACK TIMEOUT - HARD] ${instanceId} — ${stalesFalhas} falhas stale (limite=${limiteStale}). Limpando credenciais e pedindo novo QR...`);
                     staleContador.delete(instanceId);
+                    sucessosPorSessao.delete(instanceId); // nova sessão começa do zero
+                    ultimoHardRestart.set(instanceId, Date.now()); // bloqueia reconexão por 5min
                     await clearRedisSession(redisConnection, instanceId).catch(() => {});
                     await supabase.from('whatsapp_sessions').delete().eq('id', instanceId);
                     await supabase.from('whatsapp_keys').delete().eq('instance_id', instanceId);
@@ -3821,7 +3832,10 @@ let loopIniciado = false;
 // Roda a cada varredura do VIGIA. Move leads 'new' de chips desconectados
 // para chips conectados estritamente da mesma conta (user_id).
 // ============================================================================
+let ultimaRedistribuicao = 0;
 async function redistribuirLeadsOrfaos() {
+    if (Date.now() - ultimaRedistribuicao < 30000) return; // debounce: no máximo 1 execução a cada 30s
+    ultimaRedistribuicao = Date.now();
     try {
         // 1. Busca instâncias trazendo também o DONO (user_id)
         const { data: instancias } = await supabase
@@ -4127,7 +4141,7 @@ module.exports = {
                 for (const id of sessions.keys()) {
                     processarFilaDeAtaque(id);
                 }
-            }, 30 * 60 * 1000);
+            }, 5 * 60 * 1000);
 
             // 📅 DESPERTADOR DE FOLLOW-UPS: verifica a cada 1 minuto
             setInterval(verificarFollowUpsVencidos, 60 * 1000);
