@@ -33,7 +33,7 @@
     "@radix-ui/react-tooltip": "^1.2.8",
     "@supabase/supabase-js": "^2.99.2",
     "@vitejs/plugin-react": "^4.0.0",
-    "@whiskeysockets/baileys": "^7.0.0-rc.9",
+    "@whiskeysockets/baileys": "7.0.0-rc13",
     "@wppconnect-team/wppconnect": "^1.35.2",
     "axios": "^1.13.6",
     "bull": "^4.16.5",
