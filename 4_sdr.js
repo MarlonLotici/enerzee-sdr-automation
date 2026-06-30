@@ -252,6 +252,7 @@ global.chipsAquecidosHoje = global.chipsAquecidosHoje || new Set(); // cold-star
 const sucessosPorSessao = new Map(); // instanceId → nº de envios com SERVER_ACK confirmado nesta sessão WA ativa
 const staleContador = new Map(); // instanceId → falhas ACK_TIMEOUT stale consecutivas (0 confirms); reseta no SUCESSO REAL ou hard restart
 const ultimoHardRestart = new Map(); // instanceId → timestamp do último HARD restart; bloqueia reconexão por 5min
+const falhasLeadPorSessao = new Map(); // `${instanceId}:${leadId}` → nº de ACK_TIMEOUT neste lead nesta sessão; quebra loop de requeue
 
 // Retorna delay humano randômico entre disparos.
 // Chip novo: 10-18 min — janela maior diminui a cadência detectável pelo WA.
@@ -1383,6 +1384,9 @@ async function startInstance(instanceId, instanceName, preloadedUserId = null) {
             cancelarDebounceChip(instanceId); // Chip voltou — cancela alerta de desconexão se ainda no debounce
             tentativasReconexao.delete(instanceId); // Fase 4: conexão bem-sucedida — zera o contador
             staleContador.delete(instanceId); // sessão nova = stale zerado; contador anterior de sessão morta não conta
+            for (const key of falhasLeadPorSessao.keys()) { // limpa contadores de falha por lead desta instância
+                if (key.startsWith(instanceId + ':')) falhasLeadPorSessao.delete(key);
+            }
             // Encerra socket fantasma: se havia um socket diferente registrado (ex: QR re-scan sem Remove+Add),
             // fecha o antigo antes de registrar o novo — impede que mensagens saiam pelo socket morto
             const sessaoAnterior = sessions.get(instanceId);
@@ -2507,7 +2511,8 @@ async function processarFilaDeAtaque(instanceId) {
 
                 const instanceData = await getRegrasEmCache(instanceId);
                 if (!instanceData || instanceData.whatsapp_status !== 'CONNECTED') {
-                    console.log(`🔕 [MOTOR SILENCIADO] Chip ${instanceId} ignorado. Status: ${instanceData?.whatsapp_status}`);
+                    const sessaoMem = sessions.get(instanceId);
+                    console.log(`🔕 [MOTOR SILENCIADO] Chip ${instanceId} ignorado. DB="${instanceData?.whatsapp_status}" | mem.ready=${sessaoMem?.ready} | mem.ws=${sessaoMem?.sock?.ws?.isOpen} — ${sessaoMem?.ready ? 'cache desatualizado (DB atrás da memória)' : 'chip genuinamente offline'}`);
                     break; // 🛑 HÍBRIDO: Morre aqui se não estiver conectado
                 }
 
@@ -2565,9 +2570,10 @@ currentLead = lead;
 console.log(`🔒 [RESERVA] Lead ${lead.name} travado atomicamente para chip ${config.nome}`);
 
                 // 🛡️ 2. TRAVA NA MEMÓRIA
-                if (leadsEmProcessamento.has(lead.id)) { 
-                    await delay(5000); 
-                    continue; 
+                if (leadsEmProcessamento.has(lead.id)) {
+                    console.log(`🔐 [TRAVA-LEAD] Lead "${lead.name}" já está em processamento por outro ciclo. Aguardando 5s...`);
+                    await delay(5000);
+                    continue;
                 }
                 leadsEmProcessamento.add(lead.id);
 
@@ -2897,9 +2903,23 @@ const mensagensSplit = textoFinal.split('[QUEBRA]').map(t => t.trim()).filter(t 
                     staleContador.set(instanceId, stalesFalhas);
 
                     if (currentLead) {
-                        await supabase.from('leads').update({ status: 'new' }).eq('id', currentLead.id).eq('status', 'reservado');
-                        leadsEmProcessamento.delete(currentLead.id);
-                        liberarSemaforoSemCooldown(instanceId);
+                        const chaveLeadSessao = `${instanceId}:${currentLead.id}`;
+                        const falhasEsteLead = (falhasLeadPorSessao.get(chaveLeadSessao) || 0) + 1;
+                        falhasLeadPorSessao.set(chaveLeadSessao, falhasEsteLead);
+
+                        if (falhasEsteLead >= 2) {
+                            // Mesmo lead falhou 2x nesta sessão — quebra o loop marcando como inválido
+                            console.warn(`🔁 [ACK-LOOP QUEBRADO] Lead "${currentLead.name}" causou ACK_TIMEOUT ${falhasEsteLead}x em ${config.nome} sem nenhum sucesso. Marcando inválido para evitar loop infinito.`);
+                            await supabase.from('leads').update({ status: 'invalid_number' }).eq('id', currentLead.id);
+                            leadsEmProcessamento.delete(currentLead.id);
+                            falhasLeadPorSessao.delete(chaveLeadSessao);
+                            liberarSemaforoSemCooldown(instanceId);
+                        } else {
+                            console.warn(`🔁 [ACK-LOOP] Lead "${currentLead.name}" falhou 1ª vez em ${config.nome} (stale). Retornando à fila — será marcado inválido na 2ª falha.`);
+                            await supabase.from('leads').update({ status: 'new' }).eq('id', currentLead.id).eq('status', 'reservado');
+                            leadsEmProcessamento.delete(currentLead.id);
+                            liberarSemaforoSemCooldown(instanceId);
+                        }
                     }
 
                     // Chips virgens (sem histórico outbound) recebem 4 chances; chips com histórico recebem 2
