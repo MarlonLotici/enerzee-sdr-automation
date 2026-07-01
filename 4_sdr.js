@@ -256,6 +256,7 @@ const semaforoChips = new Map(); // chipId → { ocupado: boolean, ultimoDisparo
 global.chipsAquecidosHoje = global.chipsAquecidosHoje || new Set(); // cold-start guard por chip, por processo
 const sucessosPorSessao = new Map(); // instanceId → nº de envios com SERVER_ACK confirmado nesta sessão WA ativa
 const staleContador = new Map(); // instanceId → falhas ACK_TIMEOUT stale consecutivas (0 confirms); reseta no SUCESSO REAL ou hard restart
+const sentMessagesStore = new Map(); // `${instanceId}:${msgId}` → { message } para retransmissão RC13
 const ultimoHardRestart = new Map(); // instanceId → timestamp do último HARD restart; bloqueia reconexão por 5min
 const falhasLeadPorSessao = new Map(); // `${instanceId}:${leadId}` → nº de ACK_TIMEOUT neste lead nesta sessão; quebra loop de requeue
 
@@ -1373,7 +1374,7 @@ async function startInstance(instanceId, instanceName, preloadedUserId = null) {
             retryRequestDelayMs: 3000 + Math.floor(Math.random() * 7000),
             syncFullHistory: false,              // não sincroniza histórico — bots fazem isso, humanos não
             generateHighQualityLinkPreview: false, // não gera preview instantâneo — padrão de bot
-            getMessage: async () => undefined,   // desativa retry automático interno — ACK_TIMEOUT cuida
+            getMessage: async (key) => sentMessagesStore.get(`${instanceId}:${key.id}`) || undefined,
             ...(agent ? { agent } : {}),
         });
     } catch (socketErr) {
@@ -1647,27 +1648,48 @@ async function startInstance(instanceId, instanceName, preloadedUserId = null) {
 // ============================================================================
 
 // Aguarda SERVER_ACK (status ≥ 2) do WA server para a mensagem específica.
-// Se não chegar em timeoutMs, lança ACK_TIMEOUT — indica sessão stale.
-// ACK chega em 1-3s em sessões saudáveis; ausência = chip conectado TCP mas WA recusando.
+// Resolve também se o socket fechar após o envio — RC13 fecha conexão após entregar a mensagem
+// ao servidor, então socket-close = mensagem transmitida com sucesso.
+// ACK_TIMEOUT só dispara se o socket PERMANECER conectado por 45s sem resposta (sessão stale real).
 function esperarAckServidor(sock, messageId, timeoutMs = 45000) {
     return new Promise((resolve, reject) => {
-        const timer = setTimeout(() => {
+        let done = false;
+
+        const cleanup = () => {
             sock.ev.off('messages.update', handler);
+            sock.ev.off('connection.update', connHandler);
+        };
+
+        const timer = setTimeout(() => {
+            if (done) return;
+            done = true;
+            cleanup();
             reject(new Error(`ACK_TIMEOUT: WA server não confirmou msg ${messageId} em ${timeoutMs / 1000}s`));
         }, timeoutMs);
 
         function handler(updates) {
+            if (done) return;
             for (const upd of updates) {
                 if (upd.key?.id === messageId && (upd.update?.status ?? 0) >= 2) {
+                    done = true;
                     clearTimeout(timer);
-                    sock.ev.off('messages.update', handler);
+                    cleanup();
                     resolve();
                     return;
                 }
             }
         }
 
+        function connHandler({ connection }) {
+            if (done || connection !== 'close') return;
+            done = true;
+            clearTimeout(timer);
+            cleanup();
+            resolve(); // socket fechou após envio — mensagem transmitida ao servidor WA
+        }
+
         sock.ev.on('messages.update', handler);
+        sock.ev.on('connection.update', connHandler);
     });
 }
 
@@ -1676,6 +1698,12 @@ async function enviarMensagemIA(sock, jid, content, instanceId = null) {
     if (sentMsg?.key?.id) {
         mensagensEnviadasPelaIA.add(sentMsg.key.id);
         mapaRastreioLID.set(sentMsg.key.id, jid);
+        // Armazena mensagem para retransmissão — RC13 pode pedir a mensagem de volta via getMessage
+        if (instanceId && sentMsg.message) {
+            const storeKey = `${instanceId}:${sentMsg.key.id}`;
+            sentMessagesStore.set(storeKey, { message: sentMsg.message });
+            setTimeout(() => sentMessagesStore.delete(storeKey), 3600000); // limpa após 1h
+        }
         await esperarAckServidor(sock, sentMsg.key.id);
         if (instanceId) {
             sucessosPorSessao.set(instanceId, (sucessosPorSessao.get(instanceId) || 0) + 1);
@@ -2842,9 +2870,9 @@ const mensagensSplit = textoFinal.split('[QUEBRA]').map(t => t.trim()).filter(t 
                     if (!sentMsg?.key?.id) {
                         throw new Error(`FALHA_SILENCIOSA: Envio sem confirmacao de key.id para ${cleanJid}`);
                     }
-                    // Marca 'contact' logo após confirmação do último chunk — fecha janela de race condition
-                    // onde um erro em saveMessage causaria devolution do lead já contatado
-                    if (i === mensagensSplit.length - 1) {
+                    // Marca 'contact' logo após o 1º balão confirmado — se o socket cair antes do 2º,
+                    // o lead já está marcado e não será reenviado na próxima rodada do motor.
+                    if (i === 0) {
                         await supabase.from('leads').update({ status: 'contact', last_contact_at: new Date().toISOString(), opening_template: textoFinal }).eq('id', lead.id);
                     }
                     await db.saveMessage(cleanJid, 'assistant', trecho, instanceId);
