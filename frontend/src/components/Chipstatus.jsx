@@ -1,7 +1,7 @@
 import React, { useState, useEffect, useCallback } from 'react'
 import { supabase } from '@/lib/supabase'
 import { QRCodeSVG } from 'qrcode.react'
-import { Cpu, Wifi, WifiOff, Loader2, RefreshCw, Zap, User, Building2, Target, Clock, RotateCcw, X, Pencil, Check } from 'lucide-react'
+import { Cpu, Wifi, WifiOff, Loader2, RefreshCw, Zap, User, Building2, Target, Clock, RotateCcw, X, Pencil, Check, KeyRound, HelpCircle } from 'lucide-react'
 
 // ─── PALETA ───────────────────────────────────────────────────────────────────
 const C = {
@@ -39,10 +39,11 @@ function timeAgo(isoStr) {
 }
 
 // ─── CHIP CARD ────────────────────────────────────────────────────────────────
-function ChipCard({ instance, dailyCount, statusInfo, onReconnect, qrCode, onLimitChange }) {
+function ChipCard({ instance, dailyCount, statusInfo, onReconnect, onResetSession, qrCode, onLimitChange }) {
     const [editingLimit, setEditingLimit] = useState(false)
     const [localLimit,   setLocalLimit]   = useState(instance.daily_limit ?? 30)
     const [saving,       setSaving]       = useState(false)
+    const [showResetInfo, setShowResetInfo] = useState(false)
 
     useEffect(() => { setLocalLimit(instance.daily_limit ?? 30) }, [instance.daily_limit])
 
@@ -262,6 +263,66 @@ function ChipCard({ instance, dailyCount, statusInfo, onReconnect, qrCode, onLim
                     Último disparo: {timeAgo(instance.last_contact_at)}
                 </span>
             </div>
+
+            {/* ── Resetar Sessão ── */}
+            <div style={{ position: 'relative', display: 'flex', alignItems: 'center', gap: 6 }}>
+                <button
+                    onClick={() => onResetSession?.(instance.id)}
+                    style={{
+                        flex: 1,
+                        display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 5,
+                        padding: '6px 0',
+                        background: 'rgba(239,68,68,0.06)',
+                        border: '1px solid rgba(239,68,68,0.18)',
+                        borderRadius: '0.6rem',
+                        cursor: 'pointer',
+                        color: 'rgba(239,68,68,0.65)',
+                        fontSize: 9, fontWeight: 900,
+                        textTransform: 'uppercase', letterSpacing: '0.12em',
+                        transition: 'background 0.2s',
+                    }}
+                    onMouseEnter={e => e.currentTarget.style.background = 'rgba(239,68,68,0.13)'}
+                    onMouseLeave={e => e.currentTarget.style.background = 'rgba(239,68,68,0.06)'}
+                >
+                    <KeyRound size={9} />
+                    Resetar Sessão
+                </button>
+
+                {/* Ícone ? com tooltip explicativo */}
+                <div
+                    style={{ position: 'relative', cursor: 'help', flexShrink: 0 }}
+                    onMouseEnter={() => setShowResetInfo(true)}
+                    onMouseLeave={() => setShowResetInfo(false)}
+                >
+                    <HelpCircle size={14} color="rgba(255,255,255,0.2)" />
+                    {showResetInfo && (
+                        <div style={{
+                            position: 'absolute', bottom: '100%', right: 0,
+                            width: 230, marginBottom: 8,
+                            background: '#1a1a2e',
+                            border: '1px solid rgba(255,255,255,0.12)',
+                            borderRadius: '0.75rem',
+                            padding: '12px 14px',
+                            zIndex: 999,
+                            boxShadow: '0 8px 32px rgba(0,0,0,0.6)',
+                            pointerEvents: 'none',
+                        }}>
+                            <p style={{ fontSize: 10, fontWeight: 900, color: '#ef4444', marginBottom: 6, textTransform: 'uppercase', letterSpacing: '0.08em' }}>
+                                O que faz?
+                            </p>
+                            <p style={{ fontSize: 10, color: 'rgba(255,255,255,0.75)', lineHeight: 1.6, marginBottom: 8 }}>
+                                Apaga as chaves de sessão do WhatsApp e força uma nova autenticação via QR code.
+                            </p>
+                            <p style={{ fontSize: 10, fontWeight: 900, color: '#f59e0b', marginBottom: 6, textTransform: 'uppercase', letterSpacing: '0.08em' }}>
+                                Quando usar?
+                            </p>
+                            <p style={{ fontSize: 10, color: 'rgba(255,255,255,0.75)', lineHeight: 1.6 }}>
+                                Quando o chip aparece como <strong style={{ color: '#10B981' }}>Conectado</strong> mas nenhuma mensagem chega no celular. Isso acontece após atualizações internas do sistema onde as chaves antigas ficam incompatíveis com o novo protocolo.
+                            </p>
+                        </div>
+                    )}
+                </div>
+            </div>
         </div>
     )
 }
@@ -367,6 +428,20 @@ export default function ChipStatus({ instances = [], socket }) {
         }, 30000)
     }, [socket])
 
+    const handleResetSession = useCallback((instanceId) => {
+        if (!socket) return
+        setConnectingSet(prev => new Set(prev).add(instanceId))
+        setQrMap(prev => { const next = { ...prev }; delete next[instanceId]; return next })
+        socket.emit('reset_session', instanceId)
+        setTimeout(() => {
+            setConnectingSet(prev => {
+                const next = new Set(prev)
+                next.delete(instanceId)
+                return next
+            })
+        }, 30000)
+    }, [socket])
+
     const handleLimitChange = useCallback(async (instanceId, newLimit) => {
         await supabase.from('instances').update({ daily_limit: newLimit }).eq('id', instanceId)
     }, [])
@@ -447,6 +522,7 @@ export default function ChipStatus({ instances = [], socket }) {
                             dailyCount={dailyCounts[inst.id] ?? 0}
                             statusInfo={resolveStatus(inst, connectingSet)}
                             onReconnect={handleReconnect}
+                            onResetSession={handleResetSession}
                             onLimitChange={handleLimitChange}
                             qrCode={qrMap[inst.id] || null}
                         />

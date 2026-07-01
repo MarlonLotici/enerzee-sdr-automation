@@ -6,6 +6,11 @@
 // 🚀 FIX V13: Declaração global para injeção dinâmica (Bypass do erro ESM)
 let makeWASocket, useMultiFileAuthState, DisconnectReason, delay, fetchLatestBaileysVersion, makeCacheableSignalKeyStore, downloadMediaMessage, generateMessageID, Browsers;
 
+// Versão do Baileys instalada — comparada com a versão gravada no Redis por chip.
+// Se divergir, sessão é limpa automaticamente para evitar incompatibilidade de protocolo.
+let BAILEYS_VERSION = 'unknown';
+try { BAILEYS_VERSION = require('@whiskeysockets/baileys/package.json').version; } catch (_) {}
+
 // 🔇 Suprime logs internos do libsignal (chaves privadas efêmeras do Double Ratchet)
 // Esses blocos não são erros — são ciclos normais do Signal Protocol, mas expõem material criptográfico nos logs de produção.
 // Usamos process.stdout.write em vez de console.log porque o libsignal captura a referência de console.log
@@ -1337,6 +1342,16 @@ async function startInstance(instanceId, instanceName, preloadedUserId = null) {
 
     //const { state, saveCreds } = await useMultiFileAuthState(`wpp_sessions/${instanceId}`);
     // Agora as chaves do WhatsApp vivem no Supabase, protegidas contra restarts
+
+    // Detecta atualização do Baileys: se a versão gravada no Redis for diferente da atual,
+    // limpa a sessão antes de carregar — evita incompatibilidade silenciosa de protocolo.
+    const redisVersionKey = `wpp_auth:${instanceId}:baileys_version`;
+    const storedBaileysVersion = await redisConnection.get(redisVersionKey).catch(() => null);
+    if (storedBaileysVersion && storedBaileysVersion !== BAILEYS_VERSION) {
+        console.log(`🔄 [VERSION] ${instanceName} — Baileys atualizado (${storedBaileysVersion} → ${BAILEYS_VERSION}). Limpando sessão para evitar incompatibilidade...`);
+        await clearRedisSession(redisConnection, instanceId);
+    }
+
     const { state, saveCreds } = await useRedisAuthState(redisConnection, instanceId);
     const { version } = await fetchLatestBaileysVersion();
 
@@ -1405,6 +1420,8 @@ async function startInstance(instanceId, instanceName, preloadedUserId = null) {
             db.updateInstanceStatus(instanceId, 'CONNECTED')
                 .then(() => console.log(`✅ [STATUS-DB] ${instanceName} gravado como CONNECTED no banco`))
                 .catch(e => console.error(`⚠️ [STATUS-DB] Falha ao gravar CONNECTED para ${instanceName}: ${e.message}`));
+            // Grava versão do Baileys desta sessão — usada para detectar incompatibilidade na próxima atualização
+            redisConnection.set(redisVersionKey, BAILEYS_VERSION).catch(() => {});
             // Realoca leads órfãos do mesmo tenant para este chip
             setTimeout(() => redistribuirLeadsOrfaos(), 3000);
             // Liga o motor de ataque deste chip se ainda não estiver rodando.

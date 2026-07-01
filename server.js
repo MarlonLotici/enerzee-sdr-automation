@@ -153,6 +153,14 @@ io.on('connection', (socket) => {
         await atualizarListaInstancias();
     });
 
+    socket.on('reset_session', async (instanceId) => {
+        const inst = await db.getInstanceRules(instanceId);
+        if (!inst || inst.user_id !== userId) return console.warn(`⛔ [SEGURANÇA] ${socket.user.email} tentou resetar sessão de outro usuário.`);
+        console.log(`🔑 [RESET-SESSÃO] ${socket.user.email} solicitou reset de sessão para ${instanceId.slice(0, 8)}`);
+        await sdr.reconectarInstancia(instanceId);
+        await atualizarListaInstancias();
+    });
+
     socket.on('check_scraper_status', () => {
         const state = getScraperState(userId);
         socket.emit('scraper_status', { isRunning: state.running, recentLogs: state.logs });
