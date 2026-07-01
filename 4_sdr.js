@@ -1704,7 +1704,24 @@ async function enviarMensagemIA(sock, jid, content, instanceId = null) {
             sentMessagesStore.set(storeKey, { message: sentMsg.message });
             setTimeout(() => sentMessagesStore.delete(storeKey), 3600000); // limpa após 1h
         }
-        await esperarAckServidor(sock, sentMsg.key.id);
+        try {
+            await esperarAckServidor(sock, sentMsg.key.id);
+        } catch (ackErr) {
+            if (ackErr.message.startsWith('ACK_TIMEOUT') && instanceId) {
+                // RC13 fecha o socket logo após entregar a mensagem ao servidor WA.
+                // Se o chip reconectou (novo sock na sessão), o socket antigo morreu APÓS o envio.
+                // Se ainda é o mesmo socket, é sessão stale real — propaga o erro.
+                const sessaoAtual = sessions.get(instanceId);
+                if (sessaoAtual?.sock !== sock) {
+                    console.warn(`⚠️ [ACK-MISS] ${instanceId.slice(0,8)} — chip reconectou após envio. Mensagem transmitida.`);
+                    // cai no bloco de sucesso abaixo
+                } else {
+                    throw ackErr; // mesmo socket ainda ativo = stale real
+                }
+            } else {
+                throw ackErr;
+            }
+        }
         if (instanceId) {
             sucessosPorSessao.set(instanceId, (sucessosPorSessao.get(instanceId) || 0) + 1);
             staleContador.delete(instanceId);
