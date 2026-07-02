@@ -2700,62 +2700,6 @@ console.log(`🔒 [RESERVA] Lead ${lead.name} travado atomicamente para chip ${c
                     continue;
                 }
 
-                // 6b. PRÉ-VALIDAÇÃO WA — descarta número sem WhatsApp ANTES do jitter (economiza até 45s por inválido)
-                // Corrige formato BR: se número principal não existe, tenta variante 12↔13 dígitos antes de descartar.
-                try {
-                    const preJid = lead.whatsapp_id.split(':')[0].split('@')[0] + '@s.whatsapp.net';
-                    const waResults = await Promise.race([
-                        instancia.sock.onWhatsApp(preJid),
-                        new Promise((_, r) => setTimeout(() => r(new Error('onWhatsApp_timeout')), 8000))
-                    ]);
-                    const waResult = waResults?.[0];
-
-                    if (!waResult?.exists) {
-                        const numero = preJid.replace('@s.whatsapp.net', '');
-                        let varianteJid = null;
-                        if (numero.startsWith('55') && numero.length === 13) {
-                            // 55 + DDD(2) + 9 + local(8) → remove o 9 → 55 + DDD(2) + local(8)
-                            varianteJid = `${numero.slice(0, 4)}${numero.slice(5)}@s.whatsapp.net`;
-                        } else if (numero.startsWith('55') && numero.length === 12) {
-                            // 55 + DDD(2) + local(8) → insere 9 após DDD → 55 + DDD(2) + 9 + local(8)
-                            varianteJid = `${numero.slice(0, 4)}9${numero.slice(4)}@s.whatsapp.net`;
-                        }
-
-                        const varResults = varianteJid
-                            ? await instancia.sock.onWhatsApp(varianteJid).catch(() => [])
-                            : [];
-                        const varResult = varResults?.[0];
-
-                        if (varResult?.exists) {
-                            console.log(`🔄 [FORMATO-BR] ${lead.name}: ${numero} → ${varianteJid.replace('@s.whatsapp.net', '')} (formato corrigido no banco)`);
-                            await supabase.from('leads').update({ whatsapp_id: varianteJid }).eq('id', lead.id);
-                            lead.whatsapp_id = varianteJid;
-                            // prossegue normalmente com o JID corrigido
-                        } else {
-                            if (!lead.backup_tried && lead.backup_whatsapp_id) {
-                                console.log(`🔄 [BACKUP] ${lead.name} sem WhatsApp em nenhum formato. Tombando para número reserva...`);
-                                await supabase.from('leads').update({
-                                    whatsapp_id: lead.backup_whatsapp_id,
-                                    phone: lead.backup_phone,
-                                    backup_tried: true,
-                                    status: 'new',
-                                }).eq('id', lead.id);
-                            } else {
-                                console.log(`🚫 [PRÉ-VÁLID] ${lead.name} (${numero}) não tem WhatsApp. Descartando sem jitter.`);
-                                await supabase.from('leads').update({ status: 'invalid_number' }).eq('id', lead.id);
-                            }
-                            leadsEmProcessamento.delete(lead.id);
-                            continue;
-                        }
-                    }
-                } catch (preValidErr) {
-                    if (preValidErr.message === 'onWhatsApp_timeout') {
-                        console.warn(`⚠️ [PRÉ-VÁLID] Timeout no lookup WA de ${lead.name}. Prosseguindo sem validação.`);
-                    } else {
-                        throw preValidErr;
-                    }
-                }
-
                 // ⏳ 6. JITTER SEQUENCIAL — cold-start uma única vez por dia; chip novo já aquecido usa jitter curto
                 const isColdStart = chipNovo && enviosHoje === 0 && !global.chipsAquecidosHoje.has(instanceId);
                 const jitter = isColdStart
