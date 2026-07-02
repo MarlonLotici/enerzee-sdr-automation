@@ -1417,6 +1417,22 @@ async function startInstance(instanceId, instanceName, preloadedUserId = null) {
             }
             sessions.set(instanceId, { sock, ready: true, userId: instanceUserId, name: instanceName }); // <--- LIBERADO PARA ENVIO
             instanciasLigando.delete(instanceId);
+
+            // Presença periódica: aparece online 30-90s a cada 8-20min — simula humano pegando o celular
+            ;(function agendarPresencaPeriodica() {
+                const ms = (8 + Math.random() * 12) * 60000;
+                const t = setTimeout(async () => {
+                    const s = sessions.get(instanceId);
+                    if (!s?.ready || !s?.sock) return;
+                    try {
+                        await s.sock.sendPresenceUpdate('available');
+                        await delay(30000 + Math.random() * 60000);
+                        await s.sock.sendPresenceUpdate('unavailable');
+                    } catch (_) {}
+                    agendarPresencaPeriodica();
+                }, ms);
+                if (t.unref) t.unref();
+            })();
             // Emit imediato ao frontend — não depende do DB para não bloquear a UI
             if (ioSocket && instanceUserId) ioSocket.to(`user:${instanceUserId}`).emit('whatsapp_status', { status: 'CONNECTED', instanceId });
             // DB update separado: falha silenciosa não afeta o emit nem o motor
@@ -1586,6 +1602,11 @@ async function startInstance(instanceId, instanceName, preloadedUserId = null) {
 
             const remoteJid = msg.key.remoteJid;
             if (remoteJid.includes('@g.us')) continue; // Ignora grupos
+
+            // Acusa leitura imediatamente (ticks azuis) — bots normalmente não fazem isso
+            if (!msg.key.fromMe) {
+                sock.readMessages([msg.key]).catch(() => {});
+            }
 
             const isFromMe = msg.key.fromMe;
             const messageType = Object.keys(msg.message).find(k => k !== 'messageContextInfo' && k !== 'senderKeyDistributionMessage');
@@ -2738,11 +2759,35 @@ console.log(`🔒 [RESERVA] Lead ${lead.name} travado atomicamente para chip ${c
                 await delay(jitter);
                 if (isColdStart) global.chipsAquecidosHoje.add(instanceId);
 
-                // 7. Normalização do JID — derivada diretamente do banco (sem onWhatsApp)
-                const cleanJid = lead.whatsapp_id.split(':')[0].split('@')[0] + '@s.whatsapp.net';
+                // 7. Normalização do JID + pre-check onWhatsApp
+                let cleanJid = lead.whatsapp_id.split(':')[0].split('@')[0] + '@s.whatsapp.net';
                 if (lead.whatsapp_id !== cleanJid) {
                     await supabase.from('leads').update({ whatsapp_id: cleanJid }).eq('id', lead.id);
                     lead.whatsapp_id = cleanJid;
+                }
+
+                // Verifica existência no WA antes de enviar — evita queimar quality rating com JIDs inválidos.
+                if (!jidsInvalidos.has(cleanJid)) {
+                    try {
+                        const [waStat] = await instancia.sock.onWhatsApp(cleanJid.replace('@s.whatsapp.net', ''));
+                        if (!waStat?.exists) {
+                            console.warn(`⚠️ [PRE-CHECK WA] ${lead.name} não está no WhatsApp. Descartando.`);
+                            await supabase.from('leads').update({ status: 'invalid_number' }).eq('id', lead.id).eq('status', 'reservado');
+                            leadsEmProcessamento.delete(lead.id);
+                            jidsInvalidos.add(cleanJid);
+                            liberarSemaforoSemCooldown(instanceId);
+                            continue;
+                        }
+                        // JID canônico do WA resolve automaticamente o formato 12↔13 dígitos
+                        if (waStat.jid && waStat.jid !== cleanJid) {
+                            console.log(`🔧 [PRE-CHECK WA] Formato corrigido: ${cleanJid.replace('@s.whatsapp.net','')} → ${waStat.jid.replace('@s.whatsapp.net','')}`);
+                            await supabase.from('leads').update({ whatsapp_id: waStat.jid }).eq('id', lead.id);
+                            lead.whatsapp_id = waStat.jid;
+                            cleanJid = waStat.jid;
+                        }
+                    } catch (errWa) {
+                        console.warn(`⚠️ [PRE-CHECK WA] Falha na verificação para ${lead.name}: ${errWa.message}. Prosseguindo.`);
+                    }
                 }
 
               // 8. MONTAGEM DA SAUDAÇÃO — BALÃO ÚNICO (FIX #1 + #2 + #10)
@@ -2771,6 +2816,8 @@ console.log(`🔒 [RESERVA] Lead ${lead.name} travado atomicamente para chip ${c
               }
 
 console.log(`🚀 [DISPARANDO] ${config.nome} enviando saudação para ${lead.name}...`);
+await instancia.sock.sendPresenceUpdate('available', cleanJid);
+await delay(1000 + Math.random() * 2000);
 await instancia.sock.sendPresenceUpdate('composing', cleanJid);
 await delay(Math.random() * 4000 + 4000);
 await instancia.sock.sendPresenceUpdate('paused', cleanJid);
