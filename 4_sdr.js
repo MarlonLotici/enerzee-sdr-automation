@@ -1402,9 +1402,8 @@ async function startInstance(instanceId, instanceName, preloadedUserId = null) {
             cancelarDebounceChip(instanceId); // Chip voltou — cancela alerta de desconexão se ainda no debounce
             tentativasReconexao.delete(instanceId); // Fase 4: conexão bem-sucedida — zera o contador
             staleContador.delete(instanceId); // sessão nova = stale zerado; contador anterior de sessão morta não conta
-            for (const key of falhasLeadPorSessao.keys()) { // limpa contadores de falha por lead desta instância
-                if (key.startsWith(instanceId + ':')) falhasLeadPorSessao.delete(key);
-            }
+            // falhasLeadPorSessao NÃO é limpo aqui: soft reconnect preserva o histórico de falhas por lead
+            // para que o anti-loop de 2 strikes continue a funcionar entre reconexões da mesma sessão WA.
             cacheRegrasInstancia.delete(instanceId); // força releitura do DB no próximo ciclo — garante whatsapp_status=CONNECTED após reconexão
             // Encerra socket fantasma: se havia um socket diferente registrado (ex: QR re-scan sem Remove+Add),
             // fecha o antigo antes de registrar o novo — impede que mensagens saiam pelo socket morto
@@ -1471,6 +1470,9 @@ async function startInstance(instanceId, instanceName, preloadedUserId = null) {
                 if (ioSocket && instanceUserId) ioSocket.to(`user:${instanceUserId}`).emit('chip_needs_reauth', { instanceId, instanceName });
                 tentativasReconexao.delete(instanceId); // reseta counter — nova sessão começa do zero
                 sucessosPorSessao.delete(instanceId);
+                for (const key of falhasLeadPorSessao.keys()) {
+                    if (key.startsWith(instanceId + ':')) falhasLeadPorSessao.delete(key);
+                }
                 return; // 🛑 MATA O LOOP AQUI! Sem setTimeout, sem insistir.
             }
 
@@ -2698,6 +2700,62 @@ console.log(`🔒 [RESERVA] Lead ${lead.name} travado atomicamente para chip ${c
                     continue;
                 }
 
+                // 6b. PRÉ-VALIDAÇÃO WA — descarta número sem WhatsApp ANTES do jitter (economiza até 45s por inválido)
+                // Corrige formato BR: se número principal não existe, tenta variante 12↔13 dígitos antes de descartar.
+                try {
+                    const preJid = lead.whatsapp_id.split(':')[0].split('@')[0] + '@s.whatsapp.net';
+                    const waResults = await Promise.race([
+                        instancia.sock.onWhatsApp(preJid),
+                        new Promise((_, r) => setTimeout(() => r(new Error('onWhatsApp_timeout')), 8000))
+                    ]);
+                    const waResult = waResults?.[0];
+
+                    if (!waResult?.exists) {
+                        const numero = preJid.replace('@s.whatsapp.net', '');
+                        let varianteJid = null;
+                        if (numero.startsWith('55') && numero.length === 13) {
+                            // 55 + DDD(2) + 9 + local(8) → remove o 9 → 55 + DDD(2) + local(8)
+                            varianteJid = `${numero.slice(0, 4)}${numero.slice(5)}@s.whatsapp.net`;
+                        } else if (numero.startsWith('55') && numero.length === 12) {
+                            // 55 + DDD(2) + local(8) → insere 9 após DDD → 55 + DDD(2) + 9 + local(8)
+                            varianteJid = `${numero.slice(0, 4)}9${numero.slice(4)}@s.whatsapp.net`;
+                        }
+
+                        const varResults = varianteJid
+                            ? await instancia.sock.onWhatsApp(varianteJid).catch(() => [])
+                            : [];
+                        const varResult = varResults?.[0];
+
+                        if (varResult?.exists) {
+                            console.log(`🔄 [FORMATO-BR] ${lead.name}: ${numero} → ${varianteJid.replace('@s.whatsapp.net', '')} (formato corrigido no banco)`);
+                            await supabase.from('leads').update({ whatsapp_id: varianteJid }).eq('id', lead.id);
+                            lead.whatsapp_id = varianteJid;
+                            // prossegue normalmente com o JID corrigido
+                        } else {
+                            if (!lead.backup_tried && lead.backup_whatsapp_id) {
+                                console.log(`🔄 [BACKUP] ${lead.name} sem WhatsApp em nenhum formato. Tombando para número reserva...`);
+                                await supabase.from('leads').update({
+                                    whatsapp_id: lead.backup_whatsapp_id,
+                                    phone: lead.backup_phone,
+                                    backup_tried: true,
+                                    status: 'new',
+                                }).eq('id', lead.id);
+                            } else {
+                                console.log(`🚫 [PRÉ-VÁLID] ${lead.name} (${numero}) não tem WhatsApp. Descartando sem jitter.`);
+                                await supabase.from('leads').update({ status: 'invalid_number' }).eq('id', lead.id);
+                            }
+                            leadsEmProcessamento.delete(lead.id);
+                            continue;
+                        }
+                    }
+                } catch (preValidErr) {
+                    if (preValidErr.message === 'onWhatsApp_timeout') {
+                        console.warn(`⚠️ [PRÉ-VÁLID] Timeout no lookup WA de ${lead.name}. Prosseguindo sem validação.`);
+                    } else {
+                        throw preValidErr;
+                    }
+                }
+
                 // ⏳ 6. JITTER SEQUENCIAL — cold-start uma única vez por dia; chip novo já aquecido usa jitter curto
                 const isColdStart = chipNovo && enviosHoje === 0 && !global.chipsAquecidosHoje.has(instanceId);
                 const jitter = isColdStart
@@ -3001,6 +3059,9 @@ const mensagensSplit = textoFinal.split('[QUEBRA]').map(t => t.trim()).filter(t 
                     console.error(`⏱️ [ACK TIMEOUT - HARD] ${instanceId} — ${stalesFalhas} falhas stale (limite=${limiteStale}). Limpando credenciais e pedindo novo QR...`);
                     staleContador.delete(instanceId);
                     sucessosPorSessao.delete(instanceId); // nova sessão começa do zero
+                    for (const key of falhasLeadPorSessao.keys()) {
+                        if (key.startsWith(instanceId + ':')) falhasLeadPorSessao.delete(key);
+                    }
                     ultimoHardRestart.set(instanceId, Date.now()); // bloqueia reconexão por 5min
                     await clearRedisSession(redisConnection, instanceId).catch(() => {});
                     await supabase.from('whatsapp_sessions').delete().eq('id', instanceId);
@@ -3754,6 +3815,16 @@ if (!promptResolvido) {
 
         if (intencao === 'ENCERRAMENTO') {
     console.log(`👋 [WORKER-IA] ENCERRAMENTO detectado. Finalizando conversa educadamente e pausando o lead...`);
+    const tplDespedida = instanceData?.opening_templates?.despedida;
+    if (tplDespedida && !lead.is_paused) {
+        const primeiroNome = (lead.name || '').split(' ')[0];
+        const textoDespedida = tplDespedida.replace(/\$\{nome\}/g, primeiroNome);
+        const partes = textoDespedida.split('[QUEBRA]').map(t => t.trim()).filter(t => t);
+        for (let i = 0; i < partes.length; i++) {
+            if (i > 0) await delay(1500 + Math.random() * 1000);
+            await enviarMensagemIA(instancia.sock, lead.whatsapp_id, { text: partes[i] }, instanceId).catch(() => {});
+        }
+    }
     await supabase.from('leads').update({
         is_paused: true,
         manual_pause: false,
