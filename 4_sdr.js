@@ -1403,7 +1403,8 @@ async function startInstance(instanceId, instanceName, preloadedUserId = null) {
             console.log(`✅ [SDR] Canal Pronto e Estável: ${instanceName}`);
             cancelarDebounceChip(instanceId); // Chip voltou — cancela alerta de desconexão se ainda no debounce
             tentativasReconexao.delete(instanceId); // Fase 4: conexão bem-sucedida — zera o contador
-            staleContador.delete(instanceId); // sessão nova = stale zerado; contador anterior de sessão morta não conta
+            // staleContador NÃO é limpo aqui: soft reconnect preserva a contagem de falhas stale para que
+            // o chip acumule até o limite (4) e acione o hard restart. Só reseta em envio confirmado ou hard restart.
             // falhasLeadPorSessao NÃO é limpo aqui: soft reconnect preserva o histórico de falhas por lead
             // para que o anti-loop de 2 strikes continue a funcionar entre reconexões da mesma sessão WA.
             cacheRegrasInstancia.delete(instanceId); // força releitura do DB no próximo ciclo — garante whatsapp_status=CONNECTED após reconexão
