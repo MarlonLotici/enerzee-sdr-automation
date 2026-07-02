@@ -240,6 +240,7 @@ const mensagensEnviadasPelaIA = new Set(); // 🛡️ PASSO 1: A Memória Anti-E
 const iaRespondendo = new Set();
 const inboundAtivo = new Map(); // instanceId → nº de jobs inbound em fila/processamento (fast-lane guard)
 const tentativasReconexao = new Map(); // instanceId → contador de tentativas automáticas (Phase 4)
+const chipsAbandanados = new Set(); // chips que falharam 10x seguidas — Vigia para de reiniciar até Reset Session manual
 const mapaRastreioLID = new Map();
 const gavetaDeMensagens = new Map(); // 🧠 OUVIDO PACIENTE: Gaveta temporária de mensagens
 const mensagensJaProcessadas = new Map(); // 🛡️ DEDUP: Previne reprocessamento de msg.key.id do Baileys
@@ -1403,6 +1404,7 @@ async function startInstance(instanceId, instanceName, preloadedUserId = null) {
             console.log(`✅ [SDR] Canal Pronto e Estável: ${instanceName}`);
             cancelarDebounceChip(instanceId); // Chip voltou — cancela alerta de desconexão se ainda no debounce
             tentativasReconexao.delete(instanceId); // Fase 4: conexão bem-sucedida — zera o contador
+            chipsAbandanados.delete(instanceId); // conexão bem-sucedida remove bloqueio de auto-reconexão
             // staleContador NÃO é limpo aqui: soft reconnect preserva a contagem de falhas stale para que
             // o chip acumule até o limite (4) e acione o hard restart. Só reseta em envio confirmado ou hard restart.
             // falhasLeadPorSessao NÃO é limpo aqui: soft reconnect preserva o histórico de falhas por lead
@@ -1499,9 +1501,9 @@ async function startInstance(instanceId, instanceName, preloadedUserId = null) {
             const tentarReconexao = (delayMs, motivo) => {
                 const tentativas = (tentativasReconexao.get(instanceId) || 0) + 1;
                 if (tentativas > 10) {
-                    console.error(`🚫 [RECONEXÃO] ${instanceName} atingiu 10 tentativas sem sucesso. Abandonando — intervenção manual necessária.`);
-                    enviarAlerta(`🚫 *Chip parado*: ${instanceName} falhou 10x seguidas e precisa de atenção manual.`).catch(() => {});
-                    tentativasReconexao.delete(instanceId);
+                    console.error(`🚫 [RECONEXÃO] ${instanceName} atingiu 10 tentativas sem sucesso. Bloqueando auto-reconexão — clique em Resetar Sessão no dashboard.`);
+                    enviarAlerta(`🚫 *Chip parado*: ${instanceName} falhou 10x seguidas. Acesse o dashboard e clique em *Resetar Sessão* para escanear novo QR.`).catch(() => {});
+                    chipsAbandanados.add(instanceId);
                     return;
                 }
                 tentativasReconexao.set(instanceId, tentativas);
@@ -1540,6 +1542,12 @@ async function startInstance(instanceId, instanceName, preloadedUserId = null) {
                 const tentativasAtuais = (tentativasReconexao.get(instanceId) || 0) + 1;
                 const backoffMs = Math.min(5000 * (tentativasAtuais ** 2) + Math.floor(Math.random() * 5000), 60000);
                 console.warn(`🔬 [CONN-DIAG] ${instanceName} | reason=${reason} | tentativas=${tentativasAtuais} | ligando=${instanciasLigando.size} | backoff=${backoffMs}ms`);
+                // Na 5ª tentativa de timeout consecutivo as credenciais em Redis são provavelmente stale.
+                // Wipe forçado → próximo startInstance emite QR novo e estabelece sessão limpa.
+                if (tentativasAtuais === 5) {
+                    console.warn(`🔁 [AUTO-WIPE] ${instanceName} — 5 timeouts consecutivos. Limpando sessão Redis para forçar QR...`);
+                    clearRedisSession(redisConnection, instanceId).catch(() => {});
+                }
                 await db.updateInstanceStatus(instanceId, 'DISCONNECTED');
                 tentarReconexao(backoffMs, 'timeout/connection lost');
                 return;
@@ -4315,13 +4323,15 @@ module.exports = {
                         const sessao = sessions.get(inst.id);
                         const estaConectado = sessao?.ready === true;
                         const estaConectando = instanciasLigando.has(inst.id);
-                        if (!estaConectado && !estaConectando) {
+                        if (!estaConectado && !estaConectando && !chipsAbandanados.has(inst.id)) {
                             console.log(`🔄 [VIGIA] Auto-reconectando chip desconectado: ${inst.name}`);
                             staleContador.delete(inst.id); // fresh start no auto-reconnect
                             startInstance(inst.id, inst.name, inst.user_id).catch(e =>
                                 console.error(`❌ [VIGIA] Falha ao reconectar ${inst.name}:`, e.message)
                             );
                             await delay(2000); // escalonamento para evitar burst de reconexões simultâneas
+                        } else if (!estaConectado && !estaConectando && chipsAbandanados.has(inst.id)) {
+                            console.warn(`🔕 [VIGIA] ${inst.name} bloqueado após 10 falhas. Use Resetar Sessão no dashboard para reativar.`);
                         }
                     }
                 } catch (e) {
@@ -4546,6 +4556,8 @@ module.exports = {
 
         // 6. Inicia nova sessão — sem credenciais no Redis, Baileys vai gerar QR code
         staleContador.delete(instanceId); // reconexão manual começa com contador zerado
+        tentativasReconexao.delete(instanceId); // Reset Session é intervenção humana — zera contador de falhas
+        chipsAbandanados.delete(instanceId); // libera chip para auto-reconexão após QR scan
         startInstance(instanceId, name).catch(err =>
             console.error(`❌ [RECONEXÃO MANUAL] Falha ao iniciar chip "${name}" (proxy/sessão): ${err.message}. Tente reconectar novamente.`)
         );
