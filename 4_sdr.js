@@ -259,6 +259,8 @@ const staleContador = new Map(); // instanceId → falhas ACK_TIMEOUT stale cons
 const sentMessagesStore = new Map(); // `${instanceId}:${msgId}` → { message } para retransmissão RC13
 const ultimoHardRestart = new Map(); // instanceId → timestamp do último HARD restart; bloqueia reconexão por 5min
 const falhasLeadPorSessao = new Map(); // `${instanceId}:${leadId}` → nº de ACK_TIMEOUT neste lead nesta sessão; quebra loop de requeue
+const staleRetryFlag = new Map();   // instanceId → true quando o próximo ciclo é um retry de stale; usa jitter curto (15-45s)
+const jidsInvalidos = new Set();    // JIDs confirmados inválidos nesta sessão; skip imediato sem jitter na próxima reserva
 
 // Retorna delay humano randômico entre disparos.
 // Chip novo: 10-18 min — janela maior diminui a cadência detectável pelo WA.
@@ -1695,7 +1697,7 @@ function esperarAckServidor(sock, messageId, timeoutMs = 45000) {
     });
 }
 
-async function enviarMensagemIA(sock, jid, content, instanceId = null) {
+async function enviarMensagemIA(sock, jid, content, instanceId = null, timeoutAck = 45000) {
     const sentMsg = await sock.sendMessage(jid, content);
     if (sentMsg?.key?.id) {
         mensagensEnviadasPelaIA.add(sentMsg.key.id);
@@ -1707,7 +1709,7 @@ async function enviarMensagemIA(sock, jid, content, instanceId = null) {
             setTimeout(() => sentMessagesStore.delete(storeKey), 3600000); // limpa após 1h
         }
         try {
-            await esperarAckServidor(sock, sentMsg.key.id);
+            await esperarAckServidor(sock, sentMsg.key.id, timeoutAck);
         } catch (ackErr) {
             if (ackErr.message.startsWith('ACK_TIMEOUT') && instanceId) {
                 // RC13 fecha o socket logo após entregar a mensagem ao servidor WA.
@@ -2700,14 +2702,27 @@ console.log(`🔒 [RESERVA] Lead ${lead.name} travado atomicamente para chip ${c
                     continue;
                 }
 
+                // 6b. JID cache: número confirmado inválido nesta sessão → skip sem jitter
+                const preCheckJid = lead.whatsapp_id.split(':')[0].split('@')[0] + '@s.whatsapp.net';
+                if (jidsInvalidos.has(preCheckJid)) {
+                    console.log(`🚫 [JID-CACHE] ${lead.name} (${preCheckJid}) já confirmado inválido nesta sessão. Descartando sem jitter.`);
+                    await supabase.from('leads').update({ status: 'invalid_number' }).eq('id', lead.id);
+                    leadsEmProcessamento.delete(lead.id);
+                    continue;
+                }
+
                 // ⏳ 6. JITTER SEQUENCIAL — cold-start uma única vez por dia; chip novo já aquecido usa jitter curto
-                const isColdStart = chipNovo && enviosHoje === 0 && !global.chipsAquecidosHoje.has(instanceId);
-                const jitter = isColdStart
-                    ? Math.random() * 300000 + 300000   // cold-start: 5-10 min (uma vez por dia)
-                    : chipNovo
-                        ? Math.random() * 120000 + 60000   // chip novo aquecido: 1-3 min
-                        : Math.random() * 180000 + 120000; // maduro: 2-5 min
-                console.log(`🎯 [${config.nome}] Mirando em: ${lead.name} (${enviosHoje + 1}/${config.limite}). Aguardando ${Math.round(jitter/1000)}s${isColdStart ? " (cold-start)" : ""}...`);
+                const isStaleRetry = staleRetryFlag.get(instanceId) === true;
+                if (isStaleRetry) staleRetryFlag.delete(instanceId);
+                const isColdStart = !isStaleRetry && chipNovo && enviosHoje === 0 && !global.chipsAquecidosHoje.has(instanceId);
+                const jitter = isStaleRetry
+                    ? Math.random() * 30000 + 15000     // retry pós-stale: 15-45s (chip já provou conectividade)
+                    : isColdStart
+                        ? Math.random() * 300000 + 300000   // cold-start: 5-10 min (uma vez por dia)
+                        : chipNovo
+                            ? Math.random() * 120000 + 60000   // chip novo aquecido: 1-3 min
+                            : Math.random() * 180000 + 120000; // maduro: 2-5 min
+                console.log(`🎯 [${config.nome}] Mirando em: ${lead.name} (${enviosHoje + 1}/${config.limite}). Aguardando ${Math.round(jitter/1000)}s${isColdStart ? " (cold-start)" : isStaleRetry ? " (stale-retry)" : ""}...`);
 
                 // ⚡ FAST-LANE CHECK 1: antes de entrar no jitter, verifica se chegou inbound neste chip
                 // Se sim, devolve o lead e cede a via — chip responde primeiro, prospeta depois
@@ -2871,21 +2886,24 @@ if (lead.opening_template && lead.opening_template.length > 15 && lead.opening_t
 const mensagensSplit = textoFinal.split('[QUEBRA]').map(t => t.trim()).filter(t => t.length > 0);
 
                 // 9. FATIADOR HUMANO E ENVIO (Com interrupção intacta!)
-                
+                // Sessão sem nenhum envio confirmado usa timeout ACK reduzido (20s):
+                // WA server retorna ACK imediatamente se o número existe — 45s é tempo demais para stale.
+                const timeoutAckEnvio = (sucessosPorSessao.get(instanceId) || 0) === 0 ? 20000 : 45000;
+
                 for (let i = 0; i < mensagensSplit.length; i++) {
                     const { data: checkMsg } = await supabase.from('messages').select('role').eq('whatsapp_id', cleanJid).order('created_at', { ascending: false }).limit(1).maybeSingle();
                     if (checkMsg && checkMsg.role === 'user') {
                         console.log(`🛑 [INTERRUPÇÃO] Lead respondeu rápido. Abortando.`);
-                        break; 
+                        break;
                     }
 
                     const trecho = mensagensSplit[i].replace(/[\*_~`]/g, '');
-                    const tempoDigitacao = (trecho.length * 70) + 3000; 
-                    
+                    const tempoDigitacao = (trecho.length * 70) + 3000;
+
                     await instancia.sock.sendPresenceUpdate('composing', cleanJid);
-                    await delay(Math.max(4000, Math.min(tempoDigitacao, 10000))); 
-                    
-                    const sentMsg = await enviarMensagemIA(instancia.sock, cleanJid, { text: trecho }, instanceId);
+                    await delay(Math.max(4000, Math.min(tempoDigitacao, 10000)));
+
+                    const sentMsg = await enviarMensagemIA(instancia.sock, cleanJid, { text: trecho }, instanceId, timeoutAckEnvio);
                     if (!sentMsg?.key?.id) {
                         throw new Error(`FALHA_SILENCIOSA: Envio sem confirmacao de key.id para ${cleanJid}`);
                     }
@@ -2927,6 +2945,7 @@ const mensagensSplit = textoFinal.split('[QUEBRA]').map(t => t.trim()).filter(t 
                         } else {
                             console.log(`🚫 [INVÁLIDO] ${currentLead.name} (${currentLead.phone || currentLead.whatsapp_id}) sem WhatsApp. Descartando sem cooldown.`);
                             await supabase.from('leads').update({ status: 'invalid_number' }).eq('id', currentLead.id);
+                            if (currentLead.whatsapp_id) jidsInvalidos.add(currentLead.whatsapp_id);
                         }
                         leadsEmProcessamento.delete(currentLead.id);
                         liberarSemaforoSemCooldown(instanceId); // ⚡ sem penalidade de tempo
@@ -2940,6 +2959,7 @@ const mensagensSplit = textoFinal.split('[QUEBRA]').map(t => t.trim()).filter(t 
                     console.warn(`⚠️ [FALHA SILENCIOSA] ${currentLead?.name} — sem confirmação de entrega. Descartando sem cooldown.`);
                     if (currentLead) {
                         await supabase.from('leads').update({ status: 'invalid_number' }).eq('id', currentLead.id);
+                        if (currentLead.whatsapp_id) jidsInvalidos.add(currentLead.whatsapp_id);
                         leadsEmProcessamento.delete(currentLead.id);
                         liberarSemaforoSemCooldown(instanceId); // ⚡ sem penalidade de tempo
                     }
@@ -2958,6 +2978,7 @@ const mensagensSplit = textoFinal.split('[QUEBRA]').map(t => t.trim()).filter(t 
                         console.warn(`⚠️ [ACK TIMEOUT ISOLADO] ${instanceId} — sessão saudável (${sucessosNestaSessao} envios OK). Lead ${currentLead?.name} descartado como inválido.`);
                         if (currentLead) {
                             await supabase.from('leads').update({ status: 'invalid_number' }).eq('id', currentLead.id);
+                            if (currentLead.whatsapp_id) jidsInvalidos.add(currentLead.whatsapp_id);
                             leadsEmProcessamento.delete(currentLead.id);
                             liberarSemaforoSemCooldown(instanceId);
                         }
@@ -2979,12 +3000,29 @@ const mensagensSplit = textoFinal.split('[QUEBRA]').map(t => t.trim()).filter(t 
                             // Mesmo lead falhou 2x nesta sessão — quebra o loop marcando como inválido
                             console.warn(`🔁 [ACK-LOOP QUEBRADO] Lead "${currentLead.name}" causou ACK_TIMEOUT ${falhasEsteLead}x em ${instanceId.slice(0,8)} sem nenhum sucesso. Marcando inválido para evitar loop infinito.`);
                             await supabase.from('leads').update({ status: 'invalid_number' }).eq('id', currentLead.id);
+                            if (currentLead.whatsapp_id) jidsInvalidos.add(currentLead.whatsapp_id);
                             leadsEmProcessamento.delete(currentLead.id);
                             falhasLeadPorSessao.delete(chaveLeadSessao);
                             liberarSemaforoSemCooldown(instanceId);
                         } else {
-                            console.warn(`🔁 [ACK-LOOP] Lead "${currentLead.name}" falhou 1ª vez em ${instanceId.slice(0,8)} (stale). Retornando à fila — será marcado inválido na 2ª falha.`);
-                            await supabase.from('leads').update({ status: 'new' }).eq('id', currentLead.id).eq('status', 'reservado');
+                            // 1ª falha: tenta formato alternativo BR (12↔13 dígitos) antes de recolocar na fila
+                            const jidAtual = currentLead.whatsapp_id || '';
+                            const numPart = jidAtual.replace('@s.whatsapp.net', '');
+                            let novoJid = null;
+                            if (numPart.startsWith('55') && numPart.length === 13) {
+                                // 55 + DDD(2) + 9 + 8local → remove o 9
+                                novoJid = `55${numPart.slice(2, 4)}${numPart.slice(5)}@s.whatsapp.net`;
+                            } else if (numPart.startsWith('55') && numPart.length === 12) {
+                                // 55 + DDD(2) + 8local → insere o 9
+                                novoJid = `55${numPart.slice(2, 4)}9${numPart.slice(4)}@s.whatsapp.net`;
+                            }
+                            if (novoJid && novoJid !== jidAtual) {
+                                console.warn(`🔁 [ACK-LOOP] Lead "${currentLead.name}" falhou 1ª vez. Trocando formato BR: ${numPart} → ${novoJid.replace('@s.whatsapp.net','')}`);
+                                await supabase.from('leads').update({ status: 'new', whatsapp_id: novoJid }).eq('id', currentLead.id).eq('status', 'reservado');
+                            } else {
+                                console.warn(`🔁 [ACK-LOOP] Lead "${currentLead.name}" falhou 1ª vez em ${instanceId.slice(0,8)} (stale). Retornando à fila — será marcado inválido na 2ª falha.`);
+                                await supabase.from('leads').update({ status: 'new' }).eq('id', currentLead.id).eq('status', 'reservado');
+                            }
                             leadsEmProcessamento.delete(currentLead.id);
                             liberarSemaforoSemCooldown(instanceId);
                         }
@@ -2994,6 +3032,7 @@ const mensagensSplit = textoFinal.split('[QUEBRA]').map(t => t.trim()).filter(t 
                     const limiteStale = (sucessosPorSessao.get(instanceId) || 0) === 0 ? 4 : 2;
                     if (stalesFalhas < limiteStale) {
                         console.warn(`⏱️ [ACK TIMEOUT - SOFT] ${instanceId} — falha stale ${stalesFalhas}/${limiteStale}. Reiniciando socket sem apagar credenciais...`);
+                        staleRetryFlag.set(instanceId, true); // próximo ciclo usa jitter curto (15-45s)
                         const _instAtual = sessions.get(instanceId);
                         if (_instAtual?.sock) { try { _instAtual.sock.end(); } catch(_) {} }
                         break;
