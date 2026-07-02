@@ -2976,10 +2976,25 @@ const mensagensSplit = textoFinal.split('[QUEBRA]').map(t => t.trim()).filter(t 
                     if (sucessosNestaSessao > 0) {
                         // Sessão tem histórico de sucesso → problema é o lead específico (número sem WA,
                         // Signal keys incompatíveis, destinatário inacessível). NÃO destruir sessão.
-                        console.warn(`⚠️ [ACK TIMEOUT ISOLADO] ${instanceId} — sessão saudável (${sucessosNestaSessao} envios OK). Lead ${currentLead?.name} descartado como inválido.`);
+                        // Tentamos primeiro o formato alternativo BR (12↔13 dígitos); só marcamos inválido
+                        // se não houver alternativa — pois o chip é saudável e podemos confiar no diagnóstico.
                         if (currentLead) {
-                            await supabase.from('leads').update({ status: 'invalid_number' }).eq('id', currentLead.id);
-                            if (currentLead.whatsapp_id) jidsInvalidos.add(currentLead.whatsapp_id);
+                            const jidAtual = currentLead.whatsapp_id || '';
+                            const numPart = jidAtual.replace('@s.whatsapp.net', '');
+                            let novoJid = null;
+                            if (numPart.startsWith('55') && numPart.length === 13) {
+                                novoJid = `55${numPart.slice(2, 4)}${numPart.slice(5)}@s.whatsapp.net`;
+                            } else if (numPart.startsWith('55') && numPart.length === 12) {
+                                novoJid = `55${numPart.slice(2, 4)}9${numPart.slice(4)}@s.whatsapp.net`;
+                            }
+                            if (novoJid && novoJid !== jidAtual) {
+                                console.warn(`⚠️ [ACK TIMEOUT ISOLADO] ${instanceId} — sessão saudável. Lead ${currentLead.name}: tentando formato BR alternativo ${numPart} → ${novoJid.replace('@s.whatsapp.net','')}`);
+                                await supabase.from('leads').update({ status: 'new', whatsapp_id: novoJid }).eq('id', currentLead.id).eq('status', 'reservado');
+                            } else {
+                                console.warn(`⚠️ [ACK TIMEOUT ISOLADO] ${instanceId} — sessão saudável (${sucessosNestaSessao} envios OK). Lead ${currentLead.name} descartado como inválido.`);
+                                await supabase.from('leads').update({ status: 'invalid_number' }).eq('id', currentLead.id);
+                                if (currentLead.whatsapp_id) jidsInvalidos.add(currentLead.whatsapp_id);
+                            }
                             leadsEmProcessamento.delete(currentLead.id);
                             liberarSemaforoSemCooldown(instanceId);
                         }
@@ -3006,24 +3021,11 @@ const mensagensSplit = textoFinal.split('[QUEBRA]').map(t => t.trim()).filter(t 
                             falhasLeadPorSessao.delete(chaveLeadSessao);
                             liberarSemaforoSemCooldown(instanceId);
                         } else {
-                            // 1ª falha: tenta formato alternativo BR (12↔13 dígitos) antes de recolocar na fila
-                            const jidAtual = currentLead.whatsapp_id || '';
-                            const numPart = jidAtual.replace('@s.whatsapp.net', '');
-                            let novoJid = null;
-                            if (numPart.startsWith('55') && numPart.length === 13) {
-                                // 55 + DDD(2) + 9 + 8local → remove o 9
-                                novoJid = `55${numPart.slice(2, 4)}${numPart.slice(5)}@s.whatsapp.net`;
-                            } else if (numPart.startsWith('55') && numPart.length === 12) {
-                                // 55 + DDD(2) + 8local → insere o 9
-                                novoJid = `55${numPart.slice(2, 4)}9${numPart.slice(4)}@s.whatsapp.net`;
-                            }
-                            if (novoJid && novoJid !== jidAtual) {
-                                console.warn(`🔁 [ACK-LOOP] Lead "${currentLead.name}" falhou 1ª vez. Trocando formato BR: ${numPart} → ${novoJid.replace('@s.whatsapp.net','')}`);
-                                await supabase.from('leads').update({ status: 'new', whatsapp_id: novoJid }).eq('id', currentLead.id).eq('status', 'reservado');
-                            } else {
-                                console.warn(`🔁 [ACK-LOOP] Lead "${currentLead.name}" falhou 1ª vez em ${instanceId.slice(0,8)} (stale). Retornando à fila — será marcado inválido na 2ª falha.`);
-                                await supabase.from('leads').update({ status: 'new' }).eq('id', currentLead.id).eq('status', 'reservado');
-                            }
+                            // 1ª falha com chip stale (sucessos=0): NÃO trocamos o JID aqui porque
+                            // não conseguimos distinguir "JID errado" de "chip sem conectividade".
+                            // Troca de formato só ocorre no ACK TIMEOUT ISOLADO (chip saudável).
+                            console.warn(`🔁 [ACK-LOOP] Lead "${currentLead.name}" falhou 1ª vez em ${instanceId.slice(0,8)} (stale). Retornando à fila sem alterar JID — será marcado inválido na 2ª falha.`);
+                            await supabase.from('leads').update({ status: 'new' }).eq('id', currentLead.id).eq('status', 'reservado');
                             leadsEmProcessamento.delete(currentLead.id);
                             liberarSemaforoSemCooldown(instanceId);
                         }
