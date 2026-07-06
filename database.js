@@ -63,8 +63,8 @@ const db = {
                 created_at
             `)
             .eq('id', instanceId)
-            .single();
-            
+            .maybeSingle();
+
         if (error) {
             console.error(`[DB] Erro ao puxar regras da instância ${instanceId}:`, error.message);
             return null;

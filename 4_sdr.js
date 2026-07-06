@@ -241,6 +241,8 @@ const iaRespondendo = new Set();
 const inboundAtivo = new Map(); // instanceId → nº de jobs inbound em fila/processamento (fast-lane guard)
 const tentativasReconexao = new Map(); // instanceId → contador de tentativas automáticas (Phase 4)
 const chipsAbandanados = new Set(); // chips que falharam 10x seguidas — Vigia para de reiniciar até Reset Session manual
+const instanciasDeletadas = new Set(); // chips removidos pelo painel — bloqueia reentrada de timeouts pendentes
+const instanciasEmResetManual = new Set(); // impede duplo reset_session simultâneo no mesmo chip
 const mapaRastreioLID = new Map();
 const gavetaDeMensagens = new Map(); // 🧠 OUVIDO PACIENTE: Gaveta temporária de mensagens
 const mensagensJaProcessadas = new Map(); // 🛡️ DEDUP: Previne reprocessamento de msg.key.id do Baileys
@@ -1515,9 +1517,12 @@ async function startInstance(instanceId, instanceName, preloadedUserId = null) {
                     : delayMs;
                 if (delayFinal > delayMs) console.warn(`⏳ [HARD-COOLDOWN] ${instanceName} — aguardando ${Math.round(delayFinal/1000)}s para não estressar o WA após wipe de sessão.`);
                 console.log(`🔄 [RECONEXÃO] ${instanceName} — tentativa ${tentativas}/10 (${motivo}) em ${Math.round(delayFinal/1000)}s...`);
-                setTimeout(() => startInstance(instanceId, instanceName).catch(e =>
-                    console.error(`❌ [RECONEXÃO] startInstance falhou para ${instanceName}: ${e.message}`)
-                ), delayFinal);
+                setTimeout(() => {
+                    if (instanciasDeletadas.has(instanceId)) return;
+                    startInstance(instanceId, instanceName).catch(e =>
+                        console.error(`❌ [RECONEXÃO] startInstance falhou para ${instanceName}: ${e.message}`)
+                    );
+                }, delayFinal);
             };
 
             // 🔴 Sessão corrompida localmente (Bad Session)
@@ -1655,7 +1660,7 @@ async function startInstance(instanceId, instanceName, preloadedUserId = null) {
 
             clearTimeout(gaveta.timer); // O cliente digitou rápido de novo! Zera o cronômetro.
 
-            console.log(`⏳ [OUVIDO PACIENTE] Lead ${remoteJid.split('@')[0]} enviou mensagem. Aguardando 15s para ver se ele manda mais...`);
+            console.log(`⏳ [OUVIDO PACIENTE] Lead ${remoteJid.split('@')[0]} enviou mensagem. Aguardando 30s para ver se ele manda mais...`);
 
             gaveta.timer = setTimeout(async () => {
                 try {
@@ -1671,7 +1676,7 @@ async function startInstance(instanceId, instanceName, preloadedUserId = null) {
                     console.error(`❌ [GAVETA] Erro ao processar bloco consolidado:`, errGaveta.message);
                     gavetaDeMensagens.delete(gavetaKey); // Limpa mesmo com erro
                 }
-            }, 15000); // 15s para consolidar mensagens picotadas antes de processar
+            }, 30000); // 30s para consolidar mensagens picotadas antes de processar
         }
     });
    
@@ -4339,6 +4344,11 @@ module.exports = {
                 }
 
                 for (const id of sessions.keys()) {
+                    if (instanciasDeletadas.has(id)) {
+                        sessions.delete(id);
+                        motoresEmExecucao.delete(id);
+                        continue;
+                    }
                     processarFilaDeAtaque(id);
                 }
             }, 5 * 60 * 1000);
@@ -4466,7 +4476,8 @@ module.exports = {
 
     encerrarInstancia: (instanceId) => {
         // 1. Aciona o silenciador ANTES de fechar o socket
-        instanciasEncerrandoManualmente.add(instanceId); 
+        instanciasEncerrandoManualmente.add(instanceId);
+        instanciasDeletadas.add(instanceId);
 
         const instancia = sessions.get(instanceId);
         if (instancia?.sock) {
@@ -4526,6 +4537,11 @@ module.exports = {
     },
 
     reconectarInstancia: async (instanceId) => {
+        if (instanciasEmResetManual.has(instanceId)) {
+            console.log(`⚠️ [RECONEXÃO MANUAL] Reset de ${instanceId.slice(0,8)} já em andamento. Ignorando duplicata.`);
+            return;
+        }
+        instanciasEmResetManual.add(instanceId);
         const instanceData = await getRegrasEmCache(instanceId);
         const name = instanceData?.name || instanceId;
         console.log(`🔄 [RECONEXÃO MANUAL] Reiniciando chip ${name}...`);
@@ -4558,6 +4574,8 @@ module.exports = {
         staleContador.delete(instanceId); // reconexão manual começa com contador zerado
         tentativasReconexao.delete(instanceId); // Reset Session é intervenção humana — zera contador de falhas
         chipsAbandanados.delete(instanceId); // libera chip para auto-reconexão após QR scan
+        instanciasDeletadas.delete(instanceId); // Remove do set de deletados caso o chip seja re-ativado
+        instanciasEmResetManual.delete(instanceId); // libera o lock — próximo reset pode prosseguir
         startInstance(instanceId, name).catch(err =>
             console.error(`❌ [RECONEXÃO MANUAL] Falha ao iniciar chip "${name}" (proxy/sessão): ${err.message}. Tente reconectar novamente.`)
         );
