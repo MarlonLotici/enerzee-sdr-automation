@@ -14,7 +14,20 @@ const { Resend } = require('resend');
 const Groq = require('groq-sdk');
 const db = require('./database'); // supressão de email + registro de histórico (canal email)
 
-const resend = new Resend(process.env.RESEND_API_KEY);
+// Cliente do Resend é preguiçoso (lazy): o SDK lança erro na CONSTRUÇÃO se a API key
+// estiver vazia, não só no envio. Instanciar no topo do módulo derrubava o processo
+// inteiro no boot sempre que RESEND_API_KEY não estivesse configurada — mesmo em chips
+// que nunca usam email. Agora só falha (de forma controlada, capturada pelo try/catch
+// de quem chama) na hora real de enviar.
+let _resendClient = null;
+function getResend() {
+    if (!process.env.RESEND_API_KEY) {
+        throw new Error('RESEND_API_KEY não configurada — envio de email indisponível.');
+    }
+    if (!_resendClient) _resendClient = new Resend(process.env.RESEND_API_KEY);
+    return _resendClient;
+}
+
 const groq = new Groq({ apiKey: process.env.GROQ_API_KEY });
 
 const MODELO_COPY = 'llama-3.3-70b-versatile';
@@ -149,7 +162,7 @@ async function enviarEmailOutbound(lead, instanceData) {
     }
 
     try {
-        const { data, error } = await resend.emails.send(
+        const { data, error } = await getResend().emails.send(
             montarPayloadEmail(lead.email, copy.assunto, copy.corpo)
         );
 
@@ -200,7 +213,7 @@ async function enviarEmailRepasse(emailDestinatario, lead, instanceData) {
     const corpo = `Olá,\n\nMeu nome é ${agente}, da ${companyName}. Fui indicado pelo pessoal da ${empresaOrigem} para falar com vocês${sobre}.\n\n${calendlyLink ? `Se quiser conversar, pode agendar um horário direto na minha agenda: ${calendlyLink}` : 'Fico à disposição para conversarmos.'}\n\nAtenciosamente,\n${agente} — ${companyName}`;
 
     try {
-        const { data, error } = await resend.emails.send(
+        const { data, error } = await getResend().emails.send(
             montarPayloadEmail(emailDestinatario, assunto, corpo)
         );
 
