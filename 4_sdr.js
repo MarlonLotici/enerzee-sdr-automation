@@ -34,6 +34,9 @@ const { HttpsProxyAgent } = require('https-proxy-agent');
 const Groq = require('groq-sdk');
 const pdf = require('pdf-parse');
 const db = require('./database');
+const emailService = require('./emailService');
+const budgetGuard = require('./budgetGuard');
+const { getTransport, baileysTransport } = require('./transports');
 const { useSupabaseAuthState } = require('./auth_adapter');
 const { gerarAudioTTS } = require('./tts');
 const { createClient } = require('@supabase/supabase-js');
@@ -264,6 +267,18 @@ const ultimoHardRestart = new Map(); // instanceId → timestamp do último HARD
 const falhasLeadPorSessao = new Map(); // `${instanceId}:${leadId}` → nº de ACK_TIMEOUT neste lead nesta sessão; quebra loop de requeue
 const staleRetryFlag = new Map();   // instanceId → true quando o próximo ciclo é um retry de stale; usa jitter curto (15-45s)
 const jidsInvalidos = new Set();    // JIDs confirmados inválidos nesta sessão; skip imediato sem jitter na próxima reserva
+const ultimoEnvioTimestamp = new Map(); // jid → timestamp do último envio confirmado (para detecção de autoresposta)
+const primeiroEnvioSucesso = new Map(); // instanceId → true se já houve ao menos 1 envio confirmado na sessão atual (soft-ban detection)
+const proxy504Tentativas   = new Map(); // instanceId → contador de retries por proxy 504 (máx 3 antes de contar como falha normal)
+const chipsEmConflito      = new Set(); // chips que receberam connectionReplaced e aguardam reconnect (para logar [CONFLITO-RECOVERY])
+
+// Detecta respostas automáticas de WhatsApp Business / bots de atendimento
+const AUTORESPOSTA_REGEX = /agradece (seu|o seu) contato|obrigado por entrar em contato|fora do hor[aá]rio de atendimento|nossa equipe retornar[aá]|atendimento autom[aá]tico|resposta autom[aá]tica|digit[ea] \d para|pressione \d para|selecione uma op[cç][aã]o|para falar com|menu principal|horario de funcionamento/i;
+
+// 🛑 OPT-OUT (LGPD): detecta pedido explícito do lead para não ser mais contatado.
+// Conservador para minimizar falso-positivo — exige termos claros ou a mensagem inteira
+// sendo só "pare"/"sair"/"stop". Ajustável conforme padrões reais de resposta.
+const OPTOUT_REGEX = /descadastr\w*|sair\s+da\s+lista|me\s+tir[ae]\s+(dessa|desta|da)\s+list|me\s+remov\w*|n[ãa]o\s+quero\s+(mais|receber)|n[ãa]o\s+me\s+(mande|envie|perturbe)|n[ãa]o\s+perturbe|nunca\s+mais\s+(me|mande)|par[ae]\s+de\s+(me\s+)?(mand|envi)|unsubscribe|opt[-\s]?out|^\s*(pare|parar|sair|stop)\s*$/i;
 
 // Retorna delay humano randômico entre disparos.
 // Chip novo: 10-18 min — janela maior diminui a cadência detectável pelo WA.
@@ -324,12 +339,26 @@ async function validateProxy(proxyUrl, instanceId) {
             httpsAgent: agent,
             timeout: 10000,
         });
+        if (proxy504Tentativas.get(instanceId)) {
+            console.log(`✅ [PROXY-RECOVERY] Chip ${instanceId.slice(0,8)}: proxy respondeu normalmente após ${proxy504Tentativas.get(instanceId)} tentativa(s) com 504`);
+            proxy504Tentativas.delete(instanceId);
+        }
         console.log(`✅ [PROXY OK] Chip ${instanceId.substring(0, 8)} → IP de saída: ${resp.data.ip}`);
         return agent;
     } catch (err) {
         const safeMsg = (err.message || 'timeout').replace(/:[^:@]*@/g, ':***@');
-        console.error(`🚫 [PROXY FAIL] Chip ${instanceId.substring(0, 8)}: ${safeMsg}. Abortando conexão — IP Railway NÃO exposto.`);
-        throw new Error(`Proxy validation failed for chip ${instanceId.substring(0, 8)}: ${safeMsg}`);
+        const status = err.response?.status;
+        const isTimeout = err.code === 'ECONNABORTED' || err.code === 'ETIMEDOUT' || err.code === 'ECONNREFUSED';
+        if (status === 504) {
+            console.warn(`⚠️ [PROXY-504] Chip ${instanceId.slice(0,8)}: gateway timeout no proxy — possível recuperação em minutos`);
+            const e = new Error(`PROXY_504: ${safeMsg}`); e.proxyError = '504'; throw e;
+        } else if (isTimeout) {
+            console.warn(`⚠️ [PROXY-TIMEOUT] Chip ${instanceId.slice(0,8)}: proxy inacessível (${err.code || 'sem resposta'})`);
+            const e = new Error(`PROXY_TIMEOUT: ${safeMsg}`); e.proxyError = 'TIMEOUT'; throw e;
+        } else {
+            console.error(`🚫 [PROXY FAIL] Chip ${instanceId.substring(0, 8)}: ${safeMsg}. Abortando conexão — IP Railway NÃO exposto.`);
+            throw new Error(`Proxy validation failed for chip ${instanceId.substring(0, 8)}: ${safeMsg}`);
+        }
     }
 }
 
@@ -1335,6 +1364,18 @@ async function startInstance(instanceId, instanceName, preloadedUserId = null) {
     try {
         agent = await validateProxy(proxyUrl, instanceId);
     } catch (err) {
+        if (err.proxyError === '504') {
+            const tentativas = (proxy504Tentativas.get(instanceId) || 0) + 1;
+            proxy504Tentativas.set(instanceId, tentativas);
+            if (tentativas <= 3) {
+                console.log(`[PROXY-RETRY-AGENDADO] Chip ${instanceId.slice(0,8)}: tentativa ${tentativas}/3 em 3min (proxy 504 transitório — não conta como reconexão)`);
+                instanciasLigando.delete(instanceId);
+                setTimeout(() => startInstance(instanceId, instanceName, preloadedUserId), 3 * 60 * 1000);
+                return;
+            }
+            proxy504Tentativas.delete(instanceId);
+            console.warn(`⚠️ [PROXY-504-PERSISTENTE] Chip ${instanceId.slice(0,8)}: 3 retries esgotados — proxy ainda em 504. Tratando como falha normal.`);
+        }
         return _cleanupLock(err); // limpa instanciasLigando e re-lança
     }
     if (!agent) console.log(`ℹ️ [PROXY] ${instanceName} sem proxy configurado — modo direto.`);
@@ -1403,6 +1444,10 @@ async function startInstance(instanceId, instanceName, preloadedUserId = null) {
         }
 
         if (connection === 'open') {
+            if (chipsEmConflito.has(instanceId)) {
+                console.log(`✅ [CONFLITO-RECOVERY] ${instanceName}: reconectou com sucesso após connectionReplaced`);
+                chipsEmConflito.delete(instanceId);
+            }
             console.log(`✅ [SDR] Canal Pronto e Estável: ${instanceName}`);
             cancelarDebounceChip(instanceId); // Chip voltou — cancela alerta de desconexão se ainda no debounce
             tentativasReconexao.delete(instanceId); // Fase 4: conexão bem-sucedida — zera o contador
@@ -1485,6 +1530,7 @@ async function startInstance(instanceId, instanceName, preloadedUserId = null) {
             // 🔴 ERROS FATAIS (Deslogado, Banido, ou Rejeitado pela Meta)
             if (reason === DisconnectReason.loggedOut || reason === 403 || reason === 401) {
                 console.log(`🔴 [FATAL ${reason}] ${instanceName} foi rejeitado ou deslogado. Limpando sessão Redis + Supabase para novo QR...`);
+                console.warn(`[REDIS-WIPE-CAUSE] Chip ${instanceId}: wipe por FATAL ${reason} (sessão rejeitada pelo WA)`);
                 await clearRedisSession(redisConnection, instanceId);
                 await supabase.from('whatsapp_sessions').delete().eq('id', instanceId);
                 await supabase.from('whatsapp_keys').delete().eq('instance_id', instanceId);
@@ -1493,6 +1539,7 @@ async function startInstance(instanceId, instanceName, preloadedUserId = null) {
                 if (ioSocket && instanceUserId) ioSocket.to(`user:${instanceUserId}`).emit('chip_needs_reauth', { instanceId, instanceName });
                 tentativasReconexao.delete(instanceId); // reseta counter — nova sessão começa do zero
                 sucessosPorSessao.delete(instanceId);
+                primeiroEnvioSucesso.delete(instanceId);
                 for (const key of falhasLeadPorSessao.keys()) {
                     if (key.startsWith(instanceId + ':')) falhasLeadPorSessao.delete(key);
                 }
@@ -1537,8 +1584,12 @@ async function startInstance(instanceId, instanceName, preloadedUserId = null) {
 
             // 🔴 Conflito (logou em outro lugar)
             if (reason === DisconnectReason.connectionReplaced) {
-                console.log(`⚠️ [CONFLITO] ${instanceName} foi conectado em outro lugar. Pausando.`);
+                console.log(`⚠️ [CONFLITO-DETECTADO] ${instanceName}: session replaced (celular ou outra aba). Credenciais Redis preservadas. Reconectando em 45s.`);
+                chipsEmConflito.add(instanceId);
                 await db.updateInstanceStatus(instanceId, 'DISCONNECTED');
+                // Usa startInstance() (não reconectarInstancia) — preserva credenciais Redis, evita wipe desnecessário.
+                // instanciasLigando já foi limpo no início deste handler (linha ~1474) — sem race condition com vigia.
+                setTimeout(() => startInstance(instanceId, instanceName, instanceUserId), 45000);
                 return;
             }
 
@@ -1613,16 +1664,18 @@ async function startInstance(instanceId, instanceName, preloadedUserId = null) {
         for (const msg of messages) {
             if (!msg.message) continue;
 
-            const remoteJid = msg.key.remoteJid;
+            // Normaliza a mensagem via camada de transporte — desacopla do formato cru do Baileys.
+            const evento = baileysTransport.normalizarInbound(msg);
+            const remoteJid = evento.remoteJid;
             if (remoteJid.includes('@g.us')) continue; // Ignora grupos
 
             // Acusa leitura imediatamente (ticks azuis) — bots normalmente não fazem isso
-            if (!msg.key.fromMe) {
+            if (!evento.fromMe) {
                 sock.readMessages([msg.key]).catch(() => {});
             }
 
-            const isFromMe = msg.key.fromMe;
-            const messageType = Object.keys(msg.message).find(k => k !== 'messageContextInfo' && k !== 'senderKeyDistributionMessage');
+            const isFromMe = evento.fromMe;
+            const messageType = evento.tipo;
             const isMedia = ['audioMessage', 'imageMessage', 'documentMessage', 'contactMessage', 'contactsArrayMessage'].includes(messageType);
 
             // ⚡ VIA RÁPIDA: Se for VOCÊ digitando ou se o cliente mandou ÁUDIO/CONTA DE LUZ, processa na hora!
@@ -1632,9 +1685,29 @@ async function startInstance(instanceId, instanceName, preloadedUserId = null) {
                 continue;
             }
 
-            // 📝 Extrai o texto da mensagem do cliente
-            const texto = msg.message.conversation || msg.message.extendedTextMessage?.text || "";
+            // 📝 Texto já extraído na normalização (evento.texto)
+            const texto = evento.texto;
             if (!texto) continue;
+
+            // 🤖 FILTRO AUTOBOT: Detecta respostas automáticas de WhatsApp Business antes de processar
+            {
+                const tipoMsg = Object.keys(msg.message).find(k => k !== 'messageContextInfo' && k !== 'senderKeyDistributionMessage');
+                const tipoWaBusiness = ['templateMessage', 'buttonsMessage', 'listMessage', 'buttonsResponseMessage', 'listResponseMessage'].includes(tipoMsg);
+                const deltaMs = Date.now() - (ultimoEnvioTimestamp.get(remoteJid) || 0);
+                const chegouRapido = deltaMs < 8000; // < 8s após envio confirmado → humano não tiparia tão rápido
+                const pareceBot = AUTORESPOSTA_REGEX.test(texto);
+
+                if (tipoWaBusiness || (chegouRapido && pareceBot)) {
+                    console.log(`🤖 [AUTOBOT] Descartando autoresposta de ${remoteJid.split('@')[0]} (Δ${deltaMs}ms, tipo=${tipoMsg}): "${texto.slice(0, 80)}"`);
+                    continue;
+                }
+
+                if (chegouRapido && !pareceBot) {
+                    // Chegou rápido mas não bateu no regex — aguarda mais 30s na gaveta normal.
+                    // Se vier msg humana real a seguir, ela se junta na gaveta. Se não vier, processa.
+                    console.log(`⚡ [AUTOBOT?] Resposta em ${deltaMs}ms de ${remoteJid.split('@')[0]} — não bateu no regex, segue para gaveta (aguardando 30s)`);
+                }
+            }
 
             // 🛡️ DEDUP: Baileys multi-device pode reenviar o mesmo evento várias vezes
             const msgId = msg.key?.id;
@@ -1733,7 +1806,9 @@ function esperarAckServidor(sock, messageId, timeoutMs = 45000) {
 }
 
 async function enviarMensagemIA(sock, jid, content, instanceId = null, timeoutAck = 45000) {
-    const sentMsg = await sock.sendMessage(jid, content);
+    // Envio primitivo via camada de transporte (hoje sempre Baileys). A lógica de
+    // ACK/soft-ban abaixo é específica do Baileys e permanece aqui de propósito.
+    const sentMsg = await baileysTransport.enviar(sock, jid, content);
     if (sentMsg?.key?.id) {
         mensagensEnviadasPelaIA.add(sentMsg.key.id);
         mapaRastreioLID.set(sentMsg.key.id, jid);
@@ -1762,9 +1837,14 @@ async function enviarMensagemIA(sock, jid, content, instanceId = null, timeoutAc
             }
         }
         if (instanceId) {
+            if (!primeiroEnvioSucesso.get(instanceId)) {
+                primeiroEnvioSucesso.set(instanceId, true);
+                console.log(`✅ [SESSION-FIRST-SUCCESS] Chip ${instanceId.slice(0,8)}: primeiro envio confirmado nessa sessão — fora da zona de risco de soft-ban`);
+            }
             sucessosPorSessao.set(instanceId, (sucessosPorSessao.get(instanceId) || 0) + 1);
             staleContador.delete(instanceId);
         }
+        ultimoEnvioTimestamp.set(jid, Date.now()); // registra momento do envio confirmado para detecção de autoresposta
     }
     return sentMsg;
 }
@@ -1795,10 +1875,10 @@ async function enviarAudioTTS(sock, remoteJid, texto, lead, instanceId, voz = nu
         // Note que agora passamos 'textoHumanizado' e não mais o 'texto' original
         const buffer = await gerarAudioTTS(textoHumanizado, voz || undefined);
 
-        await sock.sendMessage(remoteJid, {
+        await baileysTransport.enviar(sock, remoteJid, {
             audio: buffer,
             mimetype: 'audio/ogg; codecs=opus',
-            ptt: true 
+            ptt: true
         });
 
         await db.saveMessage(lead.whatsapp_id, 'assistant', `[AUDIO_TTS] ${texto}`, instanceId);
@@ -2106,7 +2186,34 @@ if (!lead && cleanJid.includes('@lid')) {
         }
     }
 } else if (!lead) {
-    return; // Fora da base, ignora.
+    // 📥 INBOUND ORGÂNICO: chips inbound_only recebem mensagem de gente fora da base.
+    // Em vez de ignorar, cria o lead na hora e injeta na esteira normalmente.
+    const instanceDataInbound = await getRegrasEmCache(instanceId);
+    if (!instanceDataInbound?.inbound_only) {
+        return; // Fora da base, ignora — comportamento padrão preservado.
+    }
+
+    console.log(`📥 [INBOUND ORGÂNICO] Chip inbound-only recebeu contato novo de ${cleanJid}. Criando lead.`);
+    const userIdInbound = instanceDataInbound.user_id;
+    const { data: leadCriado, error: erroLeadOrganico } = await supabase
+        .from('leads')
+        .insert({
+            whatsapp_id: cleanJid,
+            instance_id: instanceId,
+            user_id: userIdInbound,
+            name: msg.pushName || 'Contato Orgânico',
+            dono: extrairNomeHumano(msg.pushName) || null,
+            origin: 'inbound_organic',
+            status: 'contact',
+        })
+        .select('*')
+        .single();
+
+    if (erroLeadOrganico || !leadCriado) {
+        console.error(`❌ [INBOUND ORGÂNICO] Falha ao criar lead para ${cleanJid}:`, erroLeadOrganico?.message);
+        return;
+    }
+    lead = leadCriado;
 }
 
 // 🎯 A MÁGICA DA IDENTIDADE: Atualização dinâmica do nome pelo WhatsApp
@@ -2220,6 +2327,26 @@ if (fromMe) {
     if (!fromMe && texto.length > 0) {
         console.log(`🔍 [ANÁLISE] Lendo mensagem de ${lead.name}: "${texto.substring(0, 50)}..."`);
 
+        // 🛑 OPT-OUT (LGPD): honrado ANTES de qualquer outra lógica, mesmo se o lead estiver pausado.
+        // Adiciona à blacklist (primeiro caminho de escrita real dessa tabela) e encerra o lead.
+        if (OPTOUT_REGEX.test(texto)) {
+            console.log(`🛑 [OPT-OUT] ${lead.name} pediu para não ser mais contatado: "${texto.substring(0, 60)}"`);
+            await db.adicionarBlacklist(lead.whatsapp_id, `opt-out do lead: "${texto.substring(0, 80)}"`);
+            await supabase.from('leads').update({
+                status: 'blacklisted',
+                is_paused: true,
+                internal_notes: `Opt-out (LGPD) detectado em ${new Date().toLocaleString('pt-BR')}: "${texto.substring(0, 80)}"`
+            }).eq('id', lead.id);
+            await db.saveMessage(lead.whatsapp_id, 'user', `[OPT-OUT] ${texto}`, instanceId);
+            await enviarAlerta(`🛑 *Opt-out solicitado*\n*Lead:* ${lead.name}\n*Chip:* ${instanceId}\nNúmero adicionado à blacklist automaticamente.`).catch(() => {});
+            return;
+        }
+
+        if (lead.is_paused) {
+            console.log(`⏸️ [TRAVA HUMANA] A IA ignorou ${lead.name} porque o lead está pausado no banco (is_paused = true).`);
+            return;
+        }
+
         // 🧟 GUARD: flood de mensagens idênticas antes do is_paused propagar no banco
         // Usa lead.whatsapp_id (JID limpo) — remoteJid pode ter ":11" (multi-device) que
         // não existe na tabela messages, causando 0 resultados e loop infinito.
@@ -2233,13 +2360,10 @@ if (fromMe) {
             return;
         }
 
-        if (lead.is_paused) {
-            console.log(`⏸️ [TRAVA HUMANA] A IA ignorou ${lead.name} porque o lead está pausado no banco (is_paused = true).`);
-        } else {
-                const intencao = analisarIntencaoRegex(texto);
-            console.log(`🎯 [Filtro] A IA classificou a mensagem de ${lead.name} como: ${intencao}`);
-            
-      if (intencao === "[ROBO]") {
+        const intencao = analisarIntencaoRegex(texto);
+        console.log(`🎯 [Filtro] A IA classificou a mensagem de ${lead.name} como: ${intencao}`);
+
+        if (intencao === "[ROBO]") {
             console.log(`🤖 [SILÊNCIO] Autoresposta detectada para ${lead.name}. Bot aguardando humano silenciosamente...`);
             await db.saveMessage(lead.whatsapp_id, 'user', `[AUTORESPOSTA] ${texto}`, instanceId);
             await supabase.from('leads').update({ is_paused: true }).eq('id', lead.id);
@@ -2261,7 +2385,6 @@ if (fromMe) {
                 return;
             }
         }
-        }
     }
    // --- 3. PROCESSAMENTO DE MÍDIA INTELIGENTE ---
     if (messageType === 'audioMessage' || messageType === 'imageMessage' || messageType === 'documentMessage') {
@@ -2278,7 +2401,7 @@ if (fromMe) {
                 
                 if (!lead.is_paused) {
                     const msgErroCarga = "Opa, meu sistema não conseguiu carregar esse arquivo por causa do tamanho rs. Consegue me mandar um print da primeira página da fatura? Fica mais fácil de eu ler aqui.";
-                    await sock.sendMessage(remoteJid, { text: msgErroCarga });
+                    await baileysTransport.enviar(sock, remoteJid, { text: msgErroCarga });
                     await db.saveMessage(lead.whatsapp_id, 'assistant', msgErroCarga, instanceId);
                 }
                 return; // Mata o processamento aqui e economiza sua CPU/Banda
@@ -2343,10 +2466,10 @@ if (fromMe) {
                 }).eq('whatsapp_id', lead.whatsapp_id);
 
                 if (!lead.is_paused) {
-                    await sock.sendMessage(remoteJid, { text: estudo });
+                    await baileysTransport.enviar(sock, remoteJid, { text: estudo });
                     await db.saveMessage(lead.whatsapp_id, 'assistant', estudo, instanceId);
                 }
-                return; 
+                return;
             } else if (messageType !== 'audioMessage') {
                 if (!lead.is_paused) {
                     const estagioAtual = lead.current_stage || 0;
@@ -2358,7 +2481,7 @@ if (fromMe) {
                             cacheAvisosMidia.set(chaveAviso, Date.now());
                             setTimeout(() => cacheAvisosMidia.delete(chaveAviso), 5 * 60 * 1000);
                             const msgFoto = "Opa, essa foto parece ser de outra coisa rs. Consegue mandar uma nítida da fatura aberta? Pode ser print do PDF também.";
-                            await sock.sendMessage(remoteJid, { text: msgFoto });
+                            await baileysTransport.enviar(sock, remoteJid, { text: msgFoto });
                             await db.saveMessage(lead.whatsapp_id, 'assistant', msgFoto, instanceId);
                         }
                     } else {
@@ -2619,6 +2742,17 @@ async function processarFilaDeAtaque(instanceId) {
                     console.log(`🔕 [MOTOR SILENCIADO] Chip ${instanceId} ignorado. DB="${instanceData?.whatsapp_status}" | mem.ready=${sessaoMem?.ready} | mem.ws=${sessaoMem?.sock?.ws?.isOpen} — ${sessaoMem?.ready ? 'cache desatualizado (DB atrás da memória)' : 'chip genuinamente offline'}`);
                     break; // 🛑 HÍBRIDO: Morre aqui se não estiver conectado
                 }
+
+                if (instanceData.firing_paused) {
+                    console.log(`⏸️ [PAUSADO MANUAL] Chip ${instanceData.name || instanceId.slice(0,8)} está pausado pelo operador. Motor inativo até ser retomado.`);
+                    break; // Motor para; o VIGIA não reinicia enquanto firing_paused=true
+                }
+
+                if (instanceData.inbound_only) {
+                    console.log(`[CHIP INBOUND-ONLY] ignorando fila de ataque.`);
+                    break; // Chip só responde ao que chegar organicamente — motor não prospecta
+                }
+
                 console.log(`⚡ [MOTOR ATIVO] Chip ${instanceData.name || instanceId.slice(0,8)} — status CONNECTED confirmado, iniciando ciclo de disparo`);
 
                 chipNovo = isChipNovo(instanceData);
@@ -2697,7 +2831,48 @@ console.log(`🔒 [RESERVA] Lead ${lead.name} travado atomicamente para chip ${c
                     console.log(`🚫 [BLACKLIST] Lead ${lead.name} restrito. Abortando...`);
                     await supabase.from('leads').update({ status: 'blacklisted' }).eq('id', lead.id);
                     leadsEmProcessamento.delete(lead.id);
-                    continue; 
+                    continue;
+                }
+
+                // 📧 4b. CANAL OUTBOUND — chips com use_email_outbound pulam o WhatsApp inteiramente
+                if (instanceData.use_email_outbound) {
+                    // 🧪 DRY-RUN: loga a decisão de canal sem gerar copy nem consumir orçamento —
+                    // não toca status do lead, não chama Resend/Groq. Serve pra testar mudança de
+                    // canal em leads reais sem risco.
+                    if (instanceData.dry_run) {
+                        console.log(`🧪 [DRY-RUN] Chip ${instanceData.name || instanceId.slice(0,8)} enviaria EMAIL para ${lead.name} (${lead.email || 'SEM EMAIL — cairia em no_email'}). Nenhum envio real ocorreu.`);
+                        leadsEmProcessamento.delete(lead.id);
+                        continue;
+                    }
+                    if (lead.email) {
+                        // 💸 GUARDRAIL: teto diário AGREGADO de emails por conta (não só por chip).
+                        // DAILY_EMAIL_BUDGET=0 (ou ausente) → sem teto, comportamento atual preservado.
+                        const limiteEmail = parseInt(process.env.DAILY_EMAIL_BUDGET) || 0;
+                        const userIdChip = instanceData.user_id;
+                        if (limiteEmail > 0 && !(await budgetGuard.podeGastar(userIdChip, 'email', limiteEmail))) {
+                            console.log(`💸 [BUDGET] Conta ${String(userIdChip).slice(0,8)} atingiu o teto de ${limiteEmail} emails/dia. Parando envios de email deste chip.`);
+                            // Libera o lead de volta pra fila (estava 'reservado') e desliga o motor deste chip.
+                            await supabase.from('leads').update({ status: 'new' }).eq('id', lead.id).eq('status', 'reservado');
+                            leadsEmProcessamento.delete(lead.id);
+                            break;
+                        }
+                        const resultadoEmail = await emailService.enviarEmailOutbound(lead, instanceData);
+                        if (resultadoEmail.success) {
+                            await budgetGuard.registrarGasto(userIdChip, 'email', limiteEmail);
+                            await supabase.from('leads').update({ status: 'email_sent', last_contact_at: new Date() }).eq('id', lead.id);
+                            console.log(`📧 [EMAIL OUTBOUND] ${lead.name} → email enviado, pulando WhatsApp.`);
+                        } else {
+                            console.error(`❌ [EMAIL OUTBOUND] Falha ao enviar para ${lead.name}: ${resultadoEmail.error}`);
+                            // 'Email suprimido' não é falha transitória — não reprocessar em loop.
+                            const novoStatus = resultadoEmail.error === 'Email suprimido' ? 'blacklisted' : 'new';
+                            await supabase.from('leads').update({ status: novoStatus }).eq('id', lead.id);
+                        }
+                    } else {
+                        await supabase.from('leads').update({ status: 'no_email' }).eq('id', lead.id);
+                        console.log(`⚠️ [EMAIL OUTBOUND] ${lead.name} sem email cadastrado. Marcado como no_email.`);
+                    }
+                    leadsEmProcessamento.delete(lead.id);
+                    continue;
                 }
 
                 // ⚡ 5. VALIDAÇÃO RÁPIDA DE ZAP
@@ -2741,7 +2916,7 @@ console.log(`🔒 [RESERVA] Lead ${lead.name} travado atomicamente para chip ${c
                 const preCheckJid = lead.whatsapp_id.split(':')[0].split('@')[0] + '@s.whatsapp.net';
                 if (jidsInvalidos.has(preCheckJid)) {
                     console.log(`🚫 [JID-CACHE] ${lead.name} (${preCheckJid}) já confirmado inválido nesta sessão. Descartando sem jitter.`);
-                    await supabase.from('leads').update({ status: 'invalid_number' }).eq('id', lead.id);
+                    await supabase.from('leads').update({ status: 'invalid', internal_notes: `Número inválido (JID-CACHE: confirmado sem WhatsApp nesta sessão) em ${new Date().toLocaleString('pt-BR')}` }).eq('id', lead.id);
                     leadsEmProcessamento.delete(lead.id);
                     continue;
                 }
@@ -2785,7 +2960,7 @@ console.log(`🔒 [RESERVA] Lead ${lead.name} travado atomicamente para chip ${c
                         const [waStat] = await instancia.sock.onWhatsApp(cleanJid.replace('@s.whatsapp.net', ''));
                         if (!waStat?.exists) {
                             console.warn(`⚠️ [PRE-CHECK WA] ${lead.name} não está no WhatsApp. Descartando.`);
-                            await supabase.from('leads').update({ status: 'invalid_number' }).eq('id', lead.id).eq('status', 'reservado');
+                            await supabase.from('leads').update({ status: 'invalid', internal_notes: `Número inválido (PRE-CHECK WA: onWhatsApp retornou inexistente) em ${new Date().toLocaleString('pt-BR')}` }).eq('id', lead.id).eq('status', 'reservado');
                             leadsEmProcessamento.delete(lead.id);
                             jidsInvalidos.add(cleanJid);
                             liberarSemaforoSemCooldown(instanceId);
@@ -2893,10 +3068,17 @@ if (lead.opening_template && lead.opening_template.length > 15 && lead.opening_t
         console.log(`📋 [SPINTAX] Abertura via template para ${lead.name}: "${textoFinal}"`);
     } else {
         // Sem template padrao configurado: usa LLM com fallbacks hardcoded
-        const spintaxFallback = [
+        // isSolar: mesma expressão usada em resolverPromptCompleto (linha ~1071) — tenants
+        // fora do nicho solar não podem herdar vocabulário de "conta de energia/luz" aqui.
+        const isSolarFallback = !instanceData?.product_type || instanceData.product_type === 'solar';
+        const spintaxFallback = isSolarFallback ? [
             `${saudacao}, vi algo sobre a conta de energia da ${nomeEmpresa} que achei que valia te passar. Vc cuida dessa parte de contas fixas aí?`,
             `${saudacao}, dei uma olhada no cadastro da ${nomeEmpresa} e tem uma coisa sobre a conta de luz da ${concessionariaLocal} que achei que valia te avisar. Tô falando com quem cuida disso?`,
             `${saudacao}, mapeamos empresas da região que podem estar pagando a mais na ${concessionariaLocal}. A ${nomeEmpresa} apareceu na lista. Vc é quem cuida dessa parte?`
+        ] : [
+            `${saudacao}, vi algo sobre a ${nomeEmpresa} que achei que valia te passar. Vc cuida dessa parte de contas fixas aí?`,
+            `${saudacao}, dei uma olhada no cadastro da ${nomeEmpresa} e tem uma coisa que achei que valia te avisar. Tô falando com quem cuida disso?`,
+            `${saudacao}, mapeamos empresas da região com uma oportunidade parecida. A ${nomeEmpresa} apareceu na lista. Vc é quem cuida dessa parte?`
         ];
 
         try {
@@ -2946,6 +3128,16 @@ if (lead.opening_template && lead.opening_template.length > 15 && lead.opening_t
 
 const mensagensSplit = textoFinal.split('[QUEBRA]').map(t => t.trim()).filter(t => t.length > 0);
 
+                // 🧪 DRY-RUN: loga o que seria enviado por WhatsApp sem enviar de fato — não toca
+                // status do lead (fica 'reservado' até a varredura de startup liberá-lo, linha ~4407;
+                // esperado em sessão de teste curta, não use dry_run em chip de produção contínua).
+                if (instanceData.dry_run) {
+                    console.log(`🧪 [DRY-RUN] Chip ${config.nome} enviaria WHATSAPP para ${lead.name} (${mensagensSplit.length} balão(ões)): "${textoFinal.substring(0, 120)}${textoFinal.length > 120 ? '...' : ''}"`);
+                    leadsEmProcessamento.delete(lead.id);
+                    liberarSemaforoChip(instanceId, chipNovo);
+                    continue;
+                }
+
                 // 9. FATIADOR HUMANO E ENVIO (Com interrupção intacta!)
                 // Sessão sem nenhum envio confirmado usa timeout ACK reduzido (20s):
                 // WA server retorna ACK imediatamente se o número existe — 45s é tempo demais para stale.
@@ -2984,6 +3176,11 @@ const mensagensSplit = textoFinal.split('[QUEBRA]').map(t => t.trim()).filter(t 
                 // 10. CONCLUSÃO E SUCESSO (cobre caso de break antecipado — lead respondeu antes do último chunk)
                 await supabase.from('leads').update({ status: 'contact', last_contact_at: new Date().toISOString(), opening_template: textoFinal }).eq('id', lead.id);
                 console.log(`✅ [SUCESSO REAL] Entregue por ${config.nome} para ${lead.name}!`);
+                ultimoEnvioTimestamp.set(cleanJid, Date.now()); // base de tempo para detecção de autoresposta
+                if (!primeiroEnvioSucesso.get(instanceId)) {
+                    primeiroEnvioSucesso.set(instanceId, true);
+                    console.log(`✅ [SESSION-FIRST-SUCCESS] Chip ${instanceId.slice(0,8)}: primeiro envio confirmado nessa sessão — fora da zona de risco de soft-ban`);
+                }
                 sucessosPorSessao.set(instanceId, (sucessosPorSessao.get(instanceId) || 0) + 1);
                 staleContador.delete(instanceId); // envio confirmado — zera contador de falhas stale consecutivas
                 leadsEmProcessamento.delete(lead.id);
@@ -3005,7 +3202,7 @@ const mensagensSplit = textoFinal.split('[QUEBRA]').map(t => t.trim()).filter(t 
                             }).eq('id', currentLead.id);
                         } else {
                             console.log(`🚫 [INVÁLIDO] ${currentLead.name} (${currentLead.phone || currentLead.whatsapp_id}) sem WhatsApp. Descartando sem cooldown.`);
-                            await supabase.from('leads').update({ status: 'invalid_number' }).eq('id', currentLead.id);
+                            await supabase.from('leads').update({ status: 'invalid', internal_notes: `Número inválido (sem WhatsApp, descartado sem cooldown) em ${new Date().toLocaleString('pt-BR')}` }).eq('id', currentLead.id);
                             if (currentLead.whatsapp_id) jidsInvalidos.add(currentLead.whatsapp_id);
                         }
                         leadsEmProcessamento.delete(currentLead.id);
@@ -3019,7 +3216,7 @@ const mensagensSplit = textoFinal.split('[QUEBRA]').map(t => t.trim()).filter(t 
                 if (errInner.message?.includes('FALHA_SILENCIOSA')) {
                     console.warn(`⚠️ [FALHA SILENCIOSA] ${currentLead?.name} — sem confirmação de entrega. Descartando sem cooldown.`);
                     if (currentLead) {
-                        await supabase.from('leads').update({ status: 'invalid_number' }).eq('id', currentLead.id);
+                        await supabase.from('leads').update({ status: 'invalid', internal_notes: `Número inválido (FALHA SILENCIOSA: sem confirmação de entrega) em ${new Date().toLocaleString('pt-BR')}` }).eq('id', currentLead.id);
                         if (currentLead.whatsapp_id) jidsInvalidos.add(currentLead.whatsapp_id);
                         leadsEmProcessamento.delete(currentLead.id);
                         liberarSemaforoSemCooldown(instanceId); // ⚡ sem penalidade de tempo
@@ -3052,7 +3249,7 @@ const mensagensSplit = textoFinal.split('[QUEBRA]').map(t => t.trim()).filter(t 
                                 await supabase.from('leads').update({ status: 'new', whatsapp_id: novoJid }).eq('id', currentLead.id).eq('status', 'reservado');
                             } else {
                                 console.warn(`⚠️ [ACK TIMEOUT ISOLADO] ${instanceId} — sessão saudável (${sucessosNestaSessao} envios OK). Lead ${currentLead.name} descartado como inválido.`);
-                                await supabase.from('leads').update({ status: 'invalid_number' }).eq('id', currentLead.id);
+                                await supabase.from('leads').update({ status: 'invalid', internal_notes: `Número inválido (ACK TIMEOUT ISOLADO: sessão saudável, sem ACK deste lead) em ${new Date().toLocaleString('pt-BR')}` }).eq('id', currentLead.id);
                                 if (currentLead.whatsapp_id) jidsInvalidos.add(currentLead.whatsapp_id);
                             }
                             leadsEmProcessamento.delete(currentLead.id);
@@ -3065,6 +3262,11 @@ const mensagensSplit = textoFinal.split('[QUEBRA]').map(t => t.trim()).filter(t 
                     // 1ª falha: soft restart (reinicia socket, preserva credenciais — evita wipe desnecessário).
                     // 2ª falha consecutiva: hard restart (wipe completo + novo QR).
                     const stalesFalhas = (staleContador.get(instanceId) || 0) + 1;
+                    const _jaNovaSessao = !primeiroEnvioSucesso.get(instanceId);
+                    if (_jaNovaSessao) {
+                        console.warn(`🚨 [SOFT-BAN-SUSPEITA] Chip ${instanceId.slice(0,8)}: ACK_TIMEOUT antes do 1º envio confirmado — possível soft-ban no número ou IP do proxy. JID: ${currentLead?.whatsapp_id}`);
+                    }
+                    console.warn(`[ACK-FAIL-DETAIL] Chip ${instanceId.slice(0,8)}: falha ACK | JID=${currentLead?.whatsapp_id} | lead="${currentLead?.name}" | stale=${stalesFalhas} | primeiraSessão=${_jaNovaSessao}`);
                     staleContador.set(instanceId, stalesFalhas);
 
                     if (currentLead) {
@@ -3075,7 +3277,7 @@ const mensagensSplit = textoFinal.split('[QUEBRA]').map(t => t.trim()).filter(t 
                         if (falhasEsteLead >= 2) {
                             // Mesmo lead falhou 2x nesta sessão — quebra o loop marcando como inválido
                             console.warn(`🔁 [ACK-LOOP QUEBRADO] Lead "${currentLead.name}" causou ACK_TIMEOUT ${falhasEsteLead}x em ${instanceId.slice(0,8)} sem nenhum sucesso. Marcando inválido para evitar loop infinito.`);
-                            await supabase.from('leads').update({ status: 'invalid_number' }).eq('id', currentLead.id);
+                            await supabase.from('leads').update({ status: 'invalid', internal_notes: `Número inválido (ACK-LOOP QUEBRADO: 2 ACK_TIMEOUT no mesmo lead sem sucesso) em ${new Date().toLocaleString('pt-BR')}` }).eq('id', currentLead.id);
                             if (currentLead.whatsapp_id) jidsInvalidos.add(currentLead.whatsapp_id);
                             leadsEmProcessamento.delete(currentLead.id);
                             falhasLeadPorSessao.delete(chaveLeadSessao);
@@ -3103,7 +3305,9 @@ const mensagensSplit = textoFinal.split('[QUEBRA]').map(t => t.trim()).filter(t 
 
                     // Limite atingido → wipe completo
                     console.error(`⏱️ [ACK TIMEOUT - HARD] ${instanceId} — ${stalesFalhas} falhas stale (limite=${limiteStale}). Limpando credenciais e pedindo novo QR...`);
+                    console.warn(`[REDIS-WIPE-CAUSE] Chip ${instanceId}: wipe por ACK_TIMEOUT_HARD (${stalesFalhas} falhas consecutivas sem SERVER_ACK)`);
                     staleContador.delete(instanceId);
+                    primeiroEnvioSucesso.delete(instanceId);
                     sucessosPorSessao.delete(instanceId); // nova sessão começa do zero
                     for (const key of falhasLeadPorSessao.keys()) {
                         if (key.startsWith(instanceId + ':')) falhasLeadPorSessao.delete(key);
@@ -3955,43 +4159,82 @@ if (!promptResolvido) {
 } else if (intencao === 'REPASSE') {
     console.log(`🔄 [WORKER-IA] REPASSE detectado para ${lead.name}. Acionando extrator de decisor...`);
 
-    const { nomeDecisor, telefoneDecisor } = await handoffAgent.extrairDadosDecisor(ultimaMsg, historico);
-    console.log(`🔍 [REPASSE] Extração → nome: "${nomeDecisor}", fone: "${telefoneDecisor}"`);
+    // 📧 Email tem prioridade: se o lead passou um email no repasse, dispara o fluxo de email
+    // em vez do fluxo de decisor por telefone.
+    const emailMatch = ultimaMsg.match(/[\w.+-]+@[\w-]+\.[\w.-]+/);
+    const emailDetectado = emailMatch ? emailMatch[0] : null;
 
-    if (telefoneDecisor) {
-        try {
-            await db.atualizarLeadParaDecisor({
-                leadId:            lead.id,
-                novoNomeDecisor:   nomeDecisor,
-                novoPhone:         telefoneDecisor,
-                labelNumeroAntigo: 'recepcao',
-            });
+    if (emailDetectado) {
+        console.log(`📧 [REPASSE] Email detectado na mensagem: ${emailDetectado}`);
+        const resultadoEmailRepasse = await emailService.enviarEmailRepasse(emailDetectado, lead, instanceData);
+        await supabase.from('leads').update({ email: emailDetectado }).eq('id', lead.id);
+        lead.email = emailDetectado;
 
-            // Acorda o motor para o novo número imediatamente
-            sdrEventsGlobal?.emit('NOVO_LEAD_DISPONIVEL', lead.instance_id);
-
-            const tratamento = nomeDecisor && nomeDecisor !== 'Responsável'
-                ? `o ${nomeDecisor}`
-                : 'o responsável';
-            resposta = `Perfeito, vou entrar em contato com ${tratamento} por lá. Obrigado pela indicação! 🙏`;
-
-            console.log(`✅ [REPASSE] Lead ${lead.id} atualizado → decisor: "${nomeDecisor}", fone: ${telefoneDecisor}`);
-        } catch (erroRepasse) {
-            console.error(`❌ [REPASSE] Falha ao atualizar lead ${lead.id}:`, erroRepasse.message);
-            // Fallback: closer tenta extrair o contato via conversa
+        if (resultadoEmailRepasse.success) {
+            resposta = `Perfeito, vou encaminhar por lá também. Obrigado pela indicação! 🙏`;
+            console.log(`✅ [REPASSE] Email de repasse enviado para ${emailDetectado}`);
+        } else {
+            console.error(`❌ [REPASSE] Falha ao enviar email de repasse:`, resultadoEmailRepasse.error);
             resposta = await closerAgent.gerarRespostaCloser(historico, lead, promptResolvido, 'REPASSE', { calendlyLink: instanceData?.calendly_link, instanceType: instanceData?.product_type || 'solar' });
         }
     } else {
-        // Nenhum telefone na mensagem — closer pergunta pelo contato do decisor
-        console.log(`⚠️ [REPASSE] Nenhum telefone extraído para ${lead.name}. Closer assumindo para solicitar o contato...`);
-        resposta = await closerAgent.gerarRespostaCloser(historico, lead, promptResolvido, 'REPASSE', { calendlyLink: instanceData?.calendly_link, instanceType: instanceData?.product_type || 'solar' });
-        // Pausa o lead para evitar loop: mesmo email chegando de novo não dispara nova resposta
-        await supabase.from('leads').update({
-            is_paused: true,
-            internal_notes: `Aguardando telefone do decisor — email recebido: "${ultimaMsg.substring(0, 80)}"`
-        }).eq('id', lead.id);
-        console.log(`⏸️ [REPASSE] Lead ${lead.name} pausado. Aguardando retorno com telefone.`);
-        emitirEventoHandoff(lead, 'Aguardando telefone do decisor — lead indicou outra pessoa sem passar o número', historico).catch(() => {});
+        const { nomeDecisor, telefoneDecisor } = await handoffAgent.extrairDadosDecisor(ultimaMsg, historico);
+        console.log(`🔍 [REPASSE] Extração → nome: "${nomeDecisor}", fone: "${telefoneDecisor}"`);
+
+        if (telefoneDecisor) {
+            try {
+                await db.atualizarLeadParaDecisor({
+                    leadId:            lead.id,
+                    novoNomeDecisor:   nomeDecisor,
+                    novoPhone:         telefoneDecisor,
+                    labelNumeroAntigo: 'recepcao',
+                });
+
+                // Acorda o motor para o novo número imediatamente
+                sdrEventsGlobal?.emit('NOVO_LEAD_DISPONIVEL', lead.instance_id);
+
+                const tratamento = nomeDecisor && nomeDecisor !== 'Responsável'
+                    ? `o ${nomeDecisor}`
+                    : 'o responsável';
+                resposta = `Perfeito, vou entrar em contato com ${tratamento} por lá. Obrigado pela indicação! 🙏`;
+
+                console.log(`✅ [REPASSE] Lead ${lead.id} atualizado → decisor: "${nomeDecisor}", fone: ${telefoneDecisor}`);
+            } catch (erroRepasse) {
+                console.error(`❌ [REPASSE] Falha ao atualizar lead ${lead.id}:`, erroRepasse.message);
+                // Fallback: closer tenta extrair o contato via conversa
+                resposta = await closerAgent.gerarRespostaCloser(historico, lead, promptResolvido, 'REPASSE', { calendlyLink: instanceData?.calendly_link, instanceType: instanceData?.product_type || 'solar' });
+            }
+        } else if (lead.backup_whatsapp_id) {
+            // 🚪 GATEKEEPER SEM REPASSE: lead confirmou que não é quem decide mas não passou
+            // contato — se já existe um backup_whatsapp_id cadastrado, migra automaticamente
+            // em vez de esperar o lead voltar com o número.
+            console.log(`🔁 [GATEKEEPER] Sem repasse explícito, mas backup_whatsapp_id já cadastrado. Migrando automaticamente.`);
+            try {
+                await db.atualizarLeadParaDecisor({
+                    leadId:            lead.id,
+                    novoNomeDecisor:   nomeDecisor,
+                    novoPhone:         lead.backup_whatsapp_id.replace(/\D/g, ''),
+                    labelNumeroAntigo: 'recepcao',
+                });
+                sdrEventsGlobal?.emit('NOVO_LEAD_DISPONIVEL', lead.instance_id);
+                resposta = `Sem problemas, vou tentar por outro contato. Obrigado! 🙏`;
+                console.log(`✅ [GATEKEEPER] Lead ${lead.id} migrado para backup_whatsapp_id automaticamente.`);
+            } catch (erroBackup) {
+                console.error(`❌ [GATEKEEPER] Falha ao migrar para backup_whatsapp_id:`, erroBackup.message);
+                resposta = await closerAgent.gerarRespostaCloser(historico, lead, promptResolvido, 'REPASSE', { calendlyLink: instanceData?.calendly_link, instanceType: instanceData?.product_type || 'solar' });
+            }
+        } else {
+            // Nenhum telefone na mensagem — closer pergunta pelo contato do decisor
+            console.log(`⚠️ [REPASSE] Nenhum telefone extraído para ${lead.name}. Closer assumindo para solicitar o contato...`);
+            resposta = await closerAgent.gerarRespostaCloser(historico, lead, promptResolvido, 'REPASSE', { calendlyLink: instanceData?.calendly_link, instanceType: instanceData?.product_type || 'solar' });
+            // Pausa o lead para evitar loop: mesmo email chegando de novo não dispara nova resposta
+            await supabase.from('leads').update({
+                is_paused: true,
+                internal_notes: `Aguardando telefone do decisor — email recebido: "${ultimaMsg.substring(0, 80)}"`
+            }).eq('id', lead.id);
+            console.log(`⏸️ [REPASSE] Lead ${lead.name} pausado. Aguardando retorno com telefone.`);
+            emitirEventoHandoff(lead, 'Aguardando telefone do decisor — lead indicou outra pessoa sem passar o número', historico).catch(() => {});
+        }
     }
 
 } else {
@@ -4559,6 +4802,7 @@ module.exports = {
         cacheRegrasInstancia.delete(instanceId);
 
         // 3. Limpa credenciais do Redis E Supabase — sessão completamente zerada garante QR novo e sessão WA válida
+        console.warn(`[REDIS-WIPE-CAUSE] Chip ${instanceId}: wipe por reconexão manual via dashboard`);
         await clearRedisSession(redisConnection, instanceId);
         await supabase.from('whatsapp_sessions').delete().eq('id', instanceId);
         await supabase.from('whatsapp_keys').delete().eq('instance_id', instanceId);
@@ -4572,6 +4816,7 @@ module.exports = {
 
         // 6. Inicia nova sessão — sem credenciais no Redis, Baileys vai gerar QR code
         staleContador.delete(instanceId); // reconexão manual começa com contador zerado
+        primeiroEnvioSucesso.delete(instanceId);
         tentativasReconexao.delete(instanceId); // Reset Session é intervenção humana — zera contador de falhas
         chipsAbandanados.delete(instanceId); // libera chip para auto-reconexão após QR scan
         instanciasDeletadas.delete(instanceId); // Remove do set de deletados caso o chip seja re-ativado
@@ -4579,6 +4824,46 @@ module.exports = {
         startInstance(instanceId, name).catch(err =>
             console.error(`❌ [RECONEXÃO MANUAL] Falha ao iniciar chip "${name}" (proxy/sessão): ${err.message}. Tente reconectar novamente.`)
         );
+    },
+
+    // Invalida o cache de regras da instância — usado pelo PATCH /api/instance para que
+    // toggles de inbound_only/use_email_outbound/use_sms_outbound sejam lidos no próximo ciclo.
+    invalidateInstanceCache: (instanceId) => {
+        cacheRegrasInstancia.delete(instanceId);
+    },
+
+    pauseChip: async (instanceId, pausar) => {
+        const { error } = await supabase
+            .from('instances')
+            .update({ firing_paused: pausar })
+            .eq('id', instanceId);
+        if (error) throw new Error(error.message);
+        cacheRegrasInstancia.delete(instanceId); // invalida cache — próximo ciclo do motor lê o novo valor
+        const nome = sessions.get(instanceId)?.name || instanceId.slice(0, 8);
+        console.log(`${pausar ? '⏸️' : '▶️'} [PAUSA MANUAL] Chip ${nome} ${pausar ? 'PAUSADO' : 'RETOMADO'} pelo operador.`);
+    },
+
+    // Reativa um lead pausado manualmente e acorda o motor imediatamente para esse chip,
+    // em vez de esperar o próximo ciclo natural de processarFilaDeAtaque (que pode levar horas).
+    unpauseLead: async (leadId) => {
+        const { data: lead, error } = await supabase
+            .from('leads')
+            .update({
+                is_paused: false,
+                manual_pause: false,
+                last_human_interaction: null,
+            })
+            .eq('id', leadId)
+            .select('id, instance_id, name')
+            .single();
+
+        if (error) throw new Error(error.message);
+
+        if (lead?.instance_id) {
+            sdrEventsGlobal?.emit('NOVO_LEAD_DISPONIVEL', lead.instance_id);
+            console.log(`▶️ [UNPAUSE] Lead ${lead.name} reativado — motor do chip ${lead.instance_id.slice(0, 8)} acordado.`);
+        }
+        return lead;
     },
 
     acordarChips: () => {

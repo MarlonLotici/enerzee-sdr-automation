@@ -1,7 +1,7 @@
 import React, { useState, useEffect, useCallback } from 'react'
 import { supabase } from '@/lib/supabase'
 import { QRCodeSVG } from 'qrcode.react'
-import { Cpu, Wifi, WifiOff, Loader2, RefreshCw, Zap, User, Building2, Target, Clock, RotateCcw, X, Pencil, Check, KeyRound, HelpCircle } from 'lucide-react'
+import { Cpu, Wifi, WifiOff, Loader2, RefreshCw, Zap, User, Building2, Target, Clock, RotateCcw, Pencil, Check, KeyRound, HelpCircle, Pause, Play } from 'lucide-react'
 
 // ─── PALETA ───────────────────────────────────────────────────────────────────
 const C = {
@@ -39,11 +39,13 @@ function timeAgo(isoStr) {
 }
 
 // ─── CHIP CARD ────────────────────────────────────────────────────────────────
-function ChipCard({ instance, dailyCount, statusInfo, onReconnect, onResetSession, qrCode, onLimitChange }) {
+function ChipCard({ instance, dailyCount, statusInfo, onReconnect, onResetSession, qrCode, onLimitChange, onTogglePause, onToggleFlag }) {
     const [editingLimit, setEditingLimit] = useState(false)
     const [localLimit,   setLocalLimit]   = useState(instance.daily_limit ?? 30)
     const [saving,       setSaving]       = useState(false)
     const [showResetInfo, setShowResetInfo] = useState(false)
+    const [pausando,     setPausando]     = useState(false)
+    const [togglingFlag, setTogglingFlag] = useState(null) // nome da flag em voo, evita duplo-clique
 
     useEffect(() => { setLocalLimit(instance.daily_limit ?? 30) }, [instance.daily_limit])
 
@@ -128,6 +130,27 @@ function ChipCard({ instance, dailyCount, statusInfo, onReconnect, onResetSessio
                     </span>
                 </div>
             </div>
+
+            {/* ── Badges de canal ── */}
+            {(instance.inbound_only || instance.use_email_outbound || instance.use_sms_outbound) && (
+                <div style={{ display: 'flex', gap: 6, flexWrap: 'wrap' }}>
+                    {instance.inbound_only && (
+                        <span style={{ fontSize: 8, fontWeight: 900, color: '#3B82F6', background: 'rgba(59,130,246,0.12)', border: '1px solid rgba(59,130,246,0.3)', borderRadius: '999px', padding: '3px 8px', textTransform: 'uppercase', letterSpacing: '0.1em' }}>
+                            Inbound Only
+                        </span>
+                    )}
+                    {instance.use_email_outbound && (
+                        <span style={{ fontSize: 8, fontWeight: 900, color: '#10B981', background: 'rgba(16,185,129,0.12)', border: '1px solid rgba(16,185,129,0.3)', borderRadius: '999px', padding: '3px 8px', textTransform: 'uppercase', letterSpacing: '0.1em' }}>
+                            Email
+                        </span>
+                    )}
+                    {instance.use_sms_outbound && (
+                        <span style={{ fontSize: 8, fontWeight: 900, color: '#F59E0B', background: 'rgba(245,158,11,0.12)', border: '1px solid rgba(245,158,11,0.3)', borderRadius: '999px', padding: '3px 8px', textTransform: 'uppercase', letterSpacing: '0.1em' }}>
+                            SMS
+                        </span>
+                    )}
+                </div>
+            )}
 
             {/* ── QR Code (aparece quando Baileys emite novo QR) ── */}
             {qrCode && (
@@ -262,6 +285,108 @@ function ChipCard({ instance, dailyCount, statusInfo, onReconnect, onResetSessio
                 <span style={{ fontSize: 9, color: 'rgba(255,255,255,0.25)', fontWeight: 700 }}>
                     Último disparo: {timeAgo(instance.last_contact_at)}
                 </span>
+            </div>
+
+            {/* ── Pausar / Retomar Disparos (oculto quando o chip é Inbound Only) ── */}
+            {!instance.inbound_only && (
+                <button
+                    onClick={async () => {
+                        setPausando(true)
+                        await onTogglePause?.(instance.id, !instance.firing_paused)
+                        setPausando(false)
+                    }}
+                    disabled={pausando}
+                    title="Pausar Disparos: interrompe a prospecção agora, mas o chip CONTINUA respondendo contatos já salvos na base. Reversível a qualquer momento."
+                    style={{
+                        display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 5,
+                        width: '100%', padding: '7px 0',
+                        background: instance.firing_paused
+                            ? 'rgba(16,185,129,0.08)'
+                            : 'rgba(245,158,11,0.08)',
+                        border: instance.firing_paused
+                            ? '1px solid rgba(16,185,129,0.25)'
+                            : '1px solid rgba(245,158,11,0.25)',
+                        borderRadius: '0.6rem',
+                        cursor: pausando ? 'not-allowed' : 'pointer',
+                        color: instance.firing_paused ? '#10B981' : '#F59E0B',
+                        fontSize: 10, fontWeight: 900,
+                        textTransform: 'uppercase', letterSpacing: '0.12em',
+                        opacity: pausando ? 0.6 : 1,
+                        transition: 'background 0.2s',
+                    }}
+                    onMouseEnter={e => !pausando && (e.currentTarget.style.background = instance.firing_paused ? 'rgba(16,185,129,0.15)' : 'rgba(245,158,11,0.15)')}
+                    onMouseLeave={e => e.currentTarget.style.background = instance.firing_paused ? 'rgba(16,185,129,0.08)' : 'rgba(245,158,11,0.08)'}
+                >
+                    {pausando
+                        ? <Loader2 size={10} style={{ animation: 'spin 1s linear infinite' }} />
+                        : instance.firing_paused
+                        ? <Play size={10} />
+                        : <Pause size={10} />
+                    }
+                    {instance.firing_paused ? 'Retomar Disparos' : 'Pausar Disparos'}
+                </button>
+            )}
+
+            {/* ── Toggles de canal: Inbound Only / Email Outbound / SMS Outbound ── */}
+            <div style={{ display: 'flex', flexDirection: 'column', gap: 6, borderTop: '1px solid rgba(255,255,255,0.05)', paddingTop: 10 }}>
+                <div
+                    title="Estes botões definem o COMPORTAMENTO do chip. Passe o mouse sobre cada um (?) para entender. Você pode combinar: ex. Email Outbound + Somente Receptivo faz o chip prospectar por email e responder qualquer um que chegar pelo WhatsApp."
+                    style={{ display: 'flex', alignItems: 'center', gap: 5, fontSize: 8, fontWeight: 900, color: 'rgba(255,255,255,0.35)', textTransform: 'uppercase', letterSpacing: '0.12em', cursor: 'help' }}
+                >
+                    Canais & Comportamento <HelpCircle size={10} />
+                </div>
+                {[
+                    { key: 'inbound_only',       label: 'Somente Receptivo', color: '#3B82F6', tip: 'SOMENTE RECEPTIVO: o chip NUNCA prospecta. Responde qualquer pessoa que mandar mensagem primeiro — inclusive contatos novos que não estão na base (cria o lead na hora). Ideal para o número que recebe as respostas dos e-mails.' },
+                    { key: 'use_email_outbound', label: 'Email Outbound',    color: '#10B981', tip: 'EMAIL OUTBOUND: a prospecção fria é feita por E-MAIL (via Resend), não por WhatsApp. Cada e-mail leva um link que traz o lead para conversar no WhatsApp. O WhatsApp deste chip fica livre de disparos frios (evita banimento).' },
+                    { key: 'use_sms_outbound',   label: 'SMS Outbound',      color: '#F59E0B', tip: 'SMS OUTBOUND: reservado para uso futuro. A infraestrutura existe, mas ligar agora NÃO dispara nada — falta a regra de negócio (ex. SMS após 48h sem abrir o e-mail).' },
+                    { key: 'dry_run',            label: 'Modo Teste (Dry-Run)', color: '#F43F5E', tip: 'MODO TESTE: o motor decide o canal e prepara a mensagem, mas NÃO envia nada de verdade (nem e-mail, nem WhatsApp) — só loga a decisão no servidor. Use para testar mudança de canal em leads reais sem risco. Lembre de desligar depois do teste.' },
+                ].map(({ key, label, color, tip }) => {
+                    const ativo = !!instance[key]
+                    const busy = togglingFlag === key
+                    return (
+                        <button
+                            key={key}
+                            onClick={async () => {
+                                setTogglingFlag(key)
+                                await onToggleFlag?.(instance.id, key, !ativo)
+                                setTogglingFlag(null)
+                            }}
+                            disabled={busy}
+                            title={tip}
+                            style={{
+                                display: 'flex', alignItems: 'center', justifyContent: 'space-between',
+                                width: '100%', padding: '6px 10px',
+                                background: ativo ? `${color}14` : 'rgba(255,255,255,0.02)',
+                                border: `1px solid ${ativo ? `${color}40` : 'rgba(255,255,255,0.08)'}`,
+                                borderRadius: '0.5rem',
+                                cursor: busy ? 'not-allowed' : 'pointer',
+                                opacity: busy ? 0.6 : 1,
+                                transition: 'background 0.2s',
+                            }}
+                        >
+                            <span style={{ display: 'flex', alignItems: 'center', gap: 5, fontSize: 9, fontWeight: 800, color: ativo ? color : 'rgba(255,255,255,0.4)', textTransform: 'uppercase', letterSpacing: '0.08em' }}>
+                                {label}
+                                <HelpCircle size={10} style={{ opacity: 0.5 }} />
+                            </span>
+                            {busy
+                                ? <Loader2 size={12} color={color} style={{ animation: 'spin 1s linear infinite' }} />
+                                : (
+                                    <div style={{
+                                        width: 28, height: 15, borderRadius: 999,
+                                        background: ativo ? color : 'rgba(255,255,255,0.15)',
+                                        position: 'relative', transition: 'background 0.2s',
+                                    }}>
+                                        <div style={{
+                                            position: 'absolute', top: 2, left: ativo ? 15 : 2,
+                                            width: 11, height: 11, borderRadius: '50%',
+                                            background: '#fff', transition: 'left 0.2s',
+                                        }} />
+                                    </div>
+                                )
+                            }
+                        </button>
+                    )
+                })}
             </div>
 
             {/* ── Resetar Sessão ── */}
@@ -446,6 +571,40 @@ export default function ChipStatus({ instances = [], socket }) {
         await supabase.from('instances').update({ daily_limit: newLimit }).eq('id', instanceId)
     }, [])
 
+    const handleToggleFlag = useCallback(async (instanceId, campo, valor) => {
+        try {
+            const { data: { session } } = await supabase.auth.getSession()
+            await fetch(`/api/instance/${instanceId}`, {
+                method: 'PATCH',
+                headers: {
+                    'Content-Type': 'application/json',
+                    'Authorization': `Bearer ${session?.access_token}`,
+                },
+                body: JSON.stringify({ [campo]: valor }),
+            })
+            socket?.emit('get_instances')
+        } catch (e) {
+            console.error('[ChipStatus] Falha ao atualizar flag do chip:', e)
+        }
+    }, [socket])
+
+    const handleTogglePause = useCallback(async (instanceId, pausar) => {
+        try {
+            const { data: { session } } = await supabase.auth.getSession()
+            await fetch(`/api/pause-chip/${instanceId}`, {
+                method: 'POST',
+                headers: {
+                    'Content-Type': 'application/json',
+                    'Authorization': `Bearer ${session?.access_token}`,
+                },
+                body: JSON.stringify({ paused: pausar }),
+            })
+            socket?.emit('get_instances') // força atualização imediata do estado no card
+        } catch (e) {
+            console.error('[ChipStatus] Falha ao pausar chip:', e)
+        }
+    }, [socket])
+
     // ── Sumários globais ──────────────────────────────────────────────────────
     const totalConectados = instances.filter(i => i.whatsapp_status === 'CONNECTED').length
     const totalDisparos   = Object.values(dailyCounts).reduce((s, v) => s + v, 0)
@@ -524,6 +683,8 @@ export default function ChipStatus({ instances = [], socket }) {
                             onReconnect={handleReconnect}
                             onResetSession={handleResetSession}
                             onLimitChange={handleLimitChange}
+                            onTogglePause={handleTogglePause}
+                            onToggleFlag={handleToggleFlag}
                             qrCode={qrMap[inst.id] || null}
                         />
                     ))}

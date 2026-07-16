@@ -60,6 +60,13 @@ const db = {
                 calendly_link,
                 opening_templates,
                 product_type,
+                email_prompt,
+                firing_paused,
+                use_email_outbound,
+                use_sms_outbound,
+                inbound_only,
+                whatsapp_provider,
+                dry_run,
                 created_at
             `)
             .eq('id', instanceId)
@@ -188,19 +195,25 @@ if (!estadoFinal && phonePuro) {
     // 💬 GESTÃO DE MENSAGENS (MEMÓRIA NEURAL)
     // ========================================================================
 
-    saveMessage: async (zapId, role, content, instanceId, userId = null) => {
+    // channel: 'whatsapp' (default) | 'email' | 'sms'. Unifica o histórico do lead
+    // independente do canal — base para inbox unificado futuro.
+    // Resiliência: o campo `channel` só é incluído no insert quando NÃO é 'whatsapp'.
+    // Assim o fluxo vivo de WhatsApp continua funcionando mesmo antes da coluna `channel`
+    // existir no banco — só o canal email (novo, ainda não em produção) depende dela.
+    saveMessage: async (zapId, role, content, instanceId, userId = null, channel = 'whatsapp') => {
         // Resolve user_id via cache lazy — necessário para o RLS do frontend enxergar as mensagens
         const resolvedUserId = userId || await _resolverUserId(instanceId);
 
-        const { error } = await supabase
-            .from('messages')
-            .insert([{
-                whatsapp_id: zapId,
-                role: role,
-                content: content,
-                instance_id: instanceId,
-                user_id: resolvedUserId
-            }]);
+        const row = {
+            whatsapp_id: zapId,
+            role: role,
+            content: content,
+            instance_id: instanceId,
+            user_id: resolvedUserId
+        };
+        if (channel && channel !== 'whatsapp') row.channel = channel;
+
+        const { error } = await supabase.from('messages').insert([row]);
 
         if (error) console.error(`[DB] Erro ao salvar msg de ${zapId} [uid:${resolvedUserId}]:`, error.message);
     },
@@ -226,6 +239,45 @@ if (!estadoFinal && phonePuro) {
             .eq('whatsapp_id', zapId)
             .limit(1);
         return data && data.length > 0;
+    },
+
+    // Primeiro caminho de ESCRITA real na tabela blacklist do projeto — usado pela
+    // detecção de opt-out (LGPD): quando o lead pede "PARE"/"SAIR", entra aqui.
+    // Idempotente: se o número já está na blacklist, não duplica.
+    adicionarBlacklist: async (zapId, motivo = 'opt-out do lead') => {
+        if (!zapId) return;
+        const jaExiste = await db.isBlacklisted(zapId);
+        if (jaExiste) return;
+        const { error } = await supabase
+            .from('blacklist')
+            .insert([{ whatsapp_id: zapId, motivo }]);
+        if (error) console.error(`[DB] Erro ao adicionar ${zapId} à blacklist:`, error.message);
+        else console.log(`🚫 [BLACKLIST] ${zapId} adicionado — motivo: ${motivo}`);
+    },
+
+    // Supressão de EMAIL (LGPD/deliverability): checada antes de todo envio outbound.
+    // Alimentada pelo webhook /webhook/resend (bounce/complaint/unsubscribe) e por
+    // cliques no link de descadastro.
+    isEmailSuprimido: async (email) => {
+        if (!email) return false;
+        const { data } = await supabase
+            .from('email_suppression')
+            .select('id')
+            .eq('email', String(email).toLowerCase().trim())
+            .limit(1);
+        return data && data.length > 0;
+    },
+
+    adicionarEmailSupressao: async (email, motivo = 'unsubscribe') => {
+        if (!email) return;
+        const emailNorm = String(email).toLowerCase().trim();
+        const jaExiste = await db.isEmailSuprimido(emailNorm);
+        if (jaExiste) return;
+        const { error } = await supabase
+            .from('email_suppression')
+            .insert([{ email: emailNorm, motivo }]);
+        if (error) console.error(`[DB] Erro ao suprimir email ${emailNorm}:`, error.message);
+        else console.log(`📭 [EMAIL-SUPRESSÃO] ${emailNorm} suprimido — motivo: ${motivo}`);
     },
 
     // ========================================================================

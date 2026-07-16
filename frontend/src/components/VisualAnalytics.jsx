@@ -267,6 +267,44 @@ function computeMetrics(leads, instances, realTotalLeads, realAgendados = 0, rea
     const deltaCriados   = last2.length === 2 && last2[0].criados   > 0 ? Math.round((last2[1].criados   - last2[0].criados)   / last2[0].criados   * 100) : 0
     const deltaAbordados = last2.length === 2 && last2[0].abordados > 0 ? Math.round((last2[1].abordados - last2[0].abordados) / last2[0].abordados * 100) : 0
 
+    // ── 13. Higiene da Base — status fora do funil de conversão ──
+    // Contados sobre a lista COMPLETA (`leads`, não `leadsValidos`), justamente porque
+    // são os status que leadsValidos exclui. Antes eram "buracos-negros": gravados no
+    // banco mas invisíveis em qualquer tela. Separado do funil pra não misturar saúde
+    // de dado com taxa de conversão.
+    const higieneDefs = [
+        { key: 'invalid',     label: 'Sem WhatsApp',  fill: NEON.rose },
+        { key: 'blacklisted', label: 'Opt-out',       fill: '#64748b' },
+        { key: 'error',       label: 'Erro DB',       fill: NEON.amber },
+        { key: 'email_sent',  label: 'Email enviado', fill: NEON.emerald },
+        { key: 'no_email',    label: 'Sem email',     fill: NEON.violet },
+        { key: 'reservado',   label: 'Em reserva',    fill: NEON.cyan },
+    ]
+    const higieneCount = {}
+    leads.forEach(l => { higieneCount[l.status] = (higieneCount[l.status] || 0) + 1 })
+    const higiene = higieneDefs
+        .map(d => ({ ...d, value: higieneCount[d.key] || 0 }))
+        .filter(d => d.value > 0)
+    const higieneTotal = higiene.reduce((s, d) => s + d.value, 0)
+
+    // ── 14. Qualidade de Dado — mede se a mudança na forma de raspar está funcionando ──
+    // Calculado sobre `leads` (não leadsValidos) para não mascarar a taxa real com o
+    // mesmo filtro do funil de conversão — aqui queremos ver justamente os leads ruins.
+    const totalBase = leads.length
+    const comEmail = leads.filter(l => !!l.email).length
+    const comDecisor = leads.filter(l => l.is_decisor === true).length
+    // Proxy de "WhatsApp confirmado": nunca caiu em invalid (JID inexistente/sem WA)
+    const semWhatsappConfirmado = leads.filter(l => l.status === 'invalid').length
+    const comWhatsappConfirmado = totalBase - semWhatsappConfirmado
+
+    const dataQuality = totalBase > 0 ? {
+        totalBase,
+        pctEmail:   Math.round(comEmail   / totalBase * 100),
+        pctDecisor: Math.round(comDecisor / totalBase * 100),
+        pctWhatsapp:Math.round(comWhatsappConfirmado / totalBase * 100),
+        comEmail, comDecisor, comWhatsappConfirmado,
+    } : null
+
     return {
         monthly, funnel, nicheData, dailyDisparos, dailyCapture,
         totalLeads, totalAbordados, totalAgendados, taxaAbordagem,
@@ -274,7 +312,9 @@ function computeMetrics(leads, instances, realTotalLeads, realAgendados = 0, rea
         statusCounts: sc,
         funnelSpin, temperatureData,
         nicheResponseData, spinPassagem,
-        geoData, engagementRate
+        geoData, engagementRate,
+        higiene, higieneTotal,
+        dataQuality,
     }
 }
 
@@ -426,7 +466,7 @@ export default function VisualAnalytics() {
 
             let leadsQ = supabase
                 .from('leads')
-                .select('id, status, niche, created_at, last_contact_at, instance_id, capital_social_numeric, current_stage, lead_temperature, opening_template, last_seen_at, calendly_booked, estado, is_paused')
+                .select('id, status, niche, created_at, last_contact_at, instance_id, capital_social_numeric, current_stage, lead_temperature, opening_template, last_seen_at, calendly_booked, estado, is_paused, email, is_decisor')
                 .or(orFilter)
                 .order('current_stage', { ascending: false })
                 .limit(10000)
@@ -501,6 +541,8 @@ export default function VisualAnalytics() {
     deltaCriados, deltaAbordados,
     nicheResponseData, spinPassagem,
     engagementRate,
+    higiene, higieneTotal,
+    dataQuality,
 } = metrics
 
     return (
@@ -585,6 +627,59 @@ export default function VisualAnalytics() {
                     info="Proporção de leads abordados que estão em conversa ativa, pausados aguardando humano, com temperatura hot, ou já agendados. Mede qualidade do engajamento gerado pelo SDR."
                 />
             </div>
+
+            {/* ── Higiene da Base — status fora do funil (antes invisíveis) ── */}
+            {higiene.length > 0 && (
+                <div style={{ background: 'rgba(255,255,255,0.02)', border: '1px solid rgba(255,255,255,0.06)', borderRadius: '1rem', padding: '14px 18px', marginBottom: 24 }}>
+                    <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: 12 }}>
+                        <span style={{ fontSize: 11, fontWeight: 900, color: NEON.muted, textTransform: 'uppercase', letterSpacing: '0.15em' }}>
+                            Higiene da Base
+                        </span>
+                        <span style={{ fontSize: 10, fontWeight: 700, color: 'rgba(255,255,255,0.25)' }}>
+                            {higieneTotal.toLocaleString('pt-BR')} leads fora do funil de conversão
+                        </span>
+                    </div>
+                    <div style={{ display: 'flex', gap: 10, flexWrap: 'wrap' }}>
+                        {higiene.map(d => (
+                            <div key={d.key} style={{ display: 'flex', alignItems: 'center', gap: 8, background: 'rgba(255,255,255,0.02)', border: `1px solid ${d.fill}33`, borderRadius: '0.6rem', padding: '8px 14px', minWidth: 130 }}>
+                                <div style={{ width: 8, height: 8, borderRadius: '50%', background: d.fill, boxShadow: `0 0 8px ${d.fill}` }} />
+                                <div style={{ display: 'flex', flexDirection: 'column' }}>
+                                    <span style={{ fontSize: 18, fontWeight: 900, color: '#fff', lineHeight: 1 }}>{d.value.toLocaleString('pt-BR')}</span>
+                                    <span style={{ fontSize: 9, fontWeight: 700, color: NEON.muted, textTransform: 'uppercase', letterSpacing: '0.08em', marginTop: 2 }}>{d.label}</span>
+                                </div>
+                            </div>
+                        ))}
+                    </div>
+                </div>
+            )}
+
+            {/* ── Qualidade de Dado — mede se a mudança na forma de raspar está funcionando ── */}
+            {dataQuality && (
+                <div style={{ background: 'rgba(255,255,255,0.02)', border: '1px solid rgba(255,255,255,0.06)', borderRadius: '1rem', padding: '14px 18px', marginBottom: 24 }}>
+                    <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: 12 }}>
+                        <span style={{ fontSize: 11, fontWeight: 900, color: NEON.muted, textTransform: 'uppercase', letterSpacing: '0.15em' }}>
+                            Qualidade de Dado
+                        </span>
+                        <span style={{ fontSize: 10, fontWeight: 700, color: 'rgba(255,255,255,0.25)' }}>
+                            base de {dataQuality.totalBase.toLocaleString('pt-BR')} leads
+                        </span>
+                    </div>
+                    <div style={{ display: 'grid', gridTemplateColumns: 'repeat(3,1fr)', gap: 12 }}>
+                        <div style={{ display: 'flex', flexDirection: 'column', gap: 4, background: 'rgba(255,255,255,0.02)', border: `1px solid ${NEON.emerald}33`, borderRadius: '0.6rem', padding: '10px 14px' }}>
+                            <span style={{ fontSize: 20, fontWeight: 900, color: '#fff' }}>{dataQuality.pctEmail}%</span>
+                            <span style={{ fontSize: 9, fontWeight: 700, color: NEON.muted, textTransform: 'uppercase', letterSpacing: '0.08em' }}>Com email ({dataQuality.comEmail.toLocaleString('pt-BR')})</span>
+                        </div>
+                        <div style={{ display: 'flex', flexDirection: 'column', gap: 4, background: 'rgba(255,255,255,0.02)', border: `1px solid ${NEON.cyan}33`, borderRadius: '0.6rem', padding: '10px 14px' }}>
+                            <span style={{ fontSize: 20, fontWeight: 900, color: '#fff' }}>{dataQuality.pctWhatsapp}%</span>
+                            <span style={{ fontSize: 9, fontWeight: 700, color: NEON.muted, textTransform: 'uppercase', letterSpacing: '0.08em' }}>WhatsApp confirmado ({dataQuality.comWhatsappConfirmado.toLocaleString('pt-BR')})</span>
+                        </div>
+                        <div style={{ display: 'flex', flexDirection: 'column', gap: 4, background: 'rgba(255,255,255,0.02)', border: `1px solid ${NEON.violet}33`, borderRadius: '0.6rem', padding: '10px 14px' }}>
+                            <span style={{ fontSize: 20, fontWeight: 900, color: '#fff' }}>{dataQuality.pctDecisor}%</span>
+                            <span style={{ fontSize: 9, fontWeight: 700, color: NEON.muted, textTransform: 'uppercase', letterSpacing: '0.08em' }}>Nome do decisor ({dataQuality.comDecisor.toLocaleString('pt-BR')})</span>
+                        </div>
+                    </div>
+                </div>
+            )}
 
             {/* ── ROW 2: Evolução Mensal + Funil ── */}
             <div style={{ display: 'grid', gridTemplateColumns: '1fr 340px', gap: 16, marginBottom: 16 }}>

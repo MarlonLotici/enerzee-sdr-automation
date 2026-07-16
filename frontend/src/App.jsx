@@ -259,7 +259,10 @@ const getLeadsByStatus = (coluna) => {
         if (coluna === 'contact') return l.status === 'contact' && !isAgendado;
         if (coluna === 'new') return l.status === 'new' && !isAgendado;
         if (coluna === 'error') return l.status === 'error';
-        
+        // Coluna "Fora do Fluxo": status que antes eram invisíveis no Kanban (buracos-negros).
+        // O lead levou email frio, não tem email, ou está no meio de uma reserva atômica.
+        if (coluna === 'fora_do_fluxo') return ['email_sent', 'no_email', 'reservado'].includes(l.status);
+
         return false;
     });
 };
@@ -681,11 +684,27 @@ if (session?.user?.id) checkBriefing()
     const handleTogglePause = async () => {
         if (!activeChat) return;
         const nowPaused = activeChat.is_paused || activeChat.manual_pause;
-        const update = nowPaused
-            ? { is_paused: false, manual_pause: false, last_human_interaction: null, internal_notes: `IA reativada via dashboard em ${new Date().toLocaleString('pt-BR')}` }
-            : { is_paused: true, manual_pause: true };
-        await supabase.from('leads').update(update).eq('id', activeChat.id);
-        setActiveChat(prev => ({ ...prev, ...update }));
+
+        if (nowPaused) {
+            // Reativar: passa pelo backend para acordar o motor imediatamente (não só atualizar o DB)
+            const update = { is_paused: false, manual_pause: false, last_human_interaction: null, internal_notes: `IA reativada via dashboard em ${new Date().toLocaleString('pt-BR')}` };
+            setActiveChat(prev => ({ ...prev, ...update }));
+            try {
+                const { data: { session: s } } = await supabase.auth.getSession();
+                await fetch(`/api/unpause-lead/${activeChat.id}`, {
+                    method: 'POST',
+                    headers: { 'Authorization': `Bearer ${s?.access_token}` },
+                });
+                // internal_notes não é setado pelo endpoint — grava separadamente
+                await supabase.from('leads').update({ internal_notes: update.internal_notes }).eq('id', activeChat.id);
+            } catch (e) {
+                console.error('[App] Falha ao reativar lead:', e);
+            }
+        } else {
+            const update = { is_paused: true, manual_pause: true };
+            await supabase.from('leads').update(update).eq('id', activeChat.id);
+            setActiveChat(prev => ({ ...prev, ...update }));
+        }
         fetchLeadsFromDB();
     };
 
@@ -702,7 +721,7 @@ if (session?.user?.id) checkBriefing()
     const handleFechamento = async () => {
         if (!activeChat) return;
         if (!confirm(`Marcar "${activeChat.name}" como negócio FECHADO?`)) return;
-        await supabase.from('leads').update({ status: 'closed', is_paused: true }).eq('id', activeChat.id);
+        await supabase.from('leads').update({ status: 'booked', is_paused: true }).eq('id', activeChat.id);
         setActiveChat(null);
         fetchLeadsFromDB();
     };
@@ -1129,6 +1148,11 @@ return (
                             </KanbanColumn>
                             <KanbanColumn title="Agendamentos" count={getLeadsByStatus('booked').length} color="from-emerald-700 to-green-900" icon={<CheckSquare className="h-6 w-6 text-emerald-300"/>}>
                                 {getLeadsByStatus('booked').map(l => (
+                                    <LeadCard key={l.id} lead={l} isSelected={selectedLeadIds.has(l.id)} onSelect={() => toggleSelectLead(l.id)} onView={() => setViewingLeadDetail(l)} onEdit={() => setEditingLead(l)} onDelete={() => handleDeleteLead(l.id)} onChat={() => { setActiveChat(l); setActiveTab('connections'); }} />
+                                ))}
+                            </KanbanColumn>
+                            <KanbanColumn title="Fora do Fluxo" count={getLeadsByStatus('fora_do_fluxo').length} color="from-slate-700 to-slate-900" icon={<Send className="h-6 w-6 text-slate-300"/>}>
+                                {getLeadsByStatus('fora_do_fluxo').map(l => (
                                     <LeadCard key={l.id} lead={l} isSelected={selectedLeadIds.has(l.id)} onSelect={() => toggleSelectLead(l.id)} onView={() => setViewingLeadDetail(l)} onEdit={() => setEditingLead(l)} onDelete={() => handleDeleteLead(l.id)} onChat={() => { setActiveChat(l); setActiveTab('connections'); }} />
                                 ))}
                             </KanbanColumn>

@@ -325,6 +325,51 @@ function normalizarTelefoneBR(raw) {
     return Array.from(variacoes).map(n => `${n}@s.whatsapp.net`);
 }
 
+// ── Supressão de email (LGPD / deliverability) ──────────────────────────────
+// Webhook do Resend: hard bounce (endereço morto) e complaint (marcado como spam)
+// → supressão automática. Sempre responde 200 pra Resend não re-tentar em loop.
+app.post('/webhook/resend', express.json(), async (req, res) => {
+    try {
+        const evento = req.body || {};
+        const tipo = evento.type || '';
+        if (!['email.bounced', 'email.complained'].includes(tipo)) {
+            return res.status(200).json({ ok: true, ignorado: true });
+        }
+        const dest = evento.data?.to;
+        const email = Array.isArray(dest) ? dest[0] : (dest || evento.data?.email);
+        if (!email) return res.status(200).json({ ok: true, semEmail: true });
+
+        await db.adicionarEmailSupressao(email, tipo === 'email.complained' ? 'reclamacao_spam' : 'bounce');
+        console.log(`📭 [RESEND] ${tipo} → ${email} suprimido.`);
+        res.status(200).json({ ok: true, suprimido: email });
+    } catch (err) {
+        console.error('❌ [RESEND WEBHOOK] Erro:', err.message);
+        res.status(200).json({ ok: true, erro: err.message });
+    }
+});
+
+// Descadastro one-click (link no rodapé dos emails + List-Unsubscribe-Post).
+async function _processarDescadastro(email) {
+    const emailNorm = String(email || '').toLowerCase().trim();
+    if (!emailNorm) return false;
+    try { await db.adicionarEmailSupressao(emailNorm, 'unsubscribe_link'); return true; }
+    catch (err) { console.error('❌ [UNSUBSCRIBE] Erro:', err.message); return false; }
+}
+const _escHtml = (s) => String(s).replace(/[<>&"]/g, c => ({ '<': '&lt;', '>': '&gt;', '&': '&amp;', '"': '&quot;' }[c]));
+
+app.get('/unsubscribe', async (req, res) => {
+    const email = String(req.query.email || '').toLowerCase().trim();
+    if (!email) return res.status(400).send('Email não informado.');
+    await _processarDescadastro(email);
+    res.status(200).send(`<!doctype html><html lang="pt-BR"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>Descadastro</title></head><body style="font-family:system-ui,sans-serif;background:#0A0A0A;color:#fff;display:flex;align-items:center;justify-content:center;height:100vh;margin:0"><div style="text-align:center;padding:32px"><h1 style="font-size:20px">✅ Descadastro confirmado</h1><p style="color:#94a3b8">${_escHtml(email)} não receberá mais nossos e-mails.</p></div></body></html>`);
+});
+
+app.post('/unsubscribe', express.json(), async (req, res) => {
+    const email = String(req.query.email || req.body?.email || '').toLowerCase().trim();
+    await _processarDescadastro(email);
+    res.status(200).json({ ok: true });
+});
+
 app.post('/webhook/calendly', express.json(), async (req, res) => {
     try {
         const evento = req.body;
@@ -379,8 +424,10 @@ app.post('/webhook/calendly', express.json(), async (req, res) => {
         }
 
         // 3. Trava atômica: desliga o motor de follow-up e registra o agendamento
+        // status='booked' (não 'closed') — unifica com handleFechamento no frontend e
+        // deixa o lead visível na coluna Agendamentos do pipeline em vez de sumir das views.
         await supabase.from('leads').update({
-            status:              'closed',
+            status:              'booked',
             calendly_booked:     true,
             calendly_event_at:   dataEvento,
             calendly_event_name: nomeEvento,
@@ -388,7 +435,7 @@ app.post('/webhook/calendly', express.json(), async (req, res) => {
             current_stage:       5,
         }).eq('id', lead.id);
 
-        console.log(`✅ [CALENDLY] Lead ${lead.name} travado — is_paused=true, status=closed.`);
+        console.log(`✅ [CALENDLY] Lead ${lead.name} travado — is_paused=true, status=booked.`);
 
         // 4. Alertas: Discord canal comercial + Socket.io para HandoffQueue do frontend
         alertaCalendly({ leadName: lead.dono || lead.name, empresa: lead.name, niche: lead.niche, dataEvento, nomeEvento }).catch(() => {});
@@ -421,6 +468,52 @@ app.post('/api/acordar-chips', autenticarMiddleware, async (req, res) => {
         return res.status(503).json({ error: 'Motor SDR não inicializado.' });
     const resultado = sdr.acordarChips();
     res.json({ ok: true, ...resultado });
+});
+
+app.post('/api/pause-chip/:instanceId', autenticarMiddleware, async (req, res) => {
+    if (!sdr?.pauseChip)
+        return res.status(503).json({ error: 'Motor SDR não inicializado.' });
+    const { instanceId } = req.params;
+    const pausar = req.body.paused === true;
+    try {
+        await sdr.pauseChip(instanceId, pausar);
+        res.json({ ok: true, instanceId, firing_paused: pausar });
+    } catch (err) {
+        res.status(500).json({ error: err.message });
+    }
+});
+
+const CAMPOS_INSTANCE_PATCHAVEIS = ['inbound_only', 'use_email_outbound', 'use_sms_outbound', 'dry_run'];
+
+app.patch('/api/instance/:instanceId', autenticarMiddleware, async (req, res) => {
+    const { instanceId } = req.params;
+    const updates = {};
+    for (const campo of CAMPOS_INSTANCE_PATCHAVEIS) {
+        if (typeof req.body[campo] === 'boolean') updates[campo] = req.body[campo];
+    }
+    if (Object.keys(updates).length === 0) {
+        return res.status(400).json({ error: 'Nenhum campo válido para atualizar.' });
+    }
+    try {
+        const { error } = await supabase.from('instances').update(updates).eq('id', instanceId);
+        if (error) throw new Error(error.message);
+        if (sdr?.invalidateInstanceCache) sdr.invalidateInstanceCache(instanceId);
+        res.json({ ok: true, instanceId, updates });
+    } catch (err) {
+        res.status(500).json({ error: err.message });
+    }
+});
+
+app.post('/api/unpause-lead/:leadId', autenticarMiddleware, async (req, res) => {
+    if (!sdr?.unpauseLead)
+        return res.status(503).json({ error: 'Motor SDR não inicializado.' });
+    const { leadId } = req.params;
+    try {
+        const lead = await sdr.unpauseLead(leadId);
+        res.json({ ok: true, lead });
+    } catch (err) {
+        res.status(500).json({ error: err.message });
+    }
 });
 
 app.get('/api/debug-chip/:instanceId', autenticarMiddleware, async (req, res) => {
