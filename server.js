@@ -4,6 +4,8 @@ const express = require('express');
 const http = require('http');
 const { Server } = require('socket.io');
 const cors = require('cors');
+const helmet = require('helmet');
+const rateLimit = require('express-rate-limit');
 const path = require('path');
 const { createClient } = require('@supabase/supabase-js');
 const supabase = createClient(process.env.SUPABASE_URL, process.env.SUPABASE_KEY);
@@ -20,7 +22,12 @@ const { alertaCalendly } = require('./notifier');
 const { Worker } = require('bullmq');
 const { redisConnection } = require('./queue');
 // Importe aqui a sua função que processa a IA (ajuste o nome para o que você usa hoje)
-const { processarMensagemIA } = require('./4_sdr'); 
+const { processarMensagemIA } = require('./4_sdr');
+
+// 📞 MOTOR DE LIGAÇÕES DE VOZ (Twilio Media Streams + Deepgram + ElevenLabs)
+const voiceEngine = require('./voice/voiceEngine');
+const { initMediaStreamServer } = require('./voice/mediaStreamServer');
+const { initCallScheduler } = require('./voice/callScheduler');
 
 // === INICIA O WORKER DE MENSAGENS ===
 const workerMensagens = new Worker('FilaMensagensIA', async (job) => {
@@ -45,13 +52,36 @@ let sdr = null;
 const app = express();
 const server = http.createServer(app);
 
+// ── CORS por allowlist (FAIL-SAFE) ──────────────────────────────────────────
+// O frontend é servido same-origin pelo próprio Express. A restrição só é ATIVADA
+// quando ALLOWED_ORIGINS (CSV) é explicitamente configurado no env — assim, deployar
+// sem configurar NÃO quebra o painel/Socket.io (mantém o comportamento permissivo
+// atual). Setar ALLOWED_ORIGINS no Railway liga o modo estrito. helmet sempre aplica.
+const _envOrigins = (process.env.ALLOWED_ORIGINS || '').split(',').map(s => s.trim()).filter(Boolean);
+const _corsRestrito = _envOrigins.length > 0;
+const ALLOWED_ORIGINS = [...new Set([
+    process.env.PUBLIC_BASE_URL, process.env.APP_URL,
+    'http://localhost:5173', 'http://localhost:3001',
+    ..._envOrigins,
+].filter(Boolean))];
+function corsOriginCheck(origin, callback) {
+    if (!origin) return callback(null, true);            // same-origin server, curl, health check
+    if (!_corsRestrito) return callback(null, true);     // sem ALLOWED_ORIGINS → permissivo (não quebra)
+    if (ALLOWED_ORIGINS.includes(origin)) return callback(null, true);
+    return callback(new Error('Origin não permitida pelo CORS'));
+}
+if (_corsRestrito) console.log(`🔒 [CORS] Modo estrito — origens: ${ALLOWED_ORIGINS.join(', ')}`);
+
 const io = new Server(server, {
-    cors: { origin: "*", methods: ["GET", "POST"] }
+    cors: { origin: _corsRestrito ? ALLOWED_ORIGINS : true, methods: ["GET", "POST"] }
 });
 
 const PORT = process.env.PORT || 3001;
 
-app.use(cors());
+// helmet: headers de segurança (HSTS, X-Frame-Options, noSniff, etc.).
+// CSP desligado por ora — o CSP default pode bloquear o bundle do Vite; endurecer depois.
+app.use(helmet({ contentSecurityPolicy: false }));
+app.use(cors({ origin: corsOriginCheck }));
 app.use(express.json());
 // Camada de Segurança: Verifica o Token do Supabase
 const autenticarMiddleware = async (req, res, next) => {
@@ -64,6 +94,59 @@ const autenticarMiddleware = async (req, res, next) => {
     req.user = user;
     next();
 };
+
+// ── Checagens de propriedade (anti-IDOR) ────────────────────────────────────
+// O backend usa a service_role key, que IGNORA o RLS do Supabase. Então a
+// separação entre tenants depende destas checagens explícitas — sem elas, um
+// usuário logado consegue mexer em recursos de outro tenant (IDOR).
+// Mesmo padrão já usado em /api/send-message e /api/call-lead.
+async function ehDonoDaInstancia(instanceId, userId) {
+    if (!instanceId || !userId) return false;
+    const inst = await db.getInstanceRules(instanceId);
+    return !!inst && inst.user_id === userId;
+}
+async function ehDonoDoLead(leadId, userId) {
+    if (!leadId || !userId) return false;
+    const { data } = await supabase.from('leads').select('user_id').eq('id', leadId).maybeSingle();
+    return !!data && data.user_id === userId;
+}
+
+// ── Verificação de webhook por secret na URL (anti-forja) ───────────────────
+// Webhooks são PÚBLICOS (o provedor não se autentica com JWT). Sem verificação,
+// qualquer um pode forjar um POST (ex.: fingir um bounce do Resend p/ suprimir
+// email de terceiros, ou um agendamento falso no Calendly).
+// Estratégia FAIL-SAFE de migração: se o secret NÃO está configurado no env,
+// aceita (comportamento atual, não quebra o que já funciona) e loga um aviso.
+// Assim que você setar o secret no Railway + colar o token na URL do webhook no
+// painel do provedor, a proteção passa a valer. Comparação constant-time.
+const _crypto = require('crypto');
+function verificarWebhookSecret(req, envVarName) {
+    const secret = process.env[envVarName];
+    if (!secret) {
+        console.warn(`⚠️ [WEBHOOK] ${envVarName} não configurado — aceitando sem verificação. Configure para ativar a proteção.`);
+        return true;
+    }
+    const fornecido = String(req.get('x-webhook-secret') || req.query.token || '');
+    const a = Buffer.from(fornecido);
+    const b = Buffer.from(String(secret));
+    if (a.length !== b.length) return false;
+    return _crypto.timingSafeEqual(a, b);
+}
+
+// ── Rate limiters direcionados (não globais, pra não atrapalhar o painel) ────
+// Estrito: mata brute-force do ADMIN_SECRET na criação de conta.
+const adminLimiter = rateLimit({
+    windowMs: 15 * 60 * 1000, max: 5,
+    standardHeaders: true, legacyHeaders: false,
+    message: { error: 'Muitas tentativas. Tente novamente mais tarde.' },
+});
+// Moderado: anti-spam/abuso nas rotas públicas (webhooks, descadastro).
+const webhookLimiter = rateLimit({
+    windowMs: 60 * 1000, max: 60,
+    standardHeaders: true, legacyHeaders: false,
+    message: { error: 'Rate limit excedido.' },
+});
+
 app.use(express.static(path.join(__dirname, 'frontend', 'dist')));
 
 
@@ -90,12 +173,18 @@ function criarEmitLog(socket, userId) {
 // 🔥 LIGA A IGNIÇÃO DO MOTOR MULTI-CHIP (Modo Assíncrono Anti-Crash)
 import('./4_sdr.js').then((moduloSdr) => {
     // O Node 22 entende isso perfeitamente, independentemente das bibliotecas
-    sdr = moduloSdr.default || moduloSdr; 
+    sdr = moduloSdr.default || moduloSdr;
     sdr.initMultiTenancy(io, sdrEvents);
     console.log("✅ Motor SDR V12 carregado via Import Dinâmico sem curtos-circuitos!");
 }).catch(err => {
     console.error("🔥 Crash evitado! Erro ao carregar o Módulo SDR:", err);
 });
+
+// 📞 LIGA O MOTOR DE VOZ: WebSocket do Media Streams no mesmo http.Server,
+// engine com acesso ao io (eventos real-time) e ao sdr (link pós-ligação via WhatsApp)
+voiceEngine.initVoiceEngine({ io, getSdr: () => sdr });
+initMediaStreamServer(server, voiceEngine.obterContexto);
+initCallScheduler();
 
 // =======================================================
 // 2. SOCKET.IO (COMUNICAÇÃO REAL-TIME)
@@ -328,8 +417,10 @@ function normalizarTelefoneBR(raw) {
 // ── Supressão de email (LGPD / deliverability) ──────────────────────────────
 // Webhook do Resend: hard bounce (endereço morto) e complaint (marcado como spam)
 // → supressão automática. Sempre responde 200 pra Resend não re-tentar em loop.
-app.post('/webhook/resend', express.json(), async (req, res) => {
+app.post('/webhook/resend', webhookLimiter, express.json(), async (req, res) => {
     try {
+        if (!verificarWebhookSecret(req, 'RESEND_WEBHOOK_SECRET'))
+            return res.status(403).json({ error: 'webhook não autorizado' });
         const evento = req.body || {};
         const tipo = evento.type || '';
         if (!['email.bounced', 'email.complained'].includes(tipo)) {
@@ -357,21 +448,23 @@ async function _processarDescadastro(email) {
 }
 const _escHtml = (s) => String(s).replace(/[<>&"]/g, c => ({ '<': '&lt;', '>': '&gt;', '&': '&amp;', '"': '&quot;' }[c]));
 
-app.get('/unsubscribe', async (req, res) => {
+app.get('/unsubscribe', webhookLimiter, async (req, res) => {
     const email = String(req.query.email || '').toLowerCase().trim();
     if (!email) return res.status(400).send('Email não informado.');
     await _processarDescadastro(email);
     res.status(200).send(`<!doctype html><html lang="pt-BR"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>Descadastro</title></head><body style="font-family:system-ui,sans-serif;background:#0A0A0A;color:#fff;display:flex;align-items:center;justify-content:center;height:100vh;margin:0"><div style="text-align:center;padding:32px"><h1 style="font-size:20px">✅ Descadastro confirmado</h1><p style="color:#94a3b8">${_escHtml(email)} não receberá mais nossos e-mails.</p></div></body></html>`);
 });
 
-app.post('/unsubscribe', express.json(), async (req, res) => {
+app.post('/unsubscribe', webhookLimiter, express.json(), async (req, res) => {
     const email = String(req.query.email || req.body?.email || '').toLowerCase().trim();
     await _processarDescadastro(email);
     res.status(200).json({ ok: true });
 });
 
-app.post('/webhook/calendly', express.json(), async (req, res) => {
+app.post('/webhook/calendly', webhookLimiter, express.json(), async (req, res) => {
     try {
+        if (!verificarWebhookSecret(req, 'CALENDLY_WEBHOOK_SECRET'))
+            return res.status(403).json({ error: 'webhook não autorizado' });
         const evento = req.body;
 
         if (evento?.event !== 'invitee.created') {
@@ -474,6 +567,8 @@ app.post('/api/pause-chip/:instanceId', autenticarMiddleware, async (req, res) =
     if (!sdr?.pauseChip)
         return res.status(503).json({ error: 'Motor SDR não inicializado.' });
     const { instanceId } = req.params;
+    if (!(await ehDonoDaInstancia(instanceId, req.user.id)))
+        return res.status(403).json({ error: 'Acesso negado.' });
     const pausar = req.body.paused === true;
     try {
         await sdr.pauseChip(instanceId, pausar);
@@ -487,6 +582,8 @@ const CAMPOS_INSTANCE_PATCHAVEIS = ['inbound_only', 'use_email_outbound', 'use_s
 
 app.patch('/api/instance/:instanceId', autenticarMiddleware, async (req, res) => {
     const { instanceId } = req.params;
+    if (!(await ehDonoDaInstancia(instanceId, req.user.id)))
+        return res.status(403).json({ error: 'Acesso negado.' });
     const updates = {};
     for (const campo of CAMPOS_INSTANCE_PATCHAVEIS) {
         if (typeof req.body[campo] === 'boolean') updates[campo] = req.body[campo];
@@ -508,6 +605,8 @@ app.post('/api/unpause-lead/:leadId', autenticarMiddleware, async (req, res) => 
     if (!sdr?.unpauseLead)
         return res.status(503).json({ error: 'Motor SDR não inicializado.' });
     const { leadId } = req.params;
+    if (!(await ehDonoDoLead(leadId, req.user.id)))
+        return res.status(403).json({ error: 'Acesso negado.' });
     try {
         const lead = await sdr.unpauseLead(leadId);
         res.json({ ok: true, lead });
@@ -520,6 +619,9 @@ app.get('/api/debug-chip/:instanceId', autenticarMiddleware, async (req, res) =>
     try {
         if (!sdr?.getDiagnosticoChip)
             return res.status(503).json({ error: 'Motor SDR não inicializado.' });
+
+        if (!(await ehDonoDaInstancia(req.params.instanceId, req.user.id)))
+            return res.status(403).json({ error: 'Acesso negado.' });
 
         const diagnostico = await sdr.getDiagnosticoChip(req.params.instanceId);
         const temProblema = Object.values(diagnostico.causas).some(Boolean);
@@ -538,7 +640,7 @@ app.get('/api/debug-chip/:instanceId', autenticarMiddleware, async (req, res) =>
 // upsert explícito em public.profiles para contornar qualquer trigger ausente/defeituoso
 // que causaria o erro "Database error creating new user".
 // ----------------------------------------------------------------------------
-app.post('/api/admin/criar-conta', express.json(), async (req, res) => {
+app.post('/api/admin/criar-conta', adminLimiter, express.json(), async (req, res) => {
     try {
         // Guard: chave de master — define ADMIN_SECRET no Railway/env
         const secret = req.headers['x-admin-secret'];
@@ -615,6 +717,58 @@ app.post('/api/admin/criar-conta', express.json(), async (req, res) => {
     } catch (err) {
         console.error('[ADMIN] Falha crítica na rota de criação de conta:', err);
         return res.status(500).json({ error: 'Erro interno do servidor.', detail: err.message });
+    }
+});
+
+// ============================================================================
+// 📞 LIGAÇÕES DE VOZ IA — TwiML, status callback e disparo manual
+// ============================================================================
+
+// TwiML de conexão: o Twilio busca esta URL ao completar a chamada e recebe a
+// instrução de abrir o Media Stream (áudio bidirecional) com nosso servidor.
+app.all('/voice/twiml/:callId', (req, res) => {
+    const xml = voiceEngine.gerarTwiML(req.params.callId);
+    if (!xml) return res.status(404).send('Chamada desconhecida.');
+    res.type('text/xml').send(xml);
+});
+
+// Status callback do Twilio (form-encoded): initiated/ringing/answered/completed
+// Quando a voz for ativada de fato, além de setar VOICE_WEBHOOK_SECRET, o token precisa
+// ser incluído na URL de status_callback registrada no voiceEngine (senão o Twilio não o envia).
+app.post('/voice/status/:callId', express.urlencoded({ extended: false }), async (req, res) => {
+    try {
+        if (!verificarWebhookSecret(req, 'VOICE_WEBHOOK_SECRET'))
+            return res.status(403).send('não autorizado');
+        await voiceEngine.aoStatusCallback(req.params.callId, req.body);
+    } catch (err) {
+        console.error('❌ [VOICE STATUS] Erro:', err.message);
+    }
+    res.status(200).send('ok'); // sempre 200 pro Twilio não re-tentar
+});
+
+// Disparo manual do painel — mesmo formato de segurança do /api/send-message
+app.post('/api/call-lead', autenticarMiddleware, async (req, res) => {
+    try {
+        const { instanceId, leadId, force } = req.body;
+
+        if (!instanceId || !leadId)
+            return res.status(400).json({ success: false, error: "Faltam parâmetros obrigatórios (instanceId, leadId)." });
+
+        // Verifica que o chip pertence ao usuário autenticado
+        const instOwner = await db.getInstanceRules(instanceId);
+        if (!instOwner || instOwner.user_id !== req.user.id)
+            return res.status(403).json({ success: false, error: "Acesso negado." });
+
+        console.log(`📞 [API] Ordem de ligação manual recebida para lead ${String(leadId).slice(0, 8)}`);
+        const resultado = await voiceEngine.iniciarLigacao(instanceId, leadId, {
+            trigger: 'manual',
+            force: force === true,
+        });
+
+        return res.status(resultado.success ? 200 : 422).json(resultado);
+    } catch (error) {
+        console.error("❌ [API] Falha crítica na rota de ligação:", error);
+        return res.status(500).json({ success: false, error: "Falha interna no servidor." });
     }
 });
 

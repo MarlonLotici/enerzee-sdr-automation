@@ -6,7 +6,18 @@
 
 const twilio = require('twilio');
 
-const client = twilio(process.env.TWILIO_ACCOUNT_SID, process.env.TWILIO_AUTH_TOKEN);
+// Cliente Twilio é LAZY: `twilio(sid, token)` lança erro se as credenciais estiverem
+// vazias. Instanciar no topo do módulo derrubaria o processo no boot assim que algum
+// código importasse este arquivo sem o Twilio configurado — a mesma classe de bug que
+// o Resend causou. Só instancia (e só falha) na hora real de enviar um SMS.
+let _twilioClient = null;
+function getTwilioClient() {
+    if (!process.env.TWILIO_ACCOUNT_SID || !process.env.TWILIO_AUTH_TOKEN) {
+        throw new Error('Credenciais Twilio (TWILIO_ACCOUNT_SID/AUTH_TOKEN) não configuradas.');
+    }
+    if (!_twilioClient) _twilioClient = twilio(process.env.TWILIO_ACCOUNT_SID, process.env.TWILIO_AUTH_TOKEN);
+    return _twilioClient;
+}
 
 function linkWhatsapp(ownerPhone) {
     const digitos = String(ownerPhone || '').replace(/\D/g, '');
@@ -28,7 +39,7 @@ async function enviarSMS(telefone, mensagem) {
     const texto = mensagem.length > 160 ? `${mensagem.slice(0, 157)}...` : mensagem;
 
     try {
-        const msg = await client.messages.create({
+        const msg = await getTwilioClient().messages.create({
             body: texto,
             from: process.env.TWILIO_FROM_NUMBER,
             to: `+${digitos}`,
