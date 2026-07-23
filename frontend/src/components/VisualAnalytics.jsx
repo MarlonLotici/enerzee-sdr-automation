@@ -94,11 +94,11 @@ function computeMetrics(leads, instances, realTotalLeads, realAgendados = 0, rea
     // Funil usa valores server-side para Capturados e Abordados (bypassa limite de 1000 rows)
     const emConversaQtd = sc.contact + sc.waiting_analysis + sc.booked + sc.closed
     const funnel = [
-        { etapa: 'Capturados',   qtd: realTotalLeads || leadsValidos.length,    fill: NEON.blue    },
-        { etapa: 'Abordados',    qtd: realAbordados  || leadsValidos.filter(l => !!l.last_contact_at).length, fill: NEON.cyan },
-        { etapa: 'Em Conversa',  qtd: emConversaQtd,                             fill: '#6366f1'   },
+        { etapa: 'Alcançadas',   qtd: realTotalLeads || leadsValidos.length,    fill: NEON.blue    },
+        { etapa: 'Contatadas',   qtd: realAbordados  || leadsValidos.filter(l => !!l.last_contact_at).length, fill: NEON.cyan },
+        { etapa: 'Conversando',  qtd: emConversaQtd,                             fill: '#6366f1'   },
         { etapa: 'Negociação',   qtd: sc.waiting_analysis + sc.booked + sc.closed, fill: NEON.violet },
-        { etapa: 'Agendados',    qtd: totalAgendamentosReais,                    fill: NEON.emerald },
+        { etapa: 'Reuniões',     qtd: totalAgendamentosReais,                    fill: NEON.emerald },
     ]
     // ── 3. Nichos (top 6) ──
     const nicheCount = {}
@@ -145,7 +145,6 @@ function computeMetrics(leads, instances, realTotalLeads, realAgendados = 0, rea
     // Usa contagem CUMULATIVA: um lead no stage 4 também conta nos stages 0-3
     // Isso representa o fluxo histórico ("quantos chegaram a cada stage") não o snapshot atual
     const estagioLabels = ['Qualificação', 'Situação', 'Dor/Implicação', 'Solução', 'Agendamento', 'Fechamento']
-    const estagioColors = ['#64748b', '#3B82F6', '#06B6D4', '#8B5CF6', '#F59E0B', '#10B981']
     const estagioCount = [0, 0, 0, 0, 0, 0]
     leadsValidos.forEach(l => {
         if (l.status === 'new') return
@@ -157,25 +156,6 @@ function computeMetrics(leads, instances, realTotalLeads, realAgendados = 0, rea
         // Acumula: um lead no stage 3 passou pelos stages 0, 1, 2 e 3
         for (let i = 0; i <= stage; i++) estagioCount[i]++
     })
-    const funnelSpin = estagioLabels.map((label, i) => ({
-        etapa: label,
-        qtd: estagioCount[i],
-        fill: estagioColors[i],
-    }))
-
-    // ── 7. Distribuição de temperatura ──
-    const tempCount = { cold: 0, warm: 0, hot: 0, dead: 0 }
-    leadsValidos.forEach(l => {
-        const t = l.lead_temperature || 'cold'
-        if (tempCount[t] !== undefined) tempCount[t]++
-    })
-    const temperatureData = [
-        { name: 'Cold ❄️',  value: tempCount.cold, fill: '#3B82F6' },
-        { name: 'Warm 🟡',  value: tempCount.warm, fill: '#F59E0B' },
-        { name: 'Hot 🔥',   value: tempCount.hot,  fill: '#EF4444' },
-        { name: 'Dead 💀',  value: tempCount.dead, fill: '#64748b' },
-    ].filter(d => d.value > 0)
-
     // ── 9. Taxa de resposta por nicho ──
     // Denominador: apenas leads que foram efetivamente disparados (têm last_contact_at)
     // Proxy de resposta: avançou além do estágio 0 (sem acesso a mensagens históricas aqui)
@@ -214,28 +194,6 @@ function computeMetrics(leads, instances, realTotalLeads, realAgendados = 0, rea
             passam: proximo,
         })
     }
-
-   // ── 11. Performance Geográfica ──
-    const geoPerformance = {}
-    leadsValidos.forEach(l => {
-        if (!l.estado || l.estado.trim() === '') return
-        const uf = l.estado.toUpperCase().trim()
-        if (!geoPerformance[uf]) geoPerformance[uf] = { total: 0, agendados: 0 }
-        geoPerformance[uf].total++
-        // 🎯 Mesma regra blindada: status booked, calendly_booked, ou estágio 4+
-        if (l.status === 'booked' || l.calendly_booked === true || (l.current_stage || 0) >= 4) {
-            geoPerformance[uf].agendados++
-        }
-    })
-
-    const geoData = Object.entries(geoPerformance)
-        .map(([uf, stats]) => ({
-            uf,
-            total: stats.total,
-            taxa: Math.round((stats.agendados / stats.total) * 100) || 0
-        }))
-        .sort((a, b) => b.total - a.total)
-        .slice(0, 5)
 
     // ── 12. Taxa de Engajamento Real ──
     // Fórmula: (Em Conversa + Pausados + Hot + Agendados) / Total Abordados
@@ -305,16 +263,55 @@ function computeMetrics(leads, instances, realTotalLeads, realAgendados = 0, rea
         comEmail, comDecisor, comWhatsappConfirmado,
     } : null
 
+    // ── 15. Funil por Canal de Origem — a métrica-mãe do pivot omnichannel ──
+    // Usa `first_touch_channel`, campo IMUTÁVEL setado uma única vez no primeiro toque real
+    // do lead (email enviado, WhatsApp frio confirmado, ou inbound). Diferente de `status`
+    // (que muda a cada avanço), isso permite saber de onde o lead veio mesmo depois dele
+    // avançar no funil — é o que faz "conversão Email → WhatsApp" ser um número real, não
+    // aproximado. Leads capturados ANTES desta instrumentação existir ficam de fora (não há
+    // como reconstruir retroativamente); eles continuam contados no funil geral acima.
+    const CANAL_LABEL = {
+        email: 'Email',
+        whatsapp: 'WhatsApp',
+        whatsapp_oficial: 'WhatsApp Oficial',
+        inbound: 'Recebido (orgânico)',
+        inbound_oficial: 'Recebido (oficial)',
+    }
+    const canalGroups = {}
+    leadsValidos.forEach(l => {
+        const canal = l.first_touch_channel
+        if (!canal || !CANAL_LABEL[canal]) return
+        if (!canalGroups[canal]) canalGroups[canal] = { contatadas: 0, conversando: 0, reunioes: 0 }
+        const g = canalGroups[canal]
+        g.contatadas++
+        const isBooked = l.status === 'booked' || l.status === 'closed' || l.calendly_booked === true || (l.current_stage || 0) >= 4
+        const engajou = l.status === 'contact' || l.status === 'waiting_analysis' || (l.current_stage || 0) > 0
+        if (isBooked) g.reunioes++
+        else if (engajou) g.conversando++
+    })
+    const channelFunnel = Object.entries(canalGroups)
+        .map(([canal, g]) => ({
+            canal,
+            label: CANAL_LABEL[canal],
+            contatadas: g.contatadas,
+            conversando: g.conversando,
+            reunioes: g.reunioes,
+            taxaEngajamento: g.contatadas > 0 ? Math.round((g.conversando + g.reunioes) / g.contatadas * 100) : 0,
+            taxaReuniao: g.contatadas > 0 ? Math.round(g.reunioes / g.contatadas * 100) : 0,
+        }))
+        .sort((a, b) => b.contatadas - a.contatadas)
+    const emailChannel = channelFunnel.find(c => c.canal === 'email') || null
+
     return {
         monthly, funnel, nicheData, dailyDisparos, dailyCapture,
         totalLeads, totalAbordados, totalAgendados, taxaAbordagem,
         deltaCriados, deltaAbordados,
         statusCounts: sc,
-        funnelSpin, temperatureData,
         nicheResponseData, spinPassagem,
-        geoData, engagementRate,
+        engagementRate,
         higiene, higieneTotal,
         dataQuality,
+        channelFunnel, emailChannel,
     }
 }
 
@@ -466,7 +463,7 @@ export default function VisualAnalytics() {
 
             let leadsQ = supabase
                 .from('leads')
-                .select('id, status, niche, created_at, last_contact_at, instance_id, capital_social_numeric, current_stage, lead_temperature, opening_template, last_seen_at, calendly_booked, estado, is_paused, email, is_decisor')
+                .select('id, status, niche, created_at, last_contact_at, instance_id, capital_social_numeric, current_stage, lead_temperature, opening_template, last_seen_at, calendly_booked, estado, is_paused, email, is_decisor, first_touch_channel')
                 .or(orFilter)
                 .order('current_stage', { ascending: false })
                 .limit(10000)
@@ -543,6 +540,7 @@ export default function VisualAnalytics() {
     engagementRate,
     higiene, higieneTotal,
     dataQuality,
+    channelFunnel, emailChannel,
 } = metrics
 
     return (
@@ -585,46 +583,46 @@ export default function VisualAnalytics() {
             {/* ── KPIs ── */}
             <div style={{ display: 'grid', gridTemplateColumns: 'repeat(4,1fr)', gap: 16, marginBottom: 24 }}>
                 <KpiCard
-                    icon={Users}   label="Leads Capturados"
+                    icon={Users}   label="Empresas Alcançadas"
                     value={totalLeads.toLocaleString('pt-BR')}
-                    sub={periodo === 'all' ? 'total na base' : 'criados no período'}
+                    sub={periodo === 'all' ? 'total na base' : 'no período'}
                     delta={deltaCriados}   color={NEON.blue}
-                    info="Total de empresas capturadas pelo radar e salvas no banco. Inclui leads em qualquer status — novos, em conversa, inválidos e mortos."
+                    info="Total de empresas encontradas e adicionadas à sua base — em qualquer etapa, desde ainda não contatadas até já convertidas."
                     sparklineData={monthly.map(m => m.criados)}
                 />
                 <KpiCard
-                    icon={Zap}     label="Leads Abordados"
+                    icon={Zap}     label="Contatadas"
                     value={totalAbordados.toLocaleString('pt-BR')}
-                    sub="receberam disparo"
+                    sub="primeira mensagem enviada"
                     delta={deltaAbordados} color={NEON.cyan}
-                    info="Leads que efetivamente receberam a primeira mensagem do SDR. Exclui leads capturados mas ainda não disparados (status 'new')."
+                    info="Empresas que já receberam o primeiro contato da IA (por email ou WhatsApp). Ainda não inclui quem está só na base, aguardando."
                     sparklineData={monthly.map(m => m.abordados)}
                 />
                 <KpiCard
-                    icon={Target}  label="Agendamentos"
+                    icon={Target}  label="Reuniões Marcadas"
                     value={totalAgendados.toLocaleString('pt-BR')}
-                    sub="booked, closed ou stage 4+"
+                    sub="confirmadas com o lead"
                     delta={null}           color={NEON.emerald}
-                    info="Leads que agendaram a validação. Conta quem tem status booked/closed, calendly_booked ativo ou chegou ao estágio 4 do funil (link enviado e aceito)."
+                    info="Empresas que agendaram uma conversa/reunião com você através da IA."
                 />
                 <KpiCard
-                    icon={Activity} label="Conversão Total"
+                    icon={Activity} label="Taxa de Conversão"
                     value={(() => {
                         if (!totalAbordados || totalAbordados <= 0) return '—'
                         const taxa = (totalAgendados / totalAbordados * 100)
                         if (!isFinite(taxa)) return '—'
                         return taxa.toFixed(1).replace('.', ',') + '%'
                     })()}
-                    sub="agendamentos ÷ abordados"
+                    sub="reuniões ÷ contatadas"
                     delta={null} color={NEON.emerald}
-                    info="Percentual de leads abordados que chegaram ao agendamento. Mede a eficiência geral do funil: de quem recebeu mensagem, quantos converteram."
+                    info="De cada 100 empresas contatadas, quantas viraram reunião marcada. É o número que resume a eficiência geral do funil."
                 />
                 <KpiCard
-                    icon={Flame} label="Engajamento Real"
+                    icon={Flame} label="Engajamento"
                     value={engagementRate + '%'}
-                    sub="em conv. + pausados + hot + agendados"
+                    sub="respondendo ou avançando"
                     delta={null} color={NEON.rose}
-                    info="Proporção de leads abordados que estão em conversa ativa, pausados aguardando humano, com temperatura hot, ou já agendados. Mede qualidade do engajamento gerado pelo SDR."
+                    info="Proporção das contatadas que estão conversando ativamente, aguardando retorno humano, com interesse alto, ou já convertidas."
                 />
             </div>
 
@@ -681,12 +679,47 @@ export default function VisualAnalytics() {
                 </div>
             )}
 
+            {/* ── Funil por Canal de Origem — a métrica-mãe do pivot omnichannel ── */}
+            {channelFunnel.length > 0 && (
+                <div style={{ background: 'rgba(255,255,255,0.02)', border: '1px solid rgba(255,255,255,0.06)', borderRadius: '1rem', padding: '14px 18px', marginBottom: 24 }}>
+                    <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: 12, flexWrap: 'wrap', gap: 8 }}>
+                        <span style={{ fontSize: 11, fontWeight: 900, color: NEON.muted, textTransform: 'uppercase', letterSpacing: '0.15em' }}>
+                            Funil por Canal de Origem
+                        </span>
+                        {emailChannel && (
+                            <span style={{ fontSize: 10, fontWeight: 700, color: NEON.emerald }}>
+                                {emailChannel.contatadas.toLocaleString('pt-BR')} vieram de Email → {emailChannel.taxaEngajamento}% engajaram no WhatsApp
+                            </span>
+                        )}
+                    </div>
+                    <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
+                        {channelFunnel.map(c => (
+                            <div key={c.canal} style={{ display: 'flex', alignItems: 'center', gap: 14, background: 'rgba(255,255,255,0.02)', border: '1px solid rgba(255,255,255,0.06)', borderRadius: '0.6rem', padding: '10px 14px', flexWrap: 'wrap' }}>
+                                <span style={{ fontSize: 12, fontWeight: 900, color: '#fff', width: 150, flexShrink: 0 }}>{c.label}</span>
+                                <div style={{ flex: 1, minWidth: 80, display: 'flex', alignItems: 'center', gap: 6 }}>
+                                    <div style={{ flex: 1, height: 6, background: 'rgba(255,255,255,0.06)', borderRadius: 3, overflow: 'hidden', display: 'flex' }}>
+                                        <div style={{ width: `${c.taxaReuniao}%`, background: NEON.emerald, boxShadow: `0 0 6px ${NEON.emerald}` }} />
+                                        <div style={{ width: `${Math.max(c.taxaEngajamento - c.taxaReuniao, 0)}%`, background: NEON.cyan }} />
+                                    </div>
+                                </div>
+                                <span style={{ fontSize: 10, fontWeight: 700, color: NEON.muted, width: 76, textAlign: 'right' }}>{c.contatadas.toLocaleString('pt-BR')} contat.</span>
+                                <span style={{ fontSize: 10, fontWeight: 900, color: NEON.cyan, width: 60, textAlign: 'right' }}>{c.taxaEngajamento}% engaj.</span>
+                                <span style={{ fontSize: 10, fontWeight: 900, color: NEON.emerald, width: 76, textAlign: 'right' }}>{c.reunioes} reunião{c.reunioes !== 1 ? 'ões' : ''}</span>
+                            </div>
+                        ))}
+                    </div>
+                    <p style={{ fontSize: 9, color: 'rgba(255,255,255,0.25)', marginTop: 10, marginBottom: 0 }}>
+                        Canal de origem = primeiro toque real do lead (imutável, não muda quando ele avança). Empresas alcançadas antes desta métrica existir aparecem só no funil geral acima.
+                    </p>
+                </div>
+            )}
+
             {/* ── ROW 2: Evolução Mensal + Funil ── */}
             <div style={{ display: 'grid', gridTemplateColumns: '1fr 340px', gap: 16, marginBottom: 16 }}>
 
                 {/* EVOLUÇÃO MENSAL — criados vs abordados (ambos reais) */}
                 <ChartCard>
-                    <SectionTitle accent={NEON.blue} info="Capturados = leads salvos pelo radar no mês. Abordados = leads que efetivamente receberam a primeira mensagem. A diferença representa leads em fila de espera ou descartados antes do disparo.">Evolução Mensal — Capturados vs Abordados</SectionTitle>
+                    <SectionTitle accent={NEON.blue} info="Alcançadas = empresas encontradas e salvas na base no mês. Contatadas = que efetivamente receberam a primeira mensagem. A diferença representa quem ainda está na fila de espera.">Evolução Mensal — Alcançadas vs Contatadas</SectionTitle>
                     <ResponsiveContainer width="100%" height={230}>
                         <AreaChart data={monthly} margin={{ top: 4, right: 4, bottom: 0, left: -10 }}>
                             <defs>
@@ -703,12 +736,12 @@ export default function VisualAnalytics() {
                             <XAxis dataKey="mes" tick={{ fill: NEON.muted, fontSize: 10, fontWeight: 700 }} axisLine={false} tickLine={false} />
                             <YAxis tick={{ fill: NEON.muted, fontSize: 10, fontWeight: 700 }} axisLine={false} tickLine={false} />
                             <Tooltip content={<NeonTooltip />} cursor={{ stroke: 'rgba(255,255,255,0.06)', strokeWidth: 1 }} />
-                            <Area type="monotone" dataKey="criados"   name="Capturados" stroke={NEON.blue} strokeWidth={2} fill="url(#gBlue)" dot={{ r: 3, fill: NEON.blue, stroke: '#020617', strokeWidth: 2 }} />
-                            <Area type="monotone" dataKey="abordados" name="Abordados"  stroke={NEON.cyan} strokeWidth={2} fill="url(#gCyan)" dot={{ r: 3, fill: NEON.cyan, stroke: '#020617', strokeWidth: 2 }} />
+                            <Area type="monotone" dataKey="criados"   name="Alcançadas" stroke={NEON.blue} strokeWidth={2} fill="url(#gBlue)" dot={{ r: 3, fill: NEON.blue, stroke: '#020617', strokeWidth: 2 }} />
+                            <Area type="monotone" dataKey="abordados" name="Contatadas"  stroke={NEON.cyan} strokeWidth={2} fill="url(#gCyan)" dot={{ r: 3, fill: NEON.cyan, stroke: '#020617', strokeWidth: 2 }} />
                         </AreaChart>
                     </ResponsiveContainer>
                     <div style={{ display: 'flex', gap: 20, marginTop: 10, justifyContent: 'flex-end' }}>
-                        {[{ c: NEON.blue, l: 'Capturados' }, { c: NEON.cyan, l: 'Abordados' }].map(({ c, l }) => (
+                        {[{ c: NEON.blue, l: 'Alcançadas' }, { c: NEON.cyan, l: 'Contatadas' }].map(({ c, l }) => (
                             <div key={l} style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
                                 <div style={{ width: 24, height: 2, borderRadius: 2, background: c, boxShadow: `0 0 6px ${c}` }} />
                                 <span style={{ fontSize: 10, fontWeight: 700, color: 'rgba(255,255,255,0.38)', textTransform: 'uppercase', letterSpacing: '0.1em' }}>{l}</span>
@@ -719,7 +752,7 @@ export default function VisualAnalytics() {
 
                 {/* FUNIL — por status real */}
                 <ChartCard>
-                    <SectionTitle accent={NEON.violet} info="Mostra a progressão dos leads pelo funil comercial. Capturados → Abordados → Em análise (conta de luz recebida) → Agendados. Cada etapa é subconjunto da anterior.">Funil de Status</SectionTitle>
+                    <SectionTitle accent={NEON.violet} info="Mostra a progressão das empresas pelo funil comercial: Alcançadas → Contatadas → Conversando → Negociação → Reuniões. Cada etapa é subconjunto da anterior.">Funil Comercial</SectionTitle>
                     <ResponsiveContainer width="100%" height={190}>
                         <BarChart data={funnel} layout="vertical" margin={{ top: 0, right: 8, bottom: 0, left: -10 }}>
                             <CartesianGrid stroke={NEON.grid} horizontal={false} />

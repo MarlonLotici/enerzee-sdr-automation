@@ -66,6 +66,8 @@ const db = {
                 use_sms_outbound,
                 inbound_only,
                 whatsapp_provider,
+                cloud_api_key,
+                cloud_base_url,
                 dry_run,
                 created_at
             `)

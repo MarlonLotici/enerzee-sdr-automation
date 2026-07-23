@@ -198,6 +198,7 @@ const carregarDados = useCallback(async () => {
                 supabase
                     .from('messages')
                     .select('role, content, created_at, whatsapp_id')
+                    .in('instance_id', instanceIds) // 🔐 isola por tenant — sem isso vaza mensagem de outros clientes
                     .gte('created_at', dateFrom)
                     .order('created_at', { ascending: false })
                     .limit(50000),

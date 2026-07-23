@@ -36,7 +36,7 @@ const pdf = require('pdf-parse');
 const db = require('./database');
 const emailService = require('./emailService');
 const budgetGuard = require('./budgetGuard');
-const { getTransport, baileysTransport } = require('./transports');
+const { getTransport, baileysTransport, cloudApiTransport } = require('./transports');
 const { useSupabaseAuthState } = require('./auth_adapter');
 const { gerarAudioTTS } = require('./tts');
 const { createClient } = require('@supabase/supabase-js');
@@ -1182,7 +1182,14 @@ async function gerarRespostaIA(historico, contextoLead, instanceData) {
         .eq('user_id', userId)
         .maybeSingle();
 
-    const promptBase = brain?.system_prompt;
+    // Override POR CHIP: se a instância tem system_prompt próprio (ex.: chip de anúncio/
+    // inbound, que recebe lead quente e não precisa de quebra-gelo frio), ele vence o
+    // prompt da conta. Senão, usa o tenant_prompts (comportamento atual preservado).
+    const overrideChip = instanceData?.system_prompt?.trim();
+    const promptBase = (overrideChip && overrideChip.length >= 100) ? overrideChip : brain?.system_prompt;
+    if (overrideChip && overrideChip.length >= 100) {
+        console.log(`🎯 [PROMPT-CHIP] Usando system_prompt específico do chip (override da conta).`);
+    }
 
     if (!promptBase || promptBase.trim().length < 100) {
         console.error(`❌ ERRO FATAL: Prompt não configurado para o usuário: ${userId}`);
@@ -1806,8 +1813,21 @@ function esperarAckServidor(sock, messageId, timeoutMs = 45000) {
 }
 
 async function enviarMensagemIA(sock, jid, content, instanceId = null, timeoutAck = 45000) {
-    // Envio primitivo via camada de transporte (hoje sempre Baileys). A lógica de
-    // ACK/soft-ban abaixo é específica do Baileys e permanece aqui de propósito.
+    // 🌐 ROTEAMENTO DE TRANSPORTE: instâncias oficiais (Cloud API via 360dialog) não têm
+    // socket Baileys — enviam por HTTP, sem ACK de socket nem presença. Guarda por provider:
+    // chips Baileys (default) caem no fluxo normal abaixo, 100% inalterados (ramo inerte).
+    if (instanceId) {
+        const _regras = await getRegrasEmCache(instanceId);
+        if (_regras?.whatsapp_provider === 'official') {
+            const _texto = (content && typeof content === 'object') ? (content.text ?? '') : String(content ?? '');
+            const _r = await cloudApiTransport.enviarTexto({ apiKey: _regras.cloud_api_key, baseUrl: _regras.cloud_base_url }, jid, _texto);
+            ultimoEnvioTimestamp.set(jid, Date.now());
+            console.log(`🌐 [CLOUD-API] Enviado para ${jid.split('@')[0]} via 360dialog (msgId: ${_r.id || 'n/a'}).`);
+            return { key: { id: _r.id || `cloud_${Date.now()}` } }; // formato compatível: callers checam sentMsg?.key?.id
+        }
+    }
+    // Envio primitivo via camada de transporte (Baileys). A lógica de ACK/soft-ban abaixo
+    // é específica do Baileys e permanece aqui de propósito.
     const sentMsg = await baileysTransport.enviar(sock, jid, content);
     if (sentMsg?.key?.id) {
         mensagensEnviadasPelaIA.add(sentMsg.key.id);
@@ -2080,7 +2100,8 @@ if (matchClima) updates.sentiment = matchClima[1].toLowerCase();
     const estagioEmocional = (lead.current_stage >= 2 && lead.current_stage <= 3) ||
                               (estagioNaResposta >= 2 && estagioNaResposta <= 3);
     // Estágio 2/3 → sempre áudio (máx 2 por conversa). Outros: lead enviou áudio OU 25% aleatório.
-    const usarTTS = audiosJaEnviados < 2 && !temCalendly && (leadEnviouAudio || estagioEmocional || Math.random() < 0.25);
+    // !!sock: instâncias oficiais (Cloud API) não têm socket nem áudio nativo → sempre texto.
+    const usarTTS = !!sock && audiosJaEnviados < 2 && !temCalendly && (leadEnviouAudio || estagioEmocional || Math.random() < 0.25);
     console.log(`🎙️ [TTS-DECISAO] usarTTS=${usarTTS} | audiosJá=${audiosJaEnviados} | calendly=${temCalendly} | leadAudio=${leadEnviouAudio} | emocional=${estagioEmocional} | estágio=${estagioNaResposta}`);
 
     for (let i = 0; i < mensagensSplit.length; i++) {
@@ -2095,7 +2116,7 @@ if (matchClima) updates.sentiment = matchClima[1].toLowerCase();
                 console.log(`⚠️ [TTS FALLBACK] Áudio falhou. Enviando como texto para ${lead.name} não ficar no vácuo.`);
             }
 
-            await sock.sendPresenceUpdate('composing', remoteJid);
+            if (sock) await sock.sendPresenceUpdate('composing', remoteJid); // oficial (Cloud API) não tem presença
 
             // ⚡ CÁLCULO DE JITTER DINÂMICO: Simula tempo de leitura + raciocínio + digitação
             const isObjecao = resposta.includes('CLIMA:DESCONFIADO') || resposta.includes('CLIMA:OCUPADO');
@@ -2205,6 +2226,8 @@ if (!lead && cleanJid.includes('@lid')) {
             dono: extrairNomeHumano(msg.pushName) || null,
             origin: 'inbound_organic',
             status: 'contact',
+            first_touch_channel: 'inbound', // lead recém-criado — sempre primeiro toque
+            first_touch_at: new Date().toISOString(),
         })
         .select('*')
         .single();
@@ -2859,7 +2882,10 @@ console.log(`🔒 [RESERVA] Lead ${lead.name} travado atomicamente para chip ${c
                         const resultadoEmail = await emailService.enviarEmailOutbound(lead, instanceData);
                         if (resultadoEmail.success) {
                             await budgetGuard.registrarGasto(userIdChip, 'email', limiteEmail);
-                            await supabase.from('leads').update({ status: 'email_sent', last_contact_at: new Date() }).eq('id', lead.id);
+                            // 🎯 first_touch_channel: campo IMUTÁVEL — guard de null evita sobrescrever
+                            // se o lead já tinha um canal de origem anterior (ex.: redistribuição).
+                            const _ftcEmail = !lead.first_touch_channel ? { first_touch_channel: 'email', first_touch_at: new Date() } : {};
+                            await supabase.from('leads').update({ status: 'email_sent', last_contact_at: new Date(), ..._ftcEmail }).eq('id', lead.id);
                             console.log(`📧 [EMAIL OUTBOUND] ${lead.name} → email enviado, pulando WhatsApp.`);
                         } else {
                             console.error(`❌ [EMAIL OUTBOUND] Falha ao enviar para ${lead.name}: ${resultadoEmail.error}`);
@@ -3163,7 +3189,11 @@ const mensagensSplit = textoFinal.split('[QUEBRA]').map(t => t.trim()).filter(t 
                     // Marca 'contact' logo após o 1º balão confirmado — se o socket cair antes do 2º,
                     // o lead já está marcado e não será reenviado na próxima rodada do motor.
                     if (i === 0) {
-                        await supabase.from('leads').update({ status: 'contact', last_contact_at: new Date().toISOString(), opening_template: textoFinal }).eq('id', lead.id);
+                        // 🎯 first_touch_channel: primeiro toque real deste lead (imutável, guard de null).
+                        const _ftcWa = !lead.first_touch_channel
+                            ? { first_touch_channel: instanceData.whatsapp_provider === 'official' ? 'whatsapp_oficial' : 'whatsapp', first_touch_at: new Date().toISOString() }
+                            : {};
+                        await supabase.from('leads').update({ status: 'contact', last_contact_at: new Date().toISOString(), opening_template: textoFinal, ..._ftcWa }).eq('id', lead.id);
                     }
                     await db.saveMessage(cleanJid, 'assistant', trecho, instanceId);
 
@@ -3926,9 +3956,14 @@ const funilEncerrado = estadosFinais.includes(lead.status);
 if (funilEncerrado) {
     console.log(`🏁 [WORKER] Lead ${lead.name} tem funil encerrado (status: ${lead.status}). IA seguirá em modo pós-venda/encerrado.`);
 }
-        // 2. Recupera o Socket (Baileys) do chip deste cliente específico
+        // 2. Regras do chip primeiro — precisamos do provider antes de exigir socket.
+        const instanceData = await getRegrasEmCache(instanceId);
+        const ehOficial = instanceData?.whatsapp_provider === 'official';
+
+        // Socket Baileys: exigido só para chips Baileys. Oficiais (Cloud API) respondem por
+        // HTTP e não têm socket na memória — pulam essa checagem.
         const instancia = sessions.get(instanceId);
-        if (!instancia || !instancia.ready) throw new Error("Socket do WhatsApp não está conectado.");
+        if (!ehOficial && (!instancia || !instancia.ready)) throw new Error("Socket do WhatsApp não está conectado.");
 
         // 3. Monta o contexto pesado
         const histRaw = await db.getHistory(whatsappId, instanceId);
@@ -3937,7 +3972,6 @@ if (funilEncerrado) {
             role: m.role === 'human_operator' ? 'assistant' : m.role,
             content: m.role === 'human_operator' ? `[ATENDENTE_HUMANO]: ${m.content}` : m.content
         }));
-        const instanceData = await getRegrasEmCache(instanceId);
 
 // 🚀 Executa os 3 agentes EM PARALELO com SKIP INTELIGENTE
         console.log(`🧠 [WORKER-IA] Despachando Router + Intel + Profiler em paralelo para ${lead.name}...`);
@@ -4005,7 +4039,13 @@ const { data: brain } = await supabase
 // Roteamento de prompt: seleciona a constituição certa para o modo do lead.
 // Fallback para system_prompt garante compatibilidade com tenants sem migração.
 let promptBase;
-if (intencao === 'COMPRA') {
+// Override POR CHIP tem precedência total: chip com system_prompt próprio (ex.: anúncio/
+// inbound) usa ele em TODAS as intenções, ignorando o roteamento da conta.
+const overrideChipWorker = instanceData?.system_prompt?.trim();
+if (overrideChipWorker && overrideChipWorker.length >= 100) {
+    promptBase = overrideChipWorker;
+    console.log(`🎯 [PROMPT-CHIP] Chip ${instanceId.slice(0,8)} usa system_prompt próprio (override) — ignora roteamento da conta.`);
+} else if (intencao === 'COMPRA') {
     promptBase = brain?.closer_prompt || brain?.system_prompt;
     console.log(`🎯 [ROUTER-PROMPT] Intenção COMPRA → closer_prompt ${brain?.closer_prompt ? '✅' : '⚠️ fallback system_prompt'}`);
 } else if (intencao === 'OBJECAO') {
@@ -4248,8 +4288,8 @@ if (!resposta) {
     return;
 }
 
-        // 4.3. Filtra, Carimba no WPP e Envia
-        await filtrarEEnviarResposta(instancia.sock, remoteJid, resposta, historico, lead, instanceId, instanceData?.tts_voice || null);
+        // 4.3. Filtra, Carimba no WPP e Envia (instancia?.sock: oficial não tem socket → null, envio vai por HTTP)
+        await filtrarEEnviarResposta(instancia?.sock, remoteJid, resposta, historico, lead, instanceId, instanceData?.tts_voice || null);
 
     } catch (error) {
         console.error(`❌ [WORKER-ERRO] Falha ao processar job ${job.id}:`, error.message);
@@ -4864,6 +4904,45 @@ module.exports = {
             console.log(`▶️ [UNPAUSE] Lead ${lead.name} reativado — motor do chip ${lead.instance_id.slice(0, 8)} acordado.`);
         }
         return lead;
+    },
+
+    // 🌐 INBOUND OFICIAL (Cloud API/360dialog): o webhook /webhook/whatsapp do server.js
+    // repassa o corpo bruto do Meta + o instanceId (da URL). Normaliza, acha/cria o lead e
+    // injeta na MESMA fila FilaIA que o Baileys usa — daí a esteira de agentes é idêntica.
+    receberInboundOficial: async (instanceId, webhookBody) => {
+        const norm = cloudApiTransport.normalizarInbound(webhookBody);
+        if (!norm || !norm.texto) return { ok: false, motivo: 'sem_mensagem_texto' };
+
+        const instanceData = await getRegrasEmCache(instanceId);
+        if (!instanceData) return { ok: false, motivo: 'instancia_desconhecida' };
+
+        const cleanJid = norm.remoteJid;
+        let { data: lead } = await supabase.from('leads')
+            .select('*').eq('whatsapp_id', cleanJid).eq('instance_id', instanceId).maybeSingle();
+
+        if (!lead) {
+            const { data: novo, error: errNovo } = await supabase.from('leads').insert({
+                whatsapp_id: cleanJid,
+                instance_id: instanceId,
+                user_id: instanceData.user_id,
+                name: norm.pushName || 'Contato Oficial',
+                dono: extrairNomeHumano(norm.pushName) || null,
+                origin: 'inbound_oficial',
+                status: 'contact',
+                first_touch_channel: 'inbound_oficial', // lead recém-criado — sempre primeiro toque
+                first_touch_at: new Date().toISOString(),
+            }).select('*').single();
+            if (errNovo || !novo) return { ok: false, motivo: 'falha_criar_lead', erro: errNovo?.message };
+            lead = novo;
+            console.log(`🌐 [INBOUND OFICIAL] Lead novo criado para ${cleanJid} (chip ${instanceId.slice(0,8)}).`);
+        }
+
+        await db.saveMessage(cleanJid, 'user', norm.texto, instanceId);
+        inboundAtivo.set(instanceId, (inboundAtivo.get(instanceId) || 0) + 1);
+        await filaMensagensIA.add('gerar_resposta',
+            { leadId: lead.id, whatsappId: cleanJid, instanceId, remoteJid: cleanJid },
+            { priority: 1, attempts: 3 });
+        return { ok: true, leadId: lead.id };
     },
 
     acordarChips: () => {

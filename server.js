@@ -461,6 +461,35 @@ app.post('/unsubscribe', webhookLimiter, express.json(), async (req, res) => {
     res.status(200).json({ ok: true });
 });
 
+// 🌐 Webhook do WhatsApp OFICIAL (Cloud API via 360dialog).
+// GET = verificação estilo Meta (ecoa hub.challenge). POST = mensagens recebidas → injeta na
+// esteira via sdr.receberInboundOficial. O instanceId do chip vem na query (?instanceId=...),
+// configurado na URL do webhook no painel do 360dialog.
+app.get('/webhook/whatsapp', (req, res) => {
+    const modo = req.query['hub.mode'];
+    const token = req.query['hub.verify_token'];
+    const challenge = req.query['hub.challenge'];
+    if (modo === 'subscribe' && token && token === process.env.WHATSAPP_VERIFY_TOKEN) {
+        return res.status(200).send(challenge);
+    }
+    return res.sendStatus(403);
+});
+
+app.post('/webhook/whatsapp', webhookLimiter, express.json(), async (req, res) => {
+    // Responde 200 IMEDIATAMENTE (Meta/360dialog re-tentam se demorar) e processa depois.
+    res.status(200).json({ ok: true });
+    try {
+        if (!verificarWebhookSecret(req, 'WHATSAPP_WEBHOOK_SECRET')) return;
+        if (!sdr?.receberInboundOficial) return console.warn('⚠️ [WA-WEBHOOK] SDR ainda não inicializado.');
+        const instanceId = req.query.instanceId;
+        if (!instanceId) return console.warn('⚠️ [WA-WEBHOOK] instanceId ausente na URL (?instanceId=...).');
+        const r = await sdr.receberInboundOficial(instanceId, req.body);
+        if (!r?.ok) console.log(`ℹ️ [WA-WEBHOOK] Nada a processar (${r?.motivo || 'sem resultado'}).`);
+    } catch (err) {
+        console.error('❌ [WA-WEBHOOK] Erro:', err.message);
+    }
+});
+
 app.post('/webhook/calendly', webhookLimiter, express.json(), async (req, res) => {
     try {
         if (!verificarWebhookSecret(req, 'CALENDLY_WEBHOOK_SECRET'))
