@@ -42,6 +42,7 @@ async function enriquecerLeadIndividual(lead) {
         dono: null, capital_social: 0, capital_social_numeric: 0,
         atividade_principal: null, porte: null,
         endereco_fiscal: null, bairro: null, cep: null,
+        email: null,
         match_confidence: 0, enriched: false
     };
 
@@ -170,6 +171,14 @@ async function enriquecerLeadIndividual(lead) {
             ].filter(Boolean).join(', ');
             enrichment.estado            = dadosFiscais.uf; // 🎯 GARANTIA DUPLA! Pega da Receita Federal.
             enrichment.enriched          = true;
+
+            // 📧 Email cadastrado na Receita Federal — vem de graça na mesma chamada do
+            // BrasilAPI, sem custo extra de API. Validação básica pra não gravar lixo/vazio.
+            const emailReceita = (dadosFiscais.email || '').trim().toLowerCase();
+            if (emailReceita && /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(emailReceita)) {
+                enrichment.email = emailReceita;
+                console.log(`📧 [ENRICH] Email encontrado na Receita: ${emailReceita}`);
+            }
 
 
             // Sócio

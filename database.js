@@ -156,6 +156,7 @@ if (!estadoFinal && phonePuro) {
             estado: estadoFinal,
             cep: lead.cep || null,
             porte: lead.porte || null,
+            email: lead.email || null,
             capital_social_numeric: lead.capital_social_numeric || 0,
             lat: lead.lat || null,
             lng: lead.lng || null,
