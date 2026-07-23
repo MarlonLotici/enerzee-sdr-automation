@@ -25,9 +25,19 @@ const { redisConnection } = require('./queue');
 const { processarMensagemIA } = require('./4_sdr');
 
 // 📞 MOTOR DE LIGAÇÕES DE VOZ (Twilio Media Streams + Deepgram + ElevenLabs)
-const voiceEngine = require('./voice/voiceEngine');
-const { initMediaStreamServer } = require('./voice/mediaStreamServer');
-const { initCallScheduler } = require('./voice/callScheduler');
+// CARREGAMENTO DEFENSIVO: a pasta voice/ e o SQL de voz (add_voice_calling.sql) ainda não
+// foram deployados/rodados de propósito (feature em standby, sem contas Twilio/Deepgram/
+// ElevenLabs configuradas ainda). Sem o try/catch, o require síncrono derruba o processo
+// inteiro no boot (foi exatamente isso que causou o crash em produção). Quando a voz for
+// ativada de fato, isso volta a carregar normalmente sem precisar mudar nada aqui.
+let voiceEngine = null, initMediaStreamServer = null, initCallScheduler = null;
+try {
+    voiceEngine = require('./voice/voiceEngine');
+    ({ initMediaStreamServer } = require('./voice/mediaStreamServer'));
+    ({ initCallScheduler } = require('./voice/callScheduler'));
+} catch (err) {
+    console.warn('⚠️ [VOZ] Módulo de voz não encontrado/carregado — canal de voz desativado nesta build:', err.message);
+}
 
 // === INICIA O WORKER DE MENSAGENS ===
 const workerMensagens = new Worker('FilaMensagensIA', async (job) => {
@@ -182,9 +192,12 @@ import('./4_sdr.js').then((moduloSdr) => {
 
 // 📞 LIGA O MOTOR DE VOZ: WebSocket do Media Streams no mesmo http.Server,
 // engine com acesso ao io (eventos real-time) e ao sdr (link pós-ligação via WhatsApp)
-voiceEngine.initVoiceEngine({ io, getSdr: () => sdr });
-initMediaStreamServer(server, voiceEngine.obterContexto);
-initCallScheduler();
+// Só inicializa se o módulo carregou (ver require defensivo acima).
+if (voiceEngine) {
+    voiceEngine.initVoiceEngine({ io, getSdr: () => sdr });
+    initMediaStreamServer(server, voiceEngine.obterContexto);
+    initCallScheduler();
+}
 
 // =======================================================
 // 2. SOCKET.IO (COMUNICAÇÃO REAL-TIME)
@@ -756,6 +769,7 @@ app.post('/api/admin/criar-conta', adminLimiter, express.json(), async (req, res
 // TwiML de conexão: o Twilio busca esta URL ao completar a chamada e recebe a
 // instrução de abrir o Media Stream (áudio bidirecional) com nosso servidor.
 app.all('/voice/twiml/:callId', (req, res) => {
+    if (!voiceEngine) return res.status(503).send('Canal de voz não configurado.');
     const xml = voiceEngine.gerarTwiML(req.params.callId);
     if (!xml) return res.status(404).send('Chamada desconhecida.');
     res.type('text/xml').send(xml);
@@ -768,7 +782,7 @@ app.post('/voice/status/:callId', express.urlencoded({ extended: false }), async
     try {
         if (!verificarWebhookSecret(req, 'VOICE_WEBHOOK_SECRET'))
             return res.status(403).send('não autorizado');
-        await voiceEngine.aoStatusCallback(req.params.callId, req.body);
+        if (voiceEngine) await voiceEngine.aoStatusCallback(req.params.callId, req.body);
     } catch (err) {
         console.error('❌ [VOICE STATUS] Erro:', err.message);
     }
@@ -778,6 +792,9 @@ app.post('/voice/status/:callId', express.urlencoded({ extended: false }), async
 // Disparo manual do painel — mesmo formato de segurança do /api/send-message
 app.post('/api/call-lead', autenticarMiddleware, async (req, res) => {
     try {
+        if (!voiceEngine)
+            return res.status(503).json({ success: false, error: "Canal de voz não configurado nesta build." });
+
         const { instanceId, leadId, force } = req.body;
 
         if (!instanceId || !leadId)
