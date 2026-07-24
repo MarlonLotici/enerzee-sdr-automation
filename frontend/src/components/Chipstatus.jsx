@@ -39,7 +39,7 @@ function timeAgo(isoStr) {
 }
 
 // ─── CHIP CARD ────────────────────────────────────────────────────────────────
-function ChipCard({ instance, dailyCount, statusInfo, onReconnect, onResetSession, qrCode, onLimitChange, onTogglePause, onToggleFlag }) {
+function ChipCard({ instance, dailyCount, statusInfo, onReconnect, onResetSession, qrCode, onLimitChange, onTogglePause, onToggleFlag, onSaveCampaignFields }) {
     const [editingLimit, setEditingLimit] = useState(false)
     const [localLimit,   setLocalLimit]   = useState(instance.daily_limit ?? 30)
     const [saving,       setSaving]       = useState(false)
@@ -47,7 +47,78 @@ function ChipCard({ instance, dailyCount, statusInfo, onReconnect, onResetSessio
     const [pausando,     setPausando]     = useState(false)
     const [togglingFlag, setTogglingFlag] = useState(null) // nome da flag em voo, evita duplo-clique
 
+    // ── Configuração de campanha de email — formulário guiado, à prova de leigo ──
+    const briefInicial = instance.email_brief || {}
+    const [campVende,   setCampVende]   = useState(briefInicial.vende || '')
+    const [campDor,     setCampDor]     = useState(briefInicial.dor || '')
+    const [campProva,   setCampProva]   = useState(briefInicial.prova || '')
+    const [campTom,     setCampTom]     = useState(briefInicial.tom || 'amigável')
+    const [campFromAddress, setCampFromAddress] = useState(instance.email_from_address || '')
+    const [campWebsiteUrl,  setCampWebsiteUrl]  = useState(instance.email_website_url || '')
+    const [campOwnerPhone,  setCampOwnerPhone]  = useState(instance.owner_phone || '')
+    const [savingCampaign,  setSavingCampaign]  = useState(false)
+    const [campaignSaved,   setCampaignSaved]   = useState(false)
+    const [previewLoading,  setPreviewLoading]  = useState(false)
+    const [previewData,     setPreviewData]     = useState(null) // { assunto, corpo } ou null
+
     useEffect(() => { setLocalLimit(instance.daily_limit ?? 30) }, [instance.daily_limit])
+    useEffect(() => {
+        const b = instance.email_brief || {}
+        setCampVende(b.vende || ''); setCampDor(b.dor || ''); setCampProva(b.prova || ''); setCampTom(b.tom || 'amigável')
+    }, [instance.email_brief])
+    useEffect(() => { setCampFromAddress(instance.email_from_address || '') }, [instance.email_from_address])
+    useEffect(() => { setCampWebsiteUrl(instance.email_website_url || '') }, [instance.email_website_url])
+    useEffect(() => { setCampOwnerPhone(instance.owner_phone || '') }, [instance.owner_phone])
+
+    // Monta o prompt técnico (o que o motor lê) a partir das respostas simples do formulário.
+    const montarEmailPrompt = () => [
+        'Você escreve emails de prospecção fria B2B para esta empresa. Use SOMENTE os dados abaixo, não invente números nem benefícios.',
+        campVende ? `O QUE A EMPRESA OFERECE: ${campVende}` : '',
+        campDor ? `DOR DO CLIENTE QUE ISSO RESOLVE: ${campDor}` : '',
+        campProva ? `PROVA/NÚMERO QUE PODE CITAR: ${campProva}` : '',
+        `TOM DA MENSAGEM: ${campTom}`,
+    ].filter(Boolean).join('\n')
+
+    const briefSalvo = instance.email_brief || {}
+    const campanhaAlterada =
+        campVende !== (briefSalvo.vende || '') || campDor !== (briefSalvo.dor || '') ||
+        campProva !== (briefSalvo.prova || '') || campTom !== (briefSalvo.tom || 'amigável') ||
+        campFromAddress !== (instance.email_from_address || '') ||
+        campWebsiteUrl !== (instance.email_website_url || '') ||
+        campOwnerPhone !== (instance.owner_phone || '')
+
+    const salvarCampanha = async () => {
+        setSavingCampaign(true)
+        setCampaignSaved(false)
+        await onSaveCampaignFields?.(instance.id, {
+            email_prompt: montarEmailPrompt(),
+            email_brief: { vende: campVende, dor: campDor, prova: campProva, tom: campTom },
+            email_from_address: campFromAddress,
+            email_website_url: campWebsiteUrl,
+            owner_phone: campOwnerPhone,
+        })
+        setSavingCampaign(false)
+        setCampaignSaved(true)
+        setTimeout(() => setCampaignSaved(false), 2500)
+    }
+
+    const verExemplo = async () => {
+        setPreviewLoading(true)
+        setPreviewData(null)
+        try {
+            const { data: { session } } = await supabase.auth.getSession()
+            const resp = await fetch(`/api/instance/${instance.id}/preview-email`, {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${session?.access_token}` },
+                body: JSON.stringify({ email_prompt: montarEmailPrompt(), owner_phone: campOwnerPhone, email_website_url: campWebsiteUrl }),
+            })
+            const json = await resp.json()
+            setPreviewData(json.ok ? { assunto: json.assunto, corpo: json.corpo } : { assunto: '⚠️ Erro', corpo: json.error || 'Falha ao gerar o exemplo.' })
+        } catch (e) {
+            setPreviewData({ assunto: '⚠️ Erro', corpo: e.message })
+        }
+        setPreviewLoading(false)
+    }
 
     const saveLimit = async () => {
         setEditingLimit(false)
@@ -287,8 +358,10 @@ function ChipCard({ instance, dailyCount, statusInfo, onReconnect, onResetSessio
                 </span>
             </div>
 
-            {/* ── Pausar / Retomar Disparos (oculto quando o chip é Inbound Only) ── */}
-            {!instance.inbound_only && (
+            {/* ── Pausar / Retomar Disparos (oculto só quando Inbound Only SEM email outbound —
+                 chip puramente receptivo não tem o que pausar. Com email outbound ligado, o
+                 chip prospecta por email mesmo com inbound_only=true, então o botão precisa aparecer) ── */}
+            {(!instance.inbound_only || instance.use_email_outbound) && (
                 <button
                     onClick={async () => {
                         setPausando(true)
@@ -388,6 +461,143 @@ function ChipCard({ instance, dailyCount, statusInfo, onReconnect, onResetSessio
                     )
                 })}
             </div>
+
+            {/* ── Configuração de Campanha de Email — formulário guiado (só com Email Outbound ligado) ── */}
+            {!!instance.use_email_outbound && (() => {
+                const inputStyle = {
+                    width: '100%', boxSizing: 'border-box',
+                    background: 'rgba(0,0,0,0.3)', border: '1px solid rgba(255,255,255,0.1)',
+                    borderRadius: '0.5rem', padding: '7px 10px',
+                    color: '#fff', fontSize: 11, fontFamily: 'inherit',
+                }
+                const label = (txt) => (
+                    <span style={{ fontSize: 8, fontWeight: 800, color: 'rgba(255,255,255,0.4)', textTransform: 'uppercase', letterSpacing: '0.1em' }}>{txt}</span>
+                )
+                const onFocus = e => e.currentTarget.style.borderColor = C.brand
+                const onBlur  = e => e.currentTarget.style.borderColor = 'rgba(255,255,255,0.1)'
+                return (
+                <div style={{ display: 'flex', flexDirection: 'column', gap: 6, borderTop: '1px solid rgba(255,255,255,0.05)', paddingTop: 10 }}>
+                    <div
+                        title="Responda em português simples. O sistema monta o email sozinho a partir das suas respostas. Edite quando quiser trocar a campanha — sem mexer no banco de dados."
+                        style={{ display: 'flex', alignItems: 'center', gap: 5, fontSize: 8, fontWeight: 900, color: 'rgba(255,255,255,0.35)', textTransform: 'uppercase', letterSpacing: '0.12em', cursor: 'help' }}
+                    >
+                        Campanha de Email — Passo a Passo <HelpCircle size={10} />
+                    </div>
+
+                    {label('1. O que sua empresa vende/oferece?')}
+                    <textarea
+                        value={campVende}
+                        onChange={e => setCampVende(e.target.value)}
+                        placeholder="Ex: energia solar por assinatura, sem obra, reduz a conta de luz."
+                        rows={2} maxLength={600}
+                        style={{ ...inputStyle, resize: 'vertical', lineHeight: 1.4 }}
+                        onFocus={onFocus} onBlur={onBlur}
+                    />
+
+                    {label('2. Qual a principal dor do cliente que isso resolve?')}
+                    <textarea
+                        value={campDor}
+                        onChange={e => setCampDor(e.target.value)}
+                        placeholder="Ex: conta de luz alta que sobe todo ano acima da inflação."
+                        rows={2} maxLength={600}
+                        style={{ ...inputStyle, resize: 'vertical', lineHeight: 1.4 }}
+                        onFocus={onFocus} onBlur={onBlur}
+                    />
+
+                    {label('3. Alguma prova/número que pode citar? (opcional)')}
+                    <input
+                        type="text" value={campProva}
+                        onChange={e => setCampProva(e.target.value)}
+                        placeholder="Ex: parceira WEG 5 estrelas / +500 clientes."
+                        maxLength={300} style={inputStyle}
+                        onFocus={onFocus} onBlur={onBlur}
+                    />
+
+                    {label('4. Tom da mensagem')}
+                    <select
+                        value={campTom}
+                        onChange={e => setCampTom(e.target.value)}
+                        style={{ ...inputStyle, cursor: 'pointer' }}
+                        onFocus={onFocus} onBlur={onBlur}
+                    >
+                        <option value="amigável">Amigável</option>
+                        <option value="formal">Formal</option>
+                        <option value="direto">Direto ao ponto</option>
+                    </select>
+
+                    <div style={{ height: 1, background: 'rgba(255,255,255,0.06)', margin: '4px 0' }} />
+
+                    {label('WhatsApp do CTA (recebe as conversas)')}
+                    <input
+                        type="text" value={campOwnerPhone}
+                        onChange={e => setCampOwnerPhone(e.target.value)}
+                        placeholder="Ex: 5548998203038"
+                        title="Vira o link wa.me dentro do email. Use 55 + DDD + número com o 9. Número errado quebra o botão do email."
+                        style={inputStyle} onFocus={onFocus} onBlur={onBlur}
+                    />
+
+                    {label('Remetente do email (opcional)')}
+                    <input
+                        type="text" value={campFromAddress}
+                        onChange={e => setCampFromAddress(e.target.value)}
+                        placeholder="Deixe vazio para usar o padrão"
+                        title="Precisa ser de um domínio já verificado no Resend, senão o envio falha ou cai em spam."
+                        style={inputStyle} onFocus={onFocus} onBlur={onBlur}
+                    />
+                    <div style={{ fontSize: 8, color: 'rgba(255,255,255,0.3)', marginTop: -3 }}>
+                        ⚠️ Só use com domínio verificado no Resend — senão deixe vazio.
+                    </div>
+
+                    {label('Site oficial a citar (opcional)')}
+                    <input
+                        type="text" value={campWebsiteUrl}
+                        onChange={e => setCampWebsiteUrl(e.target.value)}
+                        placeholder="https://..."
+                        style={inputStyle} onFocus={onFocus} onBlur={onBlur}
+                    />
+
+                    {/* Preview do email gerado */}
+                    {previewData && (
+                        <div style={{ background: 'rgba(0,0,0,0.4)', border: `1px solid ${C.brand}40`, borderRadius: '0.5rem', padding: '8px 10px', marginTop: 2 }}>
+                            <div style={{ fontSize: 8, fontWeight: 900, color: C.brand, textTransform: 'uppercase', letterSpacing: '0.1em', marginBottom: 4 }}>Exemplo gerado</div>
+                            <div style={{ fontSize: 10, fontWeight: 800, color: '#fff', marginBottom: 4 }}>Assunto: {previewData.assunto}</div>
+                            <div style={{ fontSize: 10, color: 'rgba(255,255,255,0.75)', whiteSpace: 'pre-wrap', lineHeight: 1.45 }}>{previewData.corpo}</div>
+                        </div>
+                    )}
+
+                    <div style={{ display: 'flex', gap: 6, marginTop: 2 }}>
+                        <button
+                            onClick={verExemplo}
+                            disabled={previewLoading}
+                            style={{
+                                flex: 1, display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 5, padding: '6px 0',
+                                background: 'rgba(255,255,255,0.03)', border: '1px solid rgba(255,255,255,0.12)',
+                                borderRadius: '0.5rem', cursor: previewLoading ? 'wait' : 'pointer', opacity: previewLoading ? 0.6 : 1,
+                                color: 'rgba(255,255,255,0.7)', fontSize: 9, fontWeight: 900, textTransform: 'uppercase', letterSpacing: '0.1em',
+                            }}
+                        >
+                            {previewLoading ? <Loader2 size={11} style={{ animation: 'spin 1s linear infinite' }} /> : null}
+                            {previewLoading ? 'Gerando...' : 'Ver Exemplo'}
+                        </button>
+                        <button
+                            onClick={salvarCampanha}
+                            disabled={!campanhaAlterada || savingCampaign}
+                            style={{
+                                flex: 1, display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 5, padding: '6px 0',
+                                background: campanhaAlterada ? `${C.brand}20` : 'rgba(255,255,255,0.02)',
+                                border: `1px solid ${campanhaAlterada ? `${C.brand}55` : 'rgba(255,255,255,0.08)'}`,
+                                borderRadius: '0.5rem', cursor: (!campanhaAlterada || savingCampaign) ? 'not-allowed' : 'pointer',
+                                opacity: savingCampaign ? 0.6 : 1, color: campanhaAlterada ? C.brand : 'rgba(255,255,255,0.3)',
+                                fontSize: 9, fontWeight: 900, textTransform: 'uppercase', letterSpacing: '0.1em', transition: 'background 0.2s',
+                            }}
+                        >
+                            {savingCampaign ? <Loader2 size={11} style={{ animation: 'spin 1s linear infinite' }} /> : campaignSaved ? <Check size={11} /> : null}
+                            {savingCampaign ? 'Salvando...' : campaignSaved ? 'Salvo!' : 'Salvar'}
+                        </button>
+                    </div>
+                </div>
+                )
+            })()}
 
             {/* ── Resetar Sessão ── */}
             <div style={{ position: 'relative', display: 'flex', alignItems: 'center', gap: 6 }}>
@@ -588,6 +798,23 @@ export default function ChipStatus({ instances = [], socket }) {
         }
     }, [socket])
 
+    const handleSaveCampaignFields = useCallback(async (instanceId, updates) => {
+        try {
+            const { data: { session } } = await supabase.auth.getSession()
+            await fetch(`/api/instance/${instanceId}`, {
+                method: 'PATCH',
+                headers: {
+                    'Content-Type': 'application/json',
+                    'Authorization': `Bearer ${session?.access_token}`,
+                },
+                body: JSON.stringify(updates),
+            })
+            socket?.emit('get_instances')
+        } catch (e) {
+            console.error('[ChipStatus] Falha ao salvar configuração de campanha:', e)
+        }
+    }, [socket])
+
     const handleTogglePause = useCallback(async (instanceId, pausar) => {
         try {
             const { data: { session } } = await supabase.auth.getSession()
@@ -685,6 +912,7 @@ export default function ChipStatus({ instances = [], socket }) {
                             onLimitChange={handleLimitChange}
                             onTogglePause={handleTogglePause}
                             onToggleFlag={handleToggleFlag}
+                            onSaveCampaignFields={handleSaveCampaignFields}
                             qrCode={qrMap[inst.id] || null}
                         />
                     ))}

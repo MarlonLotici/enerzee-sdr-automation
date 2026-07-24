@@ -17,6 +17,7 @@ const { iniciarVarredura } = require('./1_scraper');
 const { processarLimpeza } = require('./2_clean');
 const { enriquecerLeadIndividual } = require('./3_enrich');
 const db = require('./database');
+const emailService = require('./emailService'); // usado no preview de email (gerarCopyOutbound)
 const { alertaCalendly } = require('./notifier');
 
 const { Worker } = require('bullmq');
@@ -622,6 +623,19 @@ app.post('/api/pause-chip/:instanceId', autenticarMiddleware, async (req, res) =
 
 const CAMPOS_INSTANCE_PATCHAVEIS = ['inbound_only', 'use_email_outbound', 'use_sms_outbound', 'dry_run'];
 
+// Campos de texto de campanha de email — self-service, sem precisar editar o Supabase direto.
+// MAX_CONTEXTO_TENANT (emailService.js) já trunca em 2000 chars antes de injetar no LLM;
+// o limite aqui é só uma trava de bom senso contra payload absurdo.
+const REGEX_EMAIL_SIMPLES = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
+const CAMPOS_INSTANCE_PATCHAVEIS_TEXTO = {
+    email_prompt: (v) => v.length <= 4000,
+    email_from_address: (v) => v.length <= 254 && REGEX_EMAIL_SIMPLES.test(v),
+    email_website_url: (v) => v.length <= 500,
+    // Só dígitos, 10-13 (DDD+número, com ou sem 55/9). O link wa.me depende disso — número
+    // errado/vazio quebra o CTA de todo email. Validação de formato só; o usuário confere o real.
+    owner_phone: (v) => /^\d{10,13}$/.test(v.replace(/\D/g, '')) && v.replace(/\D/g, ''),
+};
+
 app.patch('/api/instance/:instanceId', autenticarMiddleware, async (req, res) => {
     const { instanceId } = req.params;
     if (!(await ehDonoDaInstancia(instanceId, req.user.id)))
@@ -629,6 +643,16 @@ app.patch('/api/instance/:instanceId', autenticarMiddleware, async (req, res) =>
     const updates = {};
     for (const campo of CAMPOS_INSTANCE_PATCHAVEIS) {
         if (typeof req.body[campo] === 'boolean') updates[campo] = req.body[campo];
+    }
+    for (const [campo, valido] of Object.entries(CAMPOS_INSTANCE_PATCHAVEIS_TEXTO)) {
+        if (typeof req.body[campo] !== 'string') continue;
+        const valor = req.body[campo].trim();
+        if (valor === '') { updates[campo] = null; continue; } // string vazia = limpar campo (volta pro default global)
+        if (valido(valor)) updates[campo] = valor;
+    }
+    // email_brief: respostas cruas do formulário guiado (JSONB) — objeto plano, com trava de tamanho.
+    if (req.body.email_brief && typeof req.body.email_brief === 'object' && !Array.isArray(req.body.email_brief)) {
+        if (JSON.stringify(req.body.email_brief).length <= 6000) updates.email_brief = req.body.email_brief;
     }
     if (Object.keys(updates).length === 0) {
         return res.status(400).json({ error: 'Nenhum campo válido para atualizar.' });
@@ -638,6 +662,47 @@ app.patch('/api/instance/:instanceId', autenticarMiddleware, async (req, res) =>
         if (error) throw new Error(error.message);
         if (sdr?.invalidateInstanceCache) sdr.invalidateInstanceCache(instanceId);
         res.json({ ok: true, instanceId, updates });
+    } catch (err) {
+        res.status(500).json({ error: err.message });
+    }
+});
+
+// 📇 Enriquece emails dos leads deste chip via WhatsApp Business Profile (usa o chip conectado).
+// Fonte de alta confiança pra PME. Só grava email/website. Rodar em lotes (limite).
+app.post('/api/instance/:instanceId/enrich-emails', autenticarMiddleware, async (req, res) => {
+    const { instanceId } = req.params;
+    if (!(await ehDonoDaInstancia(instanceId, req.user.id)))
+        return res.status(403).json({ error: 'Acesso negado.' });
+    if (!sdr?.enriquecerEmailsBusinessProfile)
+        return res.status(503).json({ error: 'Motor SDR não inicializado.' });
+    const limite = Math.min(parseInt(req.body?.limite) || 50, 300);
+    try {
+        const resultado = await sdr.enriquecerEmailsBusinessProfile(instanceId, limite);
+        res.json({ ok: true, ...resultado });
+    } catch (err) {
+        res.status(500).json({ error: err.message });
+    }
+});
+
+// 👁️ Preview do email ("Ver exemplo"): gera assunto+corpo com um lead fictício SEM enviar nada.
+// Aceita campos do form no body pra prever edições ainda-não-salvas (email_prompt, owner_phone,
+// email_website_url); o resto vem das regras salvas do chip.
+app.post('/api/instance/:instanceId/preview-email', autenticarMiddleware, express.json(), async (req, res) => {
+    const { instanceId } = req.params;
+    if (!(await ehDonoDaInstancia(instanceId, req.user.id)))
+        return res.status(403).json({ error: 'Acesso negado.' });
+    try {
+        const regras = (await db.getInstanceRules(instanceId)) || {};
+        const pick = (campo) => (typeof req.body?.[campo] === 'string' ? req.body[campo] : regras[campo]);
+        const instanceData = {
+            ...regras,
+            email_prompt: pick('email_prompt'),
+            owner_phone: pick('owner_phone'),
+            email_website_url: pick('email_website_url'),
+        };
+        const leadFake = { name: 'Empresa Exemplo Ltda', niche: instanceData.product_type || null, email: 'exemplo@empresa.com' };
+        const copy = await emailService.gerarCopyOutbound(leadFake, instanceData);
+        res.json({ ok: true, assunto: copy.assunto, corpo: copy.corpo });
     } catch (err) {
         res.status(500).json({ error: err.message });
     }

@@ -53,12 +53,12 @@ function linkDescadastro(email) {
 // Monta o payload do Resend com rodapé de descadastro visível + headers List-Unsubscribe
 // (one-click, exigência de deliverability e boa prática LGPD). Sem link disponível, envia
 // sem rodapé/header em vez de gerar um link quebrado.
-function montarPayloadEmail(to, subject, corpo) {
+function montarPayloadEmail(to, subject, corpo, fromOverride) {
     const unsub = linkDescadastro(to);
     const text = unsub
         ? `${corpo}\n\n—\nSe não quiser mais receber estes e-mails, cancele aqui: ${unsub}`
         : corpo;
-    const payload = { from: process.env.EMAIL_FROM_ADDRESS, to, subject, text };
+    const payload = { from: fromOverride || process.env.EMAIL_FROM_ADDRESS, to, subject, text };
     if (unsub) {
         payload.headers = {
             'List-Unsubscribe': `<${unsub}>`,
@@ -115,7 +115,7 @@ ${contextoTenant || 'Sem contexto detalhado. Escreva de forma consultiva e gené
 DADOS DO ENVIO:
 - Empresa destinatária (lead): ${empresa}${setor ? `\n- Setor do lead: ${setor}` : ''}
 - Nome do remetente (assinatura): ${agente}
-- Empresa remetente: ${companyName}
+- Empresa remetente: ${companyName}${instanceData.email_website_url ? `\n- Site oficial (cite se fizer sentido, sem inventar outro): ${instanceData.email_website_url}` : ''}
 - Link de CTA OBRIGATÓRIO (inclua exatamente este link no corpo): ${link}
 
 Retorne SOMENTE um JSON válido, sem markdown, sem texto adicional, no formato:
@@ -163,7 +163,7 @@ async function enviarEmailOutbound(lead, instanceData) {
 
     try {
         const { data, error } = await getResend().emails.send(
-            montarPayloadEmail(lead.email, copy.assunto, copy.corpo)
+            montarPayloadEmail(lead.email, copy.assunto, copy.corpo, instanceData.email_from_address)
         );
 
         if (error) {
@@ -214,7 +214,7 @@ async function enviarEmailRepasse(emailDestinatario, lead, instanceData) {
 
     try {
         const { data, error } = await getResend().emails.send(
-            montarPayloadEmail(emailDestinatario, assunto, corpo)
+            montarPayloadEmail(emailDestinatario, assunto, corpo, instanceData.email_from_address)
         );
 
         if (error) {
@@ -235,4 +235,5 @@ async function enviarEmailRepasse(emailDestinatario, lead, instanceData) {
 module.exports = {
     enviarEmailOutbound,
     enviarEmailRepasse,
+    gerarCopyOutbound, // usado pelo endpoint de preview (Ver exemplo) no painel
 };

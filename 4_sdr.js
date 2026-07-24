@@ -133,18 +133,54 @@ function extrairNomeHumano(pushName) {
 
     // 3. Blacklist de palavras que parecem empresa ou lixo
     const palavrasProibidas = [
-        'ltda', 'me', 'epp', 'eireli', 'mei', 'sa', 'loja', 'store', 'modas', 
-        'pizzaria', 'lanchonete', 'hamburgueria', 'padaria', 'restaurante', 
-        'oficina', 'mecanica', 'auto', 'center', 'estetica', 'salao', 'clinica', 
-        'farmacia', 'drogaria', 'imoveis', 'imobiliaria', 'tech', 'info', 'cell', 
+        'ltda', 'me', 'epp', 'eireli', 'mei', 'sa', 'loja', 'store', 'modas',
+        'pizzaria', 'lanchonete', 'hamburgueria', 'padaria', 'restaurante',
+        'oficina', 'mecanica', 'auto', 'center', 'estetica', 'salao', 'clinica',
+        'farmacia', 'drogaria', 'imoveis', 'imobiliaria', 'tech', 'info', 'cell',
         'imports', 'atacado', 'varejo', 'distribuidora', 'comercio', 'servicos',
-        'adm', 'financeiro', 'vendas', 'atendimento', 'suporte', 'contato'
+        'adm', 'financeiro', 'vendas', 'atendimento', 'suporte', 'contato',
+        // reforço: mais termos de empresa/setor que apareciam como "nome" bizarro
+        'grupo', 'cia', 'mercado', 'super', 'supermercado', 'express', 'delivery',
+        'buffet', 'confeitaria', 'acougue', 'bar', 'pub', 'hotel', 'pousada', 'moveis',
+        'construtora', 'transportes', 'industria', 'fabrica', 'depa', 'deposito', 'empresa'
     ];
 
     if (palavrasProibidas.includes(primeiroNome)) return null;
+    // Barra tokens sem vogal (siglas/lixo tipo "jj", "xpto") — nome de pessoa sempre tem vogal.
+    if (!/[aeiouáéíóúâêôãõà]/i.test(primeiroNome)) return null;
 
     // 4. Retorna o nome com a primeira letra maiúscula (Ex: "joão" -> "João")
     return primeiroNome.charAt(0).toUpperCase() + primeiroNome.slice(1);
+}
+
+// 👋 Saudação por primeiro nome SÓ quando é nome humano de verdade. Centraliza a regra:
+// passa pelo mesmo filtro extrairNomeHumano — se não for nome de pessoa, devolve o fallback
+// neutro (ex.: 'Opa', 'você', ''). Evita "Oi, Padaria Ltda" (comportamento bizarro).
+function saudacaoPrimeiroNome(dono, fallback = '') {
+    return extrairNomeHumano(dono) || fallback;
+}
+
+// 🗣️ Extrai o nome que o LEAD declara na conversa ("meu nome é Carlos", "aqui é o João",
+// "sou a Ana", "me chamo..."). Alta confiança: a pessoa falando o próprio nome. Valida com
+// extrairNomeHumano (barra empresa/setor/lixo). Retorna o nome ou null. Zero custo (regex).
+const PADROES_NOME_DECLARADO = [
+    /\bmeu nome (?:é|e|eh)\s+([A-Za-zÀ-ÿ]{2,})/i,
+    /\bme chamo\s+([A-Za-zÀ-ÿ]{2,})/i,
+    /\b(?:aqui (?:é|e|eh)|quem fala (?:é|e|eh)|é|e|eh)\s+(?:o|a)\s+([A-Za-zÀ-ÿ]{2,})\s+(?:falando|aqui)/i,
+    /\baqui (?:é|e|eh)\s+(?:o|a)\s+([A-Za-zÀ-ÿ]{2,})/i,
+    /\bsou (?:o|a)\s+([A-Za-zÀ-ÿ]{2,})/i,
+    /\bpode me chamar de\s+([A-Za-zÀ-ÿ]{2,})/i,
+];
+function extrairNomeDeclarado(texto) {
+    if (!texto || typeof texto !== 'string') return null;
+    for (const padrao of PADROES_NOME_DECLARADO) {
+        const m = texto.match(padrao);
+        if (m && m[1]) {
+            const validado = extrairNomeHumano(m[1]);
+            if (validado) return validado;
+        }
+    }
+    return null;
 }
 
 // ✂️ LÂMINA DE CORTE: Transforma "Merci Delicatessen Restaurante e Pizzaria LTDA" em "Merci Delicatessen"
@@ -2163,15 +2199,20 @@ async function processarMensagem(sock, msg, instanceId, textoConsolidado = null)
 // 1. Busca normal pelo JID — sempre filtrada pela instância que recebeu a mensagem
 let { data: lead } = await supabase.from('leads').select('*').eq('whatsapp_id', cleanJid).eq('instance_id', instanceId).maybeSingle();
 
-// 2. Se for um fantasma (@lid), pergunta ao banco quem ele é!
+// Identificador que vamos gravar no lead novo (se precisar criar). Por padrão é o cleanJid;
+// no caso @lid pode virar o número real quando o WhatsApp deixa vazar, ou o próprio @lid.
+let jidParaSalvar = cleanJid;
+let lidAssociado = null;
+
+// 2. Se for um fantasma (@lid), tenta amarrar a um lead já salvo (por lid, msg citada ou nº vazado).
 if (!lead && cleanJid.includes('@lid')) {
     console.log(`⚠️ [LID SOLTO] Mensagem de ${cleanJid}. Buscando no banco de dados...`);
     const { data: leadLid } = await supabase.from('leads').select('*').eq('whatsapp_lid', cleanJid).eq('instance_id', instanceId).maybeSingle();
-    
+
     if (leadLid) {
         console.log(`✅ [ARIADNE INFALÍVEL] O banco dedurou: É a ${leadLid.name}`);
         lead = leadLid;
-    
+
     } else {
         // 🚨 TENTATIVA DE RESGATE DE EMERGÊNCIA (O XEQUE-MATE) 🚨
         // 👇 AQUI ESTÁ A MÁGICA: Ele vai olhar no remoteJidAlt que descobrimos!
@@ -2179,6 +2220,7 @@ if (!lead && cleanJid.includes('@lid')) {
         const quotedMsgId = msg.message?.extendedTextMessage?.contextInfo?.stanzaId;
 
         let originalLead = null;
+        let cleanRescue = null;
 
         // 🥷 RESGATE NINJA 1: Ele citou a nossa mensagem?
         if (quotedMsgId && mapaRastreioLID.has(quotedMsgId)) {
@@ -2189,37 +2231,46 @@ if (!lead && cleanJid.includes('@lid')) {
         }
 
         // 🥷 RESGATE NINJA 2: O WhatsApp mandou o número oculto no remoteJidAlt?
-        if (!originalLead && realJidRescue) {
-            const cleanRescue = realJidRescue.split(':')[0].split('@')[0] + '@s.whatsapp.net';
-            console.log(`🥷 [RESGATE NINJA 2] Analisando bolso secreto da Meta: ${cleanRescue}`);
-            const { data } = await supabase.from('leads').select('*').eq('whatsapp_id', cleanRescue).eq('instance_id', instanceId).maybeSingle();
-            originalLead = data;
+        if (realJidRescue) {
+            cleanRescue = realJidRescue.split(':')[0].split('@')[0] + '@s.whatsapp.net';
+            if (!originalLead) {
+                console.log(`🥷 [RESGATE NINJA 2] Analisando bolso secreto da Meta: ${cleanRescue}`);
+                const { data } = await supabase.from('leads').select('*').eq('whatsapp_id', cleanRescue).eq('instance_id', instanceId).maybeSingle();
+                originalLead = data;
+            }
         }
 
-        // Conclusão do Resgate
         if (originalLead) {
             console.log(`✅ [RESGATE BEM-SUCEDIDO] Identidade revelada: ${originalLead.name}. Salvando LID no banco!`);
             await supabase.from('leads').update({ whatsapp_lid: cleanJid }).eq('id', originalLead.id);
             lead = originalLead;
         } else {
-            console.log(`❌ [BLINDAGEM TOTAL] WhatsApp ocultou completamente o número. Abortando.`);
-            return;
+            // 🚪 PORTA ABERTA (funil email→WhatsApp): número novo, fora da base, chegou via @lid.
+            // Antes a gente ABORTAVA (BLINDAGEM TOTAL — só falávamos com quem já estava salvo).
+            // Agora esses são leads legítimos do funil receptivo: seguimos pra criação de inbound
+            // orgânico abaixo. Se o WhatsApp vazou o número real, usamos ele; senão, o próprio @lid.
+            jidParaSalvar = cleanRescue || cleanJid;
+            lidAssociado = cleanJid;
+            console.log(`🚪 [LID NOVO] Contato fora da base via @lid — seguindo como inbound (${jidParaSalvar}).`);
         }
     }
-} else if (!lead) {
-    // 📥 INBOUND ORGÂNICO: chips inbound_only recebem mensagem de gente fora da base.
-    // Em vez de ignorar, cria o lead na hora e injeta na esteira normalmente.
+}
+
+// 3. Ainda sem lead? Número novo (JID normal fora da base OU @lid não-amarrado acima).
+//    Chips inbound_only acolhem: cria o lead na hora e injeta na esteira (funil receptivo).
+if (!lead) {
     const instanceDataInbound = await getRegrasEmCache(instanceId);
     if (!instanceDataInbound?.inbound_only) {
-        return; // Fora da base, ignora — comportamento padrão preservado.
+        return; // Chip não-receptivo: mantém o padrão de só falar com quem está na base.
     }
 
-    console.log(`📥 [INBOUND ORGÂNICO] Chip inbound-only recebeu contato novo de ${cleanJid}. Criando lead.`);
+    console.log(`📥 [INBOUND ORGÂNICO] Chip inbound-only recebeu contato novo de ${jidParaSalvar}. Criando lead.`);
     const userIdInbound = instanceDataInbound.user_id;
     const { data: leadCriado, error: erroLeadOrganico } = await supabase
         .from('leads')
         .insert({
-            whatsapp_id: cleanJid,
+            whatsapp_id: jidParaSalvar,
+            whatsapp_lid: lidAssociado,
             instance_id: instanceId,
             user_id: userIdInbound,
             name: msg.pushName || 'Contato Orgânico',
@@ -2233,7 +2284,7 @@ if (!lead && cleanJid.includes('@lid')) {
         .single();
 
     if (erroLeadOrganico || !leadCriado) {
-        console.error(`❌ [INBOUND ORGÂNICO] Falha ao criar lead para ${cleanJid}:`, erroLeadOrganico?.message);
+        console.error(`❌ [INBOUND ORGÂNICO] Falha ao criar lead para ${jidParaSalvar}:`, erroLeadOrganico?.message);
         return;
     }
     lead = leadCriado;
@@ -2278,6 +2329,22 @@ if (!lead && cleanJid.includes('@lid')) {
 
     // O Segredo: Se a gaveta mandou o texto juntado, usa ele. Se não, usa o original (para mídias)
     const texto = textoConsolidado || textoOriginal;
+
+    // 🗣️ CORREÇÃO DE NOME EM TEMPO REAL: se o lead DECLARA o próprio nome na conversa
+    // ("meu nome é Carlos", "aqui é o João"), isso é alta confiança e SOBRESCREVE o dono atual
+    // (a pessoa falando o próprio nome vence Receita/pushName). O card reflete no próximo fetch.
+    if (!fromMe && texto) {
+        const nomeDeclarado = extrairNomeDeclarado(texto);
+        if (nomeDeclarado && nomeDeclarado !== lead.dono) {
+            console.log(`👤 [IDENTIDADE-CHAT] Lead se identificou: "${nomeDeclarado}" (era "${lead.dono || '—'}"). Atualizando.`);
+            lead.dono = nomeDeclarado; // memória viva — a IA já usa neste ciclo
+            supabase.from('leads')
+                .update({ dono: nomeDeclarado })
+                .eq('id', lead.id)
+                .then(() => {})
+                .catch(e => console.error("Erro ao salvar nome declarado:", e.message));
+        }
+    }
 
   // 👇 AS DUAS LINHAS QUE FALTARAM 👇
     const messageType = Object.keys(msg.message).find(k => k !== 'messageContextInfo' && k !== 'senderKeyDistributionMessage') || Object.keys(msg.message)[0];
@@ -3502,8 +3569,7 @@ async function loopRecuperacaoConversas() {
                     const chipNome = cacheRegrasInstancia.get(lf.instance_id)?.dados?.name || lf.instance_id.slice(0, 8);
 
                     if (followupAtual === 0) {
-                        let primeiroNome = lf.dono && lf.dono.trim().length > 2 ? lf.dono.trim().split(' ')[0] : 'Opa';
-                        primeiroNome = primeiroNome.charAt(0).toUpperCase() + primeiroNome.slice(1);
+                        const primeiroNome = saudacaoPrimeiroNome(lf.dono, 'Opa');
                         const nomeEmpresa = (lf.name || 'empresa').replace(/\s(LTDA|ME|EIRELI|S\.A|LIMITED)\b/gi, '').trim();
 
                         const msgFollowUp = `${primeiroNome}, conseguiu dar uma olhada na mensagem acima? Como a gente tem poucas vagas com isenção pra região, queria confirmar se faz sentido pra ${nomeEmpresa} antes de liberar o espaço.`;
@@ -3541,8 +3607,7 @@ await delay(jitterAntiBan);
                     }
                     else if (followupAtual === 1) {
                         // D3 — segunda e última tentativa antes do tombamento
-                        let primeiroNome = lf.dono && lf.dono.trim().length > 2 ? lf.dono.trim().split(' ')[0] : 'Opa';
-                        primeiroNome = primeiroNome.charAt(0).toUpperCase() + primeiroNome.slice(1);
+                        const primeiroNome = saudacaoPrimeiroNome(lf.dono, 'Opa');
                         const nomeEmpresa = (lf.name || 'empresa').replace(/\s(LTDA|ME|EIRELI|S\.A|LIMITED)\b/gi, '').trim();
 
                         const msgD3 = `${primeiroNome}, última tentativa da minha parte. Se a conversa sobre a ${nomeEmpresa} ainda fizer sentido, é só me responder aqui. Se não for a hora certa, sem problema — desejo sucesso pra vcs!`;
@@ -3610,9 +3675,8 @@ await delay(jitterAntiBan);
                     if (!instancia || !instancia.ready || iaRespondendo.has(ll.whatsapp_id)) continue;
 
                     // 🛡️ FAIL-SAFE: Culpa o sistema para não ofender se ele já tiver agendado
-                    let primeiroNome = ll.dono && ll.dono.trim().length > 2 ? ll.dono.trim().split(' ')[0] : 'Opa';
-                    primeiroNome = primeiroNome.charAt(0).toUpperCase() + primeiroNome.slice(1);
-                    
+                    const primeiroNome = saudacaoPrimeiroNome(ll.dono, 'Opa');
+
                     const msgFollowUpLink = `${primeiroNome}, meu sistema de agenda deu uma travada hoje. Vc conseguiu travar o seu horário lá no link ou deu erro aí também?`;
 
                  // ⚡ FAST-LANE: follow-up de link tem prioridade mínima — cede para inbound imediatamente
@@ -3717,7 +3781,7 @@ await delay(jitterAntiBan);
 
                     const dataObj = new Date(lr.calendly_event_at);
                     const horaF   = dataObj.toLocaleTimeString('pt-BR', { hour: '2-digit', minute: '2-digit' });
-                    const nome    = lr.dono?.split(' ')?.[0] || 'você';
+                    const nome    = saudacaoPrimeiroNome(lr.dono, 'você');
                     const instanceData = await getRegrasEmCache(lr.instance_id);
 
                     const msgLembrete = instanceData?.opening_templates?.lembrete_reuniao
@@ -4459,8 +4523,8 @@ async function verificarFollowUpsVencidos() {
                 }
 
                 // 3. Monta e envia a mensagem de reativação
-                const primeiroNome = (lead.dono || lead.name || '').split(' ')[0];
-                const msgReativacao = `Oi ${primeiroNome}, passando aqui conforme combinamos! Como estão as coisas por aí?`;
+                const primeiroNome = saudacaoPrimeiroNome(lead.dono, '');
+                const msgReativacao = `Oi${primeiroNome ? ' ' + primeiroNome : ''}, passando aqui conforme combinamos! Como estão as coisas por aí?`;
                 const cleanJid = lead.whatsapp_id.includes('@')
                     ? lead.whatsapp_id
                     : `${lead.whatsapp_id}@s.whatsapp.net`;
@@ -4688,7 +4752,7 @@ module.exports = {
                         const horaFormatada = dataObjeto.toLocaleTimeString('pt-BR', { hour: '2-digit', minute: '2-digit' });
 
                         const instanceData = await getRegrasEmCache(instanceId);
-                        const primeiroNome = lead.dono?.split(' ')?.[0] || 'você';
+                        const primeiroNome = saudacaoPrimeiroNome(lead.dono, 'você');
 
                         // Template de confirmação — usa o do Supabase se existir, senão fallback
                         const tplConfirmacao = instanceData?.opening_templates?.confirmacao_agendamento
@@ -4870,6 +4934,45 @@ module.exports = {
     // toggles de inbound_only/use_email_outbound/use_sms_outbound sejam lidos no próximo ciclo.
     invalidateInstanceCache: (instanceId) => {
         cacheRegrasInstancia.delete(instanceId);
+    },
+
+    // 📇 EMAIL FINDER via WhatsApp Business Profile: usa o chip CONECTADO pra consultar o perfil
+    // business de cada lead sem email. Retorna email/website ESTRUTURADO que o dono preencheu no
+    // perfil (fonte de alta confiança pra PME, adoção alta). Só grava email/website (nunca telefone).
+    // É leitura, mas espaça as consultas (throttle) por segurança. email_source='wa_business'.
+    enriquecerEmailsBusinessProfile: async (instanceId, limite = 50) => {
+        const sessao = sessions.get(instanceId);
+        if (!sessao?.ready || !sessao?.sock) return { erro: 'Chip não conectado', processados: 0, achados: 0 };
+
+        const { data: leads, error } = await supabase
+            .from('leads')
+            .select('id, name, whatsapp_id')
+            .eq('instance_id', instanceId)
+            .is('email', null)
+            .limit(limite);
+        if (error) return { erro: error.message, processados: 0, achados: 0 };
+
+        const REGEX_EMAIL = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
+        let achados = 0;
+        for (const lead of leads || []) {
+            try {
+                const perfil = await sessao.sock.getBusinessProfile(lead.whatsapp_id);
+                if (perfil) {
+                    const email = String(perfil.email || '').trim().toLowerCase();
+                    const website = Array.isArray(perfil.website) ? perfil.website[0] : (perfil.website || null);
+                    const updates = {};
+                    if (email && REGEX_EMAIL.test(email)) { updates.email = email; achados++; }
+                    if (website) updates.website = website;
+                    if (Object.keys(updates).length) {
+                        await supabase.from('leads').update(updates).eq('id', lead.id);
+                        console.log(`📇 [WA-BIZ] ${lead.name}: ${updates.email || '(só site)'} ${updates.website || ''}`);
+                    }
+                }
+            } catch (e) { /* perfil ausente/erro — segue o baile */ }
+            await new Promise(r => setTimeout(r, 1500)); // throttle: é leitura, mas não abusa
+        }
+        console.log(`📇 [WA-BIZ] Chip ${sessao.name || instanceId.slice(0,8)}: ${(leads||[]).length} processados, ${achados} emails.`);
+        return { processados: (leads || []).length, achados };
     },
 
     pauseChip: async (instanceId, pausar) => {
