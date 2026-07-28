@@ -1190,10 +1190,24 @@ ${diretrizGatekeeper}`;
         .replaceAll('${economiaAnual}', economiaAnualFormatada)
         .replaceAll('${calendlyLink}', calendlyResolvido);
 
+    // --- 10. Acolhida de primeiro contato inbound ---
+    // Se não há NENHUMA mensagem 'assistant' no histórico, é porque a IA nunca abriu essa
+    // conversa — o lead procurou primeiro (chip inbound_only, orgânico, indicação etc.).
+    // Em fluxo outbound isso nunca é true: o opening_template já gravou a 1ª msg 'assistant'
+    // antes do lead responder. Sem esse aviso, a IA aplica o Passo 1 do roteiro de qualificação
+    // como se já tivesse se apresentado, soando como "oi, que bom que me atendeu" fora de contexto.
+    const jaFalouAntes = historico.some(m => m.role === 'assistant');
+    const secaoAcolhidaInbound = jaFalouAntes ? '' : `
+
+[PRIMEIRO CONTATO — O LEAD FALOU PRIMEIRO]
+Ele te procurou por conta própria — você nunca abriu essa conversa antes. Não presuma que ele já sabe quem você é ou por que está falando com você. NÃO dispare a pergunta de qualificação do roteiro (Passo 1) nesta primeira resposta.
+Em vez disso: apresente-se em 1 frase curta (quem você é e o que a ${companyName} faz), demonstre curiosidade genuína pelo motivo do contato dele, e responda com clareza qualquer pergunta ou dúvida direta que ele tenha feito. Seja calorosa e humana — acolhimento antes de roteiro.
+Só avance para a qualificação (Passo 1 em diante) na mensagem seguinte, depois que ele engajar ou responder.`;
+
     // use_modular_sections=false no banco → apenas o system_prompt do tenant, sem injeção hardcoded
-    if (instanceData?.use_modular_sections === false) return constituicaoResolvida;
+    if (instanceData?.use_modular_sections === false) return constituicaoResolvida + secaoAcolhidaInbound;
     // Hardcoded vem DEPOIS do system_prompt — tenant tem precedência, seções modulares são complemento
-    return `${constituicaoResolvida}\n\n${secaoModular}`;
+    return `${constituicaoResolvida}${secaoAcolhidaInbound}\n\n${secaoModular}`;
 }
 // ============================================================================
 // 🧠 NÚCLEO IA: "THE ARCHITECT" - STATE OF THE ART SDR V3.0 (MULTI-TENANT REAL)
@@ -2455,17 +2469,35 @@ if (fromMe) {
         console.log(`🎯 [Filtro] A IA classificou a mensagem de ${lead.name} como: ${intencao}`);
 
         if (intencao === "[ROBO]") {
-            console.log(`🤖 [SILÊNCIO] Autoresposta detectada para ${lead.name}. Bot aguardando humano silenciosamente...`);
+            // 🎯 4 STRIKES: só pausa de verdade na 4ª mensagem com padrão estrutural de autoresposta
+            // (menu numerado, "protocolo nº", "transferindo pra atendente"...). Antes pausava na 1ª
+            // detecção — falso positivo isolado matava a conversa pra sempre sem ninguém perceber.
             await db.saveMessage(lead.whatsapp_id, 'user', `[AUTORESPOSTA] ${texto}`, instanceId);
-            await supabase.from('leads').update({ is_paused: true }).eq('id', lead.id);
+            const histParaRobo = await db.getHistory(lead.whatsapp_id, instanceId);
+            const totalAutorespostas = histParaRobo.filter(m => m.role === 'user' && m.content.startsWith('[AUTORESPOSTA]')).length;
+
+            if (totalAutorespostas >= 4) {
+                console.log(`🤖 [SILÊNCIO] ${totalAutorespostas}ª autoresposta estrutural detectada para ${lead.name}. Pausando.`);
+                await supabase.from('leads').update({
+                    is_paused: true,
+                    internal_notes: `${totalAutorespostas} autorespostas estruturais detectadas até ${new Date().toLocaleString('pt-BR')}. Pausado.`
+                }).eq('id', lead.id);
+                await enviarAlerta(`🤖 *Bot confirmado (${totalAutorespostas}x)*\n*Lead:* ${lead.name}\n*Chip:* ${instanceId}\nPausado automaticamente após 4 strikes.`);
+            } else {
+                console.log(`⚠️ [SUSPEITA ROBO ${totalAutorespostas}/4] Padrão estrutural de autoresposta para ${lead.name}. Ainda não atingiu o limiar — sem pausar, só sem responder esta mensagem.`);
+            }
             return;
         }
 
-        // 🧠 CAMADA 2: padrão histórico de bot (muitas msgs do SDR, zero sinal humano)
+        // 🧠 CAMADA 2: padrão histórico de bot (muitas msgs do SDR, zero sinal humano).
+        // Só roda em chips OUTBOUND: nesse modo, quem "responde" pode ser uma autoresposta
+        // disparada pelo nosso próprio contato inicial. Em chips inbound_only, o lead que nos
+        // procura por conta própria não é acionado por nós — risco de bot automático é residual,
+        // então essa camada estatística (mais propensa a falso positivo) fica desligada ali.
         // Chips B2C (bot_detection_enabled=false) não passam por esta camada — clientes de curso
         // respondem de forma natural mas sem vocabulário B2B (kWh, CNPJ, "nossa empresa")
         const instanceDataBot = await getRegrasEmCache(instanceId);
-        const botDetectionAtivo = instanceDataBot?.bot_detection_enabled !== false;
+        const botDetectionAtivo = instanceDataBot?.bot_detection_enabled !== false && !instanceDataBot?.inbound_only;
         if (botDetectionAtivo) {
             const histParaBot = await db.getHistory(lead.whatsapp_id, instanceId);
             if (await avaliarRiscoRoboComHistorico(histParaBot)) {
