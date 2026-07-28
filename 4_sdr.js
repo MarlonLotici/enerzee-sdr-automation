@@ -718,6 +718,7 @@ function detectarSinalHumano(texto) {
         /\d{4,}/.test(t) ||                  // número concreto longo (kWh, CNPJ, CEP etc.)
         /\?/.test(t) ||                      // pergunta — quase sempre fala humana
         /\b(hoje|agora|ontem|ainda|j[aá]|nunca|sempre|semana|esta\s+semana)\b/i.test(t) || // marcadores temporais pessoais
+        /\b(mas|por[ée]m|contudo|entretanto|ent[ãa]o|depende|[àa]s\s+vezes|geralmente|normalmente|na\s+verdade|de\s+fato|s[óo]\s+que|apesar|embora|acho\s+que|acredito|creio|imagino|talvez)\b/i.test(t) || // conectores de raciocínio/opinião — comuns em objeções humanas naturais
         /\b(n[ãa]o\s+)?(comec[ea]\w*|us[ao]\w*|fiz|sei|entend\w*|consig[ao]\w*|conect\w*|abr[ií]\w*|mex\w*|acesso|acess\w+)\b/i.test(t) || // verbos 1ª pessoa (comecei, usei, fiz, sei...)
         /\b(preciso|quero|gostaria|tento|estou|tô\s+(?:com|sem)|tenho\s+(?:uma?\s+)?d[uú]vida)\b/i.test(t) || // intenção/estado pessoal
         (/\b(sim|n[ãa]o|ok|certo|exato|legal|show|boa|beleza|claro|combinado|perfeito)\b/i.test(t) && t.split(/\s+/).length <= 5) // confirmação curta humana (≤5 palavras)
