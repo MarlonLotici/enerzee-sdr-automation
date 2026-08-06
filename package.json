@@ -7,6 +7,7 @@
     "start": "node --max-old-space-size=512 server.js",
     "build": "cd frontend && npm install && npm run build",
     "dev": "node server.js",
+    "test": "node --test",
     "sdr": "node 4_SDR_IA_ULTIMATE_V4.js"
   },
   "keywords": [

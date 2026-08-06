@@ -99,6 +99,28 @@ function cancelarDebounceChip(instanceId) {
     }
 }
 
+// Degradação de IA: um agente (router/profiler/closer) caiu em fallback por erro de API (Groq/
+// Together — timeout, 429, 5xx). Debounce por agente pra não floodar num pico. Assim você SABE
+// em tempo real que a IA está degradando, em vez de descobrir por reclamação do cliente.
+const _ultimaDegradacaoIA = new Map(); // agente → timestamp do último alerta
+const _INTERVALO_DEGRADACAO_MS = 5 * 60 * 1000;
+async function alertaDegradacaoIA(agente, erro) {
+    const agora = Date.now();
+    if (agora - (_ultimaDegradacaoIA.get(agente) || 0) < _INTERVALO_DEGRADACAO_MS) return;
+    _ultimaDegradacaoIA.set(agente, agora);
+    const status = erro?.status || erro?.response?.status || '—';
+    await _post(WEBHOOK_SUPORTE, {
+        embeds: [{
+            title:       '⚠️ IA DEGRADADA — resposta genérica enviada',
+            color:       0xF59E0B,
+            description: `O agente **${agente}** falhou na API e caiu em fallback. Cliente pode ter recebido resposta genérica.`,
+            fields:      [{ name: 'Erro', value: String(erro?.message || erro).slice(0, 300), inline: false },
+                          { name: 'HTTP', value: String(status), inline: true }],
+            timestamp:   new Date().toISOString(),
+        }],
+    });
+}
+
 // Compat legada — mantém todos os callers existentes funcionando (roteia para suporte)
 async function enviarAlerta(titulo, mensagem, cor = 3447003) {
     await _post(WEBHOOK_SUPORTE, {
@@ -111,4 +133,4 @@ async function enviarAlerta(titulo, mensagem, cor = 3447003) {
     });
 }
 
-module.exports = { enviarAlerta, alertaHandoff, alertaCalendly, alertaChipOffline, cancelarDebounceChip };
+module.exports = { enviarAlerta, alertaHandoff, alertaCalendly, alertaChipOffline, cancelarDebounceChip, alertaDegradacaoIA };

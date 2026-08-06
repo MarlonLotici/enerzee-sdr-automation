@@ -455,4 +455,4 @@ async function enriquecerLeadIndividual(lead) {
     return { ...lead, ...enrichment, quality_score: finalScore, quality_score_int4: finalScore };
 }
 
-module.exports = { enriquecerLeadIndividual, consultarDadosOficiais, buscarEmailViaSerper, emailPareceConfiavel };
+module.exports = { enriquecerLeadIndividual, consultarDadosOficiais, buscarEmailViaSerper, emailPareceConfiavel, _normalizarCelularReceita };

@@ -38,7 +38,7 @@ const emailService = require('./emailService');
 const budgetGuard = require('./budgetGuard');
 const { getTransport, baileysTransport, cloudApiTransport } = require('./transports');
 const { useSupabaseAuthState } = require('./auth_adapter');
-const { gerarAudioTTS } = require('./tts');
+const { gerarAudioTTS } = require('./ttsElevenLabs');
 const { createClient } = require('@supabase/supabase-js');
 const routerAgent = require('./agents/routerAgent'); // faz a distribuição entre os agentes dependendo da necessidade 
 const closerAgent = require('./agents/closerAgent'); //é o closer que assume a conversa
@@ -120,68 +120,10 @@ function identificarArtigo(nome) {
 }
 
 
-// 👤 FILTRO DE IDENTIDADE HUMANA: Valida se o nome do WhatsApp é realmente de uma pessoa
-function extrairNomeHumano(pushName) {
-    if (!pushName) return null;
-
-    // 1. Remove emojis e caracteres estranhos, deixando só letras e espaços
-    let nomeLimpo = pushName.replace(/[^\p{L}\s]/gu, '').trim();
-    if (!nomeLimpo || nomeLimpo.length < 2) return null;
-
-    // 2. Pega só a primeira palavra para evitar nomes longos ou compostos estranhos
-    const primeiroNome = nomeLimpo.split(/\s+/)[0].toLowerCase();
-
-    // 3. Blacklist de palavras que parecem empresa ou lixo
-    const palavrasProibidas = [
-        'ltda', 'me', 'epp', 'eireli', 'mei', 'sa', 'loja', 'store', 'modas',
-        'pizzaria', 'lanchonete', 'hamburgueria', 'padaria', 'restaurante',
-        'oficina', 'mecanica', 'auto', 'center', 'estetica', 'salao', 'clinica',
-        'farmacia', 'drogaria', 'imoveis', 'imobiliaria', 'tech', 'info', 'cell',
-        'imports', 'atacado', 'varejo', 'distribuidora', 'comercio', 'servicos',
-        'adm', 'financeiro', 'vendas', 'atendimento', 'suporte', 'contato',
-        // reforço: mais termos de empresa/setor que apareciam como "nome" bizarro
-        'grupo', 'cia', 'mercado', 'super', 'supermercado', 'express', 'delivery',
-        'buffet', 'confeitaria', 'acougue', 'bar', 'pub', 'hotel', 'pousada', 'moveis',
-        'construtora', 'transportes', 'industria', 'fabrica', 'depa', 'deposito', 'empresa'
-    ];
-
-    if (palavrasProibidas.includes(primeiroNome)) return null;
-    // Barra tokens sem vogal (siglas/lixo tipo "jj", "xpto") — nome de pessoa sempre tem vogal.
-    if (!/[aeiouáéíóúâêôãõà]/i.test(primeiroNome)) return null;
-
-    // 4. Retorna o nome com a primeira letra maiúscula (Ex: "joão" -> "João")
-    return primeiroNome.charAt(0).toUpperCase() + primeiroNome.slice(1);
-}
-
-// 👋 Saudação por primeiro nome SÓ quando é nome humano de verdade. Centraliza a regra:
-// passa pelo mesmo filtro extrairNomeHumano — se não for nome de pessoa, devolve o fallback
-// neutro (ex.: 'Opa', 'você', ''). Evita "Oi, Padaria Ltda" (comportamento bizarro).
-function saudacaoPrimeiroNome(dono, fallback = '') {
-    return extrairNomeHumano(dono) || fallback;
-}
-
-// 🗣️ Extrai o nome que o LEAD declara na conversa ("meu nome é Carlos", "aqui é o João",
-// "sou a Ana", "me chamo..."). Alta confiança: a pessoa falando o próprio nome. Valida com
-// extrairNomeHumano (barra empresa/setor/lixo). Retorna o nome ou null. Zero custo (regex).
-const PADROES_NOME_DECLARADO = [
-    /\bmeu nome (?:é|e|eh)\s+([A-Za-zÀ-ÿ]{2,})/i,
-    /\bme chamo\s+([A-Za-zÀ-ÿ]{2,})/i,
-    /\b(?:aqui (?:é|e|eh)|quem fala (?:é|e|eh)|é|e|eh)\s+(?:o|a)\s+([A-Za-zÀ-ÿ]{2,})\s+(?:falando|aqui)/i,
-    /\baqui (?:é|e|eh)\s+(?:o|a)\s+([A-Za-zÀ-ÿ]{2,})/i,
-    /\bsou (?:o|a)\s+([A-Za-zÀ-ÿ]{2,})/i,
-    /\bpode me chamar de\s+([A-Za-zÀ-ÿ]{2,})/i,
-];
-function extrairNomeDeclarado(texto) {
-    if (!texto || typeof texto !== 'string') return null;
-    for (const padrao of PADROES_NOME_DECLARADO) {
-        const m = texto.match(padrao);
-        if (m && m[1]) {
-            const validado = extrairNomeHumano(m[1]);
-            if (validado) return validado;
-        }
-    }
-    return null;
-}
+// 👤 Identidade/nome (funções puras) — movidas para lib/textPuros.js pra serem testáveis sem
+// subir Redis/BullMQ. Mesma lógica, só mudou de arquivo.
+const { extrairNomeHumano, saudacaoPrimeiroNome, extrairNomeDeclarado, empresaConfiavelDoLead } = require('./lib/textPuros');
+const { dividirEmBaloes } = require('./lib/baloes');
 
 // ✂️ LÂMINA DE CORTE: Transforma "Merci Delicatessen Restaurante e Pizzaria LTDA" em "Merci Delicatessen"
 function limparNomeEmpresa(nomeOriginal) {
@@ -280,6 +222,13 @@ const iaRespondendo = new Set();
 const inboundAtivo = new Map(); // instanceId → nº de jobs inbound em fila/processamento (fast-lane guard)
 const tentativasReconexao = new Map(); // instanceId → contador de tentativas automáticas (Phase 4)
 const chipsAbandanados = new Set(); // chips que falharam 10x seguidas — Vigia para de reiniciar até Reset Session manual
+// 🔁 AUTO-RECUPERAÇÃO DE ABANDONO: em vez de deixar o chip morto pra sempre, o VIGIA re-tenta
+// após um cooldown longo (transitório do WhatsApp/proxy se cura sozinho) e re-alerta enquanto down.
+const abandonadoEm = new Map();          // instanceId → timestamp (ms) em que entrou em abandono
+const ultimoAlertaAbandono = new Map();  // instanceId → timestamp do último alerta Discord (anti-flood)
+const ultimoInboundAt = new Map();       // instanceId → timestamp da última mensagem recebida (painel de saúde)
+const COOLDOWN_ABANDONO_MS = 20 * 60 * 1000; // espera antes de tentar recuperar um chip abandonado
+const REALERTA_ABANDONO_MS = 15 * 60 * 1000; // re-alerta no Discord no máx a cada 15min enquanto down
 const instanciasDeletadas = new Set(); // chips removidos pelo painel — bloqueia reentrada de timeouts pendentes
 const instanciasEmResetManual = new Set(); // impede duplo reset_session simultâneo no mesmo chip
 const mapaRastreioLID = new Map();
@@ -307,6 +256,74 @@ const ultimoEnvioTimestamp = new Map(); // jid → timestamp do último envio co
 const primeiroEnvioSucesso = new Map(); // instanceId → true se já houve ao menos 1 envio confirmado na sessão atual (soft-ban detection)
 const proxy504Tentativas   = new Map(); // instanceId → contador de retries por proxy 504 (máx 3 antes de contar como falha normal)
 const chipsEmConflito      = new Set(); // chips que receberam connectionReplaced e aguardam reconnect (para logar [CONFLITO-RECOVERY])
+// 🩹 CATCH-UP DE QUEDA: instanceId → timestamp (ms) da última desconexão detectada.
+// messages.upsert só processa eventos type='notify' (ao vivo) — mensagens que chegam durante
+// o socket caído voltam como sincronização (não-notify) e eram descartadas em silêncio.
+// Usado para resgatar só o que caiu DENTRO da janela de queda, sem reprocessar histórico
+// antigo (o Map é em memória — reseta a cada deploy, então nunca "recupera" após um restart).
+const ultimaQuedaPorChip  = new Map();
+const JANELA_MAX_CATCHUP_MS = 10 * 60 * 1000; // não resgata sync mais velho que 10min de queda
+
+// 🔄 Backoff de reconexão (pura, testável) — movida para lib/reconexao.js.
+const { calcularBackoffReconexao } = require('./lib/reconexao');
+
+// ============================================================================
+// 🗄️ PERSISTÊNCIA DA GAVETA (nunca perder inbound num restart/deploy)
+// A gaveta de debounce (OUVIDO PACIENTE) segura o inbound por até 30s só na RAM antes de ir pro
+// BullMQ — um restart nessa janela perdia a mensagem em silêncio. Espelhamos a gaveta no Redis
+// (TTL curto) e, quando o chip volta a ficar PRONTO, reprocessamos o que ficou pendente.
+// ============================================================================
+const GAVETA_REDIS_PREFIX = 'gaveta_pend:';
+const GAVETA_REDIS_TTL_S = 120; // segundos — cobre a janela de 30s + margem de restart
+const _gavetaRedisKey = (instanceId, remoteJid) => `${GAVETA_REDIS_PREFIX}${instanceId}:${remoteJid}`;
+
+async function persistirGavetaRedis(instanceId, remoteJid, textos, msgMeta) {
+    try {
+        const payload = JSON.stringify({ textos, msgMeta, updatedAt: Date.now() });
+        await redisConnection.set(_gavetaRedisKey(instanceId, remoteJid), payload, 'EX', GAVETA_REDIS_TTL_S);
+    } catch (e) { /* best-effort: espelho, nunca deve derrubar o fluxo */ }
+}
+
+async function limparGavetaRedis(instanceId, remoteJid) {
+    try { await redisConnection.del(_gavetaRedisKey(instanceId, remoteJid)); } catch (e) {}
+}
+
+// Reprocessa gavetas pendentes quando o chip volta a ficar PRONTO (após restart/reconexão).
+// Consome-uma-vez (del antes de processar → sem loop entre restarts). Pula chaves cuja gaveta
+// ainda existe na RAM (reconexão sem restart → o timer da RAM já cuida, não duplica). Pré-semeia
+// o dedup pelo msgId → se o WhatsApp reenviar via sync, é descartado.
+async function recuperarGavetasPendentes(instanceId, sock) {
+    let chaves = [];
+    try { chaves = await redisConnection.keys(`${GAVETA_REDIS_PREFIX}${instanceId}:*`); } catch (e) { return; }
+    if (!chaves.length) return;
+    console.log(`♻️ [GAVETA-RECUPERA] ${chaves.length} pendente(s) do chip ${String(instanceId).slice(0, 8)} — reprocessando após reinício.`);
+    for (const chave of chaves) {
+        try {
+            const raw = await redisConnection.get(chave);
+            if (!raw) continue;
+            const { textos, msgMeta } = JSON.parse(raw);
+            if (!Array.isArray(textos) || !textos.length || !msgMeta?.remoteJid) { await redisConnection.del(chave).catch(() => {}); continue; }
+            // Se a gaveta ainda está viva na RAM (reconexão sem restart), o timer local processa — não duplica.
+            if (gavetaDeMensagens.has(`${instanceId}:${msgMeta.remoteJid}`)) continue;
+            await redisConnection.del(chave).catch(() => {}); // consome-uma-vez
+            const textoConsolidado = textos.join(' \n');
+            if (msgMeta.id) { // pré-dedup contra o sync do WhatsApp
+                mensagensJaProcessadas.set(msgMeta.id, Date.now());
+                setTimeout(() => mensagensJaProcessadas.delete(msgMeta.id), 300000);
+            }
+            const synthMsg = {
+                key: { remoteJid: msgMeta.remoteJid, fromMe: msgMeta.fromMe || false, id: msgMeta.id,
+                       remoteJidAlt: msgMeta.remoteJidAlt, participant: msgMeta.participant },
+                pushName: msgMeta.pushName,
+                message: { conversation: textoConsolidado },
+            };
+            await processarMensagem(sock, synthMsg, instanceId, textoConsolidado);
+            console.log(`✅ [GAVETA-RECUPERA] Reprocessado: "${textoConsolidado.slice(0, 60)}"`);
+        } catch (e) {
+            console.error(`❌ [GAVETA-RECUPERA] Falha em ${chave}:`, e.message);
+        }
+    }
+}
 
 // Detecta respostas automáticas de WhatsApp Business / bots de atendimento
 const AUTORESPOSTA_REGEX = /agradece (seu|o seu) contato|obrigado por entrar em contato|fora do hor[aá]rio de atendimento|nossa equipe retornar[aá]|atendimento autom[aá]tico|resposta autom[aá]tica|digit[ea] \d para|pressione \d para|selecione uma op[cç][aã]o|para falar com|menu principal|horario de funcionamento/i;
@@ -999,7 +1016,10 @@ async function resolverPromptCompleto(promptBase, contextoLead, instanceData, hi
     // Se retornar null, usamos "vc" para não chamar o gatekeeper pelo nome do dono do CNPJ sem confirmação
     const nomeLead = extrairNomeHumano(contextoLead.dono) || 'vc';
 
-    const nomeEmpresa = limparNomeEmpresa(contextoLead.name);
+    // Só afirma nome de empresa quando há sinal real (CNPJ/nicho/capital). Em lead inbound
+    // orgânico o "name" é o pushName do WhatsApp (nome de pessoa) — nesse caso NÃO presumir empresa.
+    const empresaConfiavel = empresaConfiavelDoLead(contextoLead);
+    const nomeEmpresa = empresaConfiavel ? limparNomeEmpresa(empresaConfiavel) : 'sua empresa';
 
     const bairroLead = contextoLead.bairro || "sua região";
     // 🎯 LIMPEZA ESTÉTICA: Corta nomes compostos (ex: "Enel/CPFL" vira apenas "Enel")
@@ -1123,13 +1143,13 @@ Você se comunica como um ser humano no WhatsApp — direto, sem formalidade exc
         : `- EMPATIA COM GATEKEEPER (REGRA DE OURO): Quando alguém disser que não é o decisor, NUNCA pule direto para "vai passar o contato?". Primeiro: agradeça a atenção da pessoa com genuinidade ("que legal que me atendeu", "obrigado pelo tempo"). Só então, de forma leve e natural, pergunte se consegue uma ponte com o responsável. A venda começa com a pessoa que te atendeu — ela pode abrir ou fechar a porta.`;
 
     const secaoDiretrizes = `[DIRETRIZES DE FECHAMENTO]
-- Mensagens curtas: máximo 2 balões por resposta, 15-35 palavras cada. Balões separados por [QUEBRA].
+- Fale curto e natural: 2 a 4 balões curtos por resposta, ~10-25 palavras cada, uma ideia por balão. Você pode marcar cortes com [QUEBRA]; se não marcar, o sistema quebra sozinho em frases (nunca corta frase no meio).
 - Simule digitação humana: uma ideia por vez, sem listas numeradas ou marcadores.
 - Faça APENAS UMA pergunta por mensagem. Nunca duas.
 - Foco absoluto em converter para agendamento: ${calendlyResolvido}
 - Nunca revele que é uma IA antes do REVEAL programado.
 - Texto puro: sem asteriscos, sem markdown.
-- Termine SEMPRE com uma pergunta ("?"), exceto em REPASSE e REVEAL.
+- Termine com uma pergunta ("?") que faça a conversa avançar, EXCETO em REPASSE, REVEAL, no PRIMEIRO CONTATO e quando enviar o link de agendamento (o link é um convite, não uma pergunta — nunca coloque "?" depois dele).
 - Tags obrigatórias no final de toda resposta: [ESTAGIO:N] e [CLIMA:X].
 ${diretrizGatekeeper}`;
 
@@ -1146,7 +1166,9 @@ ${diretrizGatekeeper}`;
 - CONTEXTO B2C: O lead é uma pessoa física que já comprou o produto. NÃO há empresa envolvida. Ele é o aluno e o decisor. Modo: acompanhamento pós-venda, não prospecção B2B.`
             : `[CONTEXTO DO LEAD]
 - Localização: ${bairroLead}
-- Empresa: ${nomeEmpresa}
+${empresaConfiavel
+    ? `- Empresa: ${nomeEmpresa}`
+    : `- Empresa/segmento do lead: DESCONHECIDO. Você ainda não sabe onde ele trabalha nem o que ele faz. NÃO invente, NÃO presuma e NUNCA use o nome do WhatsApp dele como se fosse o nome de uma empresa. Descubra com naturalidade o que ele faz antes de qualquer coisa.`}
 - ${perfilComportamental}`;
 
     const secaoNicho = isSolar
@@ -1510,6 +1532,10 @@ async function startInstance(instanceId, instanceName, preloadedUserId = null) {
             cancelarDebounceChip(instanceId); // Chip voltou — cancela alerta de desconexão se ainda no debounce
             tentativasReconexao.delete(instanceId); // Fase 4: conexão bem-sucedida — zera o contador
             chipsAbandanados.delete(instanceId); // conexão bem-sucedida remove bloqueio de auto-reconexão
+            abandonadoEm.delete(instanceId);
+            ultimoAlertaAbandono.delete(instanceId);
+            // 🗄️ Chip pronto: reprocessa inbound que ficou pendente na gaveta durante um restart/queda.
+            recuperarGavetasPendentes(instanceId, sock).catch(e => console.error(`❌ [GAVETA-RECUPERA] ${instanceName}:`, e.message));
             // staleContador NÃO é limpo aqui: soft reconnect preserva a contagem de falhas stale para que
             // o chip acumule até o limite (4) e acione o hard restart. Só reseta em envio confirmado ou hard restart.
             // falhasLeadPorSessao NÃO é limpo aqui: soft reconnect preserva o histórico de falhas por lead
@@ -1572,6 +1598,7 @@ async function startInstance(instanceId, instanceName, preloadedUserId = null) {
             sessions.set(instanceId, { sock, ready: false, userId: instanceUserId, name: instanceName });
             instanciasLigando.delete(instanceId);
             sucessosPorSessao.delete(instanceId); // sessão encerrada — contador zerado para a próxima sessão
+            ultimaQuedaPorChip.set(instanceId, Date.now()); // 🩹 marca início da janela de catch-up
             const reason = (lastDisconnect?.error)?.output?.statusCode;
 
             // Notifica frontend imediatamente (sem esperar o DB)
@@ -1608,9 +1635,11 @@ async function startInstance(instanceId, instanceName, preloadedUserId = null) {
             const tentarReconexao = (delayMs, motivo) => {
                 const tentativas = (tentativasReconexao.get(instanceId) || 0) + 1;
                 if (tentativas > 10) {
-                    console.error(`🚫 [RECONEXÃO] ${instanceName} atingiu 10 tentativas sem sucesso. Bloqueando auto-reconexão — clique em Resetar Sessão no dashboard.`);
-                    enviarAlerta(`🚫 *Chip parado*: ${instanceName} falhou 10x seguidas. Acesse o dashboard e clique em *Resetar Sessão* para escanear novo QR.`).catch(() => {});
+                    console.error(`🚫 [RECONEXÃO] ${instanceName} atingiu 10 tentativas sem sucesso. Pausando auto-reconexão por ${Math.round(COOLDOWN_ABANDONO_MS/60000)}min (auto-recuperação no VIGIA).`);
+                    enviarAlerta(`🚫 *Chip caído*: ${instanceName} falhou 10x seguidas. Vou tentar recuperar sozinho em ~${Math.round(COOLDOWN_ABANDONO_MS/60000)}min; se não voltar, clique em *Resetar Sessão* no dashboard.`).catch(() => {});
                     chipsAbandanados.add(instanceId);
+                    abandonadoEm.set(instanceId, Date.now());
+                    ultimoAlertaAbandono.set(instanceId, Date.now());
                     return;
                 }
                 tentativasReconexao.set(instanceId, tentativas);
@@ -1654,7 +1683,7 @@ async function startInstance(instanceId, instanceName, preloadedUserId = null) {
             // Timeout de conexão → reconecta com backoff por tentativa + jitter (desincroniza chips)
             if (reason === DisconnectReason.timedOut || reason === DisconnectReason.connectionLost) {
                 const tentativasAtuais = (tentativasReconexao.get(instanceId) || 0) + 1;
-                const backoffMs = Math.min(5000 * (tentativasAtuais ** 2) + Math.floor(Math.random() * 5000), 60000);
+                const backoffMs = calcularBackoffReconexao(tentativasAtuais);
                 console.warn(`🔬 [CONN-DIAG] ${instanceName} | reason=${reason} | tentativas=${tentativasAtuais} | ligando=${instanciasLigando.size} | backoff=${backoffMs}ms`);
                 // Na 5ª tentativa de timeout consecutivo as credenciais em Redis são provavelmente stale.
                 // Wipe forçado → próximo startInstance emite QR novo e estabelece sessão limpa.
@@ -1667,9 +1696,11 @@ async function startInstance(instanceId, instanceName, preloadedUserId = null) {
                 return;
             }
 
-            // Demais casos → reconecta com backoff leve
-            const delayMs = reason === undefined ? 15000 : 5000;
-            console.log(`🔄 [SDR] Conexão instável em ${instanceName} (reason: ${reason ?? 'desconhecido'}). Reiniciando em ${delayMs/1000}s...`);
+            // Demais casos (515/503/428/etc) → mesmo backoff quadrático + jitter do branch de timeout,
+            // em vez do delay fixo de 5s que martelava e brickava o chip em ~1min de oscilação.
+            const tentativasGen = (tentativasReconexao.get(instanceId) || 0) + 1;
+            const delayMs = calcularBackoffReconexao(tentativasGen);
+            console.log(`🔄 [SDR] Conexão instável em ${instanceName} (reason: ${reason ?? 'desconhecido'}). Reiniciando em ${Math.round(delayMs/1000)}s (tentativa ${tentativasGen})...`);
             await db.updateInstanceStatus(instanceId, 'DISCONNECTED');
             tentarReconexao(delayMs, `reason ${reason ?? 'desconhecido'}`);
         }
@@ -1717,8 +1748,25 @@ async function startInstance(instanceId, instanceName, preloadedUserId = null) {
     });
 
     sock.ev.on('messages.upsert', async ({ messages, type }) => {
-        if (type !== 'notify') return;
-        
+        if (type !== 'notify') {
+            // 🩹 CATCH-UP: evento de sincronização (não "ao vivo") — normalmente descartado, mas se
+            // este chip caiu recentemente, pode conter mensagens que chegaram DURANTE a queda e
+            // seriam perdidas para sempre. Resgata só o que é mais novo que a última queda, dentro
+            // de uma janela curta (evita reprocessar histórico inteiro após queda longa/redeploy).
+            const ultimaQueda = ultimaQuedaPorChip.get(instanceId);
+            if (!ultimaQueda || (Date.now() - ultimaQueda) > JANELA_MAX_CATCHUP_MS) return;
+
+            const tsMs = (m) => {
+                const t = m.messageTimestamp;
+                if (t == null) return 0;
+                const n = (typeof t === 'object' && typeof t.toNumber === 'function') ? t.toNumber() : Number(t);
+                return n * 1000;
+            };
+            messages = messages.filter(m => tsMs(m) >= ultimaQueda);
+            if (messages.length === 0) return;
+            console.log(`🩹 [CATCH-UP] ${instanceName}: ${messages.length} mensagem(ns) resgatada(s) de sincronização após queda de conexão.`);
+        }
+
         for (const msg of messages) {
             if (!msg.message) continue;
 
@@ -1791,6 +1839,18 @@ async function startInstance(instanceId, instanceName, preloadedUserId = null) {
 
             clearTimeout(gaveta.timer); // O cliente digitou rápido de novo! Zera o cronômetro.
 
+            // 🗄️ Espelha no Redis (metadados mínimos) — se o processo reiniciar nos próximos 30s,
+            // recuperarGavetasPendentes reprocessa quando o chip voltar. Fire-and-forget.
+            const msgMeta = {
+                remoteJid: msg.key?.remoteJid,
+                fromMe: msg.key?.fromMe || false,
+                id: msg.key?.id,
+                remoteJidAlt: msg.key?.remoteJidAlt,
+                participant: msg.key?.participant,
+                pushName: msg.pushName,
+            };
+            persistirGavetaRedis(instanceId, remoteJid, gaveta.textos.slice(), msgMeta);
+
             console.log(`⏳ [OUVIDO PACIENTE] Lead ${remoteJid.split('@')[0]} enviou mensagem. Aguardando 30s para ver se ele manda mais...`);
 
             gaveta.timer = setTimeout(async () => {
@@ -1799,6 +1859,7 @@ async function startInstance(instanceId, instanceName, preloadedUserId = null) {
                     const msgFinal = gaveta.ultimaMsg;
 
                     gavetaDeMensagens.delete(gavetaKey);
+                    limparGavetaRedis(instanceId, remoteJid); // já vai processar — remove o espelho
 
                     console.log(`🧠 [OUVIDO PACIENTE] Lead concluiu raciocínio. Processando bloco: "${textoConsolidado}"`);
 
@@ -1806,6 +1867,7 @@ async function startInstance(instanceId, instanceName, preloadedUserId = null) {
                 } catch (errGaveta) {
                     console.error(`❌ [GAVETA] Erro ao processar bloco consolidado:`, errGaveta.message);
                     gavetaDeMensagens.delete(gavetaKey); // Limpa mesmo com erro
+                    limparGavetaRedis(instanceId, remoteJid);
                 }
             }, 30000); // 30s para consolidar mensagens picotadas antes de processar
         }
@@ -1941,10 +2003,19 @@ async function enviarAudioTTS(sock, remoteJid, texto, lead, instanceId, voz = nu
             .trim();
 
         await sock.sendPresenceUpdate('recording', remoteJid);
-        
+
         // 2. ENVIAR O TEXTO JÁ HUMANIZADO
         // Note que agora passamos 'textoHumanizado' e não mais o 'texto' original
-        const buffer = await gerarAudioTTS(textoHumanizado, voz || undefined);
+        // 🎙️ DELAY PROPORCIONAL: ~2.4 palavras/seg é a cadência média de fala natural em
+        // pt-BR. Roda em paralelo com a geração real do áudio — o indicador "gravando"
+        // fica visível pelo MAIOR entre o tempo de processamento da API e o tempo que um
+        // humano levaria de fato pra falar aquele texto (evita "gravou" um áudio de 10s em 2s).
+        const palavras = textoHumanizado.split(/\s+/).filter(Boolean).length;
+        const duracaoFalaEstimadaMs = Math.min(Math.max((palavras / 2.4) * 1000, 1200), 14000);
+        const [buffer] = await Promise.all([
+            gerarAudioTTS(textoHumanizado, voz || undefined),
+            delay(duracaoFalaEstimadaMs)
+        ]);
 
         await baileysTransport.enviar(sock, remoteJid, {
             audio: buffer,
@@ -2136,7 +2207,10 @@ if (matchClima) updates.sentiment = matchClima[1].toLowerCase();
     }
 
     // ── 3. ENVIO FATIADO ──
-    const mensagensSplit = textoLimpo.split('[QUEBRA]').map(t => t.trim()).filter(t => t.length > 0);
+    // Split humano no CÓDIGO (não depende do LLM emitir [QUEBRA]): respeita o [QUEBRA] se veio,
+    // depois quebra frases longas em balões curtos sem NUNCA cortar frase no meio, protege URLs,
+    // tira "?" colado após link e joga o link de agendamento pro último balão.
+    const mensagensSplit = dividirEmBaloes(textoLimpo);
     console.log(`📤 [FILTRO] Enviando ${mensagensSplit.length} balão(ões) para ${lead.name}...`);
 
     // 🎙️ LÓGICA TTS: Decide se o último balão vai como áudio
@@ -2197,11 +2271,12 @@ if (matchClima) updates.sentiment = matchClima[1].toLowerCase();
 }
 
 
-async function processarMensagem(sock, msg, instanceId, textoConsolidado = null) {    
+async function processarMensagem(sock, msg, instanceId, textoConsolidado = null) {
     const remoteJid = msg.key.remoteJid;
-    if (remoteJid.includes('@g.us')) return; 
+    if (remoteJid.includes('@g.us')) return;
 
-    const fromMe = msg.key.fromMe; 
+    const fromMe = msg.key.fromMe;
+    if (!fromMe) ultimoInboundAt.set(instanceId, Date.now()); // painel de saúde: última msg recebida
     
     // --- 🛡️ NORMALIZAÇÃO UNIVERSAL (JID vs LID) ---
     const idPuro = remoteJid.split(':')[0].split('@')[0];
@@ -4070,6 +4145,10 @@ if (funilEncerrado) {
             content: m.role === 'human_operator' ? `[ATENDENTE_HUMANO]: ${m.content}` : m.content
         }));
 
+        // 👋 PRIMEIRO CONTATO: a IA nunca respondeu esse lead antes (ele procurou primeiro).
+        // Vira flag DURO pro closer acolher em vez de disparar qualificação abrupta no 1º turno.
+        const primeiroContato = !historico.some(m => m.role === 'assistant');
+
 // 🚀 Executa os 3 agentes EM PARALELO com SKIP INTELIGENTE
         console.log(`🧠 [WORKER-IA] Despachando Router + Intel + Profiler em paralelo para ${lead.name}...`);
         const ultimaMsg = historico[historico.length - 1].content;
@@ -4275,7 +4354,7 @@ if (!promptResolvido) {
 
 } else if (intencao === 'DUVIDA' || intencao === 'CONTINUAR') {
     console.log(`🔍 [WORKER-IA] Fluxo de CONTINUIDADE/DÚVIDA. Acionando Closer para ${lead.name}...`);
-    resposta = await closerAgent.gerarRespostaCloser(historico, lead, promptResolvido, 'DUVIDA', { calendlyLink: instanceData?.calendly_link, instanceType: instanceData?.product_type || 'solar' });
+    resposta = await closerAgent.gerarRespostaCloser(historico, lead, promptResolvido, 'DUVIDA', { calendlyLink: instanceData?.calendly_link, instanceType: instanceData?.product_type || 'solar', primeiroContato });
 
 } else if (intencao === 'OBJECAO') {
     console.log(`🛡️ [WORKER-IA] OBJEÇÃO detectada! Acionando The Tank para ${lead.name}...`);
@@ -4376,7 +4455,7 @@ if (!promptResolvido) {
 
 } else {
     console.log(`🧹 [WORKER-IA] Mensagem LIXO. Closer seguirá estágio atual da Constituição...`);
-    resposta = await closerAgent.gerarRespostaCloser(historico, lead, promptResolvido, 'LIXO', { calendlyLink: instanceData?.calendly_link, instanceType: instanceData?.product_type || 'solar' });
+    resposta = await closerAgent.gerarRespostaCloser(historico, lead, promptResolvido, 'LIXO', { calendlyLink: instanceData?.calendly_link, instanceType: instanceData?.product_type || 'solar', primeiroContato });
 }
 
 // 🛡️ Blindagem final: se todos os agentes falharam, avisa o log
@@ -4716,7 +4795,31 @@ module.exports = {
                             );
                             await delay(2000); // escalonamento para evitar burst de reconexões simultâneas
                         } else if (!estaConectado && !estaConectando && chipsAbandanados.has(inst.id)) {
-                            console.warn(`🔕 [VIGIA] ${inst.name} bloqueado após 10 falhas. Use Resetar Sessão no dashboard para reativar.`);
+                            // 🔁 AUTO-RECUPERAÇÃO: chip abandonado não fica mais morto pra sempre.
+                            const desde = abandonadoEm.get(inst.id) || Date.now();
+                            const paradoMs = Date.now() - desde;
+                            if (paradoMs >= COOLDOWN_ABANDONO_MS) {
+                                console.warn(`🔁 [VIGIA-RECUPERA] ${inst.name} parado há ${Math.round(paradoMs/60000)}min — limpando sessão e tentando reconectar do zero.`);
+                                enviarAlerta(`🔁 *Auto-recuperação*: ${inst.name} está caído há ${Math.round(paradoMs/60000)}min. Tentando reconectar do zero agora. Se pedir QR, faça *Resetar Sessão* no dashboard.`).catch(() => {});
+                                await clearRedisSession(redisConnection, inst.id).catch(() => {});
+                                chipsAbandanados.delete(inst.id);
+                                abandonadoEm.delete(inst.id);
+                                tentativasReconexao.delete(inst.id);
+                                staleContador.delete(inst.id);
+                                ultimoAlertaAbandono.set(inst.id, Date.now());
+                                startInstance(inst.id, inst.name, inst.user_id).catch(e =>
+                                    console.error(`❌ [VIGIA-RECUPERA] Falha ao reconectar ${inst.name}:`, e.message)
+                                );
+                                await delay(2000);
+                            } else {
+                                // Ainda no cooldown: re-alerta no máx a cada REALERTA_ABANDONO_MS pra você saber que segue down.
+                                const ultimoAlerta = ultimoAlertaAbandono.get(inst.id) || 0;
+                                if (Date.now() - ultimoAlerta >= REALERTA_ABANDONO_MS) {
+                                    enviarAlerta(`🚫 *Chip ainda caído*: ${inst.name} há ${Math.round(paradoMs/60000)}min. Auto-recuperação em ~${Math.round((COOLDOWN_ABANDONO_MS-paradoMs)/60000)}min.`).catch(() => {});
+                                    ultimoAlertaAbandono.set(inst.id, Date.now());
+                                }
+                                console.warn(`🔕 [VIGIA] ${inst.name} caído há ${Math.round(paradoMs/60000)}min — auto-recuperação em ~${Math.round((COOLDOWN_ABANDONO_MS-paradoMs)/60000)}min (ou Resetar Sessão manual).`);
+                            }
                         }
                     }
                 } catch (e) {
@@ -4956,6 +5059,8 @@ module.exports = {
         primeiroEnvioSucesso.delete(instanceId);
         tentativasReconexao.delete(instanceId); // Reset Session é intervenção humana — zera contador de falhas
         chipsAbandanados.delete(instanceId); // libera chip para auto-reconexão após QR scan
+        abandonadoEm.delete(instanceId);
+        ultimoAlertaAbandono.delete(instanceId);
         instanciasDeletadas.delete(instanceId); // Remove do set de deletados caso o chip seja re-ativado
         instanciasEmResetManual.delete(instanceId); // libera o lock — próximo reset pode prosseguir
         startInstance(instanceId, name).catch(err =>
@@ -4967,6 +5072,27 @@ module.exports = {
     // toggles de inbound_only/use_email_outbound/use_sms_outbound sejam lidos no próximo ciclo.
     invalidateInstanceCache: (instanceId) => {
         cacheRegrasInstancia.delete(instanceId);
+    },
+
+    // 🩺 SNAPSHOT DE SAÚDE: estado runtime de cada chip pro painel ao vivo (/api/health).
+    // Lê só as estruturas em RAM — o server.js cruza com nome/status do DB.
+    snapshotSaude: () => {
+        const agora = Date.now();
+        const out = {};
+        for (const [instanceId, sess] of sessions.entries()) {
+            const abInicio = abandonadoEm.get(instanceId) || null;
+            const ultInbound = ultimoInboundAt.get(instanceId) || null;
+            out[instanceId] = {
+                ready: sess?.ready === true,
+                wsOpen: sess?.sock?.ws?.isOpen === true,
+                recon: tentativasReconexao.get(instanceId) || 0,
+                abandonado: chipsAbandanados.has(instanceId),
+                paradoHaMin: abInicio ? Math.round((agora - abInicio) / 60000) : null,
+                ultimoInboundAt: ultInbound,
+                ultimoInboundHaMin: ultInbound ? Math.round((agora - ultInbound) / 60000) : null,
+            };
+        }
+        return out;
     },
 
     // 📇 EMAIL FINDER via WhatsApp Business Profile: usa o chip CONECTADO pra consultar o perfil

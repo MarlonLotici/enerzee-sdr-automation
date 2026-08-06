@@ -1,6 +1,7 @@
 // agents/closerAgent.js
 const { OpenAI } = require('openai');
 const { getNicheData } = require('../nicheCache');
+const { alertaDegradacaoIA } = require('../notifier');
 
 const together = new OpenAI({
     apiKey: process.env.TOGETHER_API_KEY,
@@ -14,15 +15,21 @@ const MODELO_PESADO = "meta-llama/Llama-3.3-70B-Instruct-Turbo";
  * @param {Object} lead               - Dados do lead
  * @param {string} promptPersonalidade - Constituição já resolvida (variáveis substituídas)
  * @param {string} intencao           - 'COMPRA' | 'DUVIDA' | 'LIXO' | 'REPASSE'
- * @param {Object} opcoes             - { calendlyLink, instanceType }
+ * @param {Object} opcoes             - { calendlyLink, instanceType, modo }
  *   instanceType: 'solar' | 'antix' | 'lince' | qualquer string
  *   Default: 'solar' (backward-compatible)
+ *   modo: 'texto' (WhatsApp, default) | 'voz' (ligação telefônica ao vivo).
+ *   Em 'voz' toda a lógica de funil/estágios permanece idêntica — muda apenas
+ *   a camada de formatação: fala corrida sem [QUEBRA], sem links lidos em voz
+ *   alta (o link vai por WhatsApp depois da ligação).
  */
 async function gerarRespostaCloser(historico, lead, promptPersonalidade, intencao = 'DUVIDA', opcoes = {}) {
     const calendlyLink   = opcoes.calendlyLink   || '';
     const instanceType   = opcoes.instanceType   || 'solar';
     const isSolar        = instanceType === 'solar';
     const isAntix        = instanceType === 'antix';
+    const isVoz          = opcoes.modo === 'voz';
+    const primeiroContato = opcoes.primeiroContato === true; // 1ª resposta a um lead que procurou primeiro
 
     // Resolve inteligência de nicho dinamicamente — só para produto solar
     // getNicheData faz Redis → Supabase → LLM (aprende on-the-fly se necessário)
@@ -185,11 +192,55 @@ AÇÃO OBRIGATÓRIA:
     }
 
     // ─────────────────────────────────────────────────────────────────────────
+    // PRIMEIRO CONTATO — acolhida ANTES do roteiro (override DURO, vence a qualificação)
+    // Só na 1ª resposta a um lead que procurou primeiro, e só em fluxo de conversa (DUVIDA/LIXO).
+    // ─────────────────────────────────────────────────────────────────────────
+    if (primeiroContato && (intencao === 'DUVIDA' || intencao === 'LIXO')) {
+        overrideTatico = `
+=======================================================
+👋 MODO OPERACIONAL: PRIMEIRO CONTATO (O LEAD FALOU PRIMEIRO)
+=======================================================
+Esta é a PRIMEIRA vez que você responde essa pessoa — ela te procurou, você NUNCA abriu essa conversa.
+
+AÇÃO OBRIGATÓRIA (nesta primeira resposta):
+- Cumprimente de forma leve e humana e apresente-se em 1 frase curta (quem você é e o que a empresa faz).
+- Responda com clareza qualquer coisa que ela tenha perguntado.
+- Demonstre curiosidade genuína pelo motivo do contato ("como posso te ajudar?", "o que te trouxe até aqui?").
+
+PROIBIDO NESTA PRIMEIRA RESPOSTA:
+- Disparar qualificação, falar de dor/economia/valores, pedir dados, ou seguir o Passo 1 do funil.
+- Tratar o nome do WhatsApp da pessoa como se fosse o nome de uma empresa.
+
+⚠️ EXCEÇÃO ÀS REGRAS GERAIS: aqui você NÃO precisa terminar com pergunta de qualificação. Acolhimento vem ANTES do roteiro. A qualificação começa só na PRÓXIMA mensagem, depois que a pessoa engajar.`;
+    }
+
+    // ─────────────────────────────────────────────────────────────────────────
+    // ADAPTAÇÃO PARA VOZ — sobrescreve só a camada de entrega, nunca o funil
+    // ─────────────────────────────────────────────────────────────────────────
+    const blocoVoz = isVoz ? `
+=======================================================
+📞 CANAL ATUAL: LIGAÇÃO TELEFÔNICA AO VIVO (VOZ)
+=======================================================
+Você está FALANDO com o lead ao telefone agora, não digitando no WhatsApp.
+
+REGRAS DE VOZ (SOBRESCREVEM instruções de formato de chat acima):
+- NUNCA leia links, URLs ou endereços em voz alta. Onde as instruções mandam
+  "enviar o link", diga em vez disso: "te mando o link agora no seu WhatsApp,
+  é só escolher o horário" — o sistema envia o link automaticamente após a ligação.
+- Fala corrida e natural: SEM [QUEBRA], SEM balões, SEM emojis, SEM abreviações
+  de chat ("vc", "tb", "pra"). Escreva como se fala: "você", "também", "para".
+- Frases curtas. Uma ideia por frase. Números por extenso quando soar natural.
+- Continue usando as tags [ESTAGIO:N] e [CLIMA:X] no final — elas são removidas
+  antes da fala ser sintetizada.
+` : '';
+
+    // ─────────────────────────────────────────────────────────────────────────
     // PROMPT FINAL = Constituição + Override + DNA do Vendedor
     // ─────────────────────────────────────────────────────────────────────────
     const promptFinal = `${promptPersonalidade}
 ${blocoStandby}
 ${overrideTatico}
+${blocoVoz}
 ========================================================
 🎭 DNA DO VENDEDOR — VOCÊ NÃO É UM ASSISTENTE, VOCÊ É UM CLOSER
 ========================================================
@@ -214,27 +265,48 @@ FRASES RECOMENDADAS (convertem):
 - "Me diz uma coisa:" / "Antes de eu continuar, queria entender:"
 - "Olha, vou ser direto com vc:" / "Pera, deixa eu reformular:" / "Faz assim:"
 
-[REGRAS ABSOLUTAS DE ALTA PERFORMANCE]
-1. Máximo 15 a 35 palavras por balão. Máximo 2 balões separados por [QUEBRA].
+${isVoz ? `[REGRAS ABSOLUTAS DE ALTA PERFORMANCE — VOZ]
+1. Máximo 40 palavras por fala. Uma fala corrida, sem [QUEBRA].
 2. Termine SEMPRE com uma pergunta ("?"). Nunca afirmação final.
    ⚠️ EXCEÇÃO: REPASSE DE CONTATO e REVEAL ANTIX — encerre com afirmação cordial.
+3. Nunca faça duas perguntas na mesma fala.
+4. Adicione as tags [ESTAGIO:N] e [CLIMA:X] no final.
+5. Texto puro falado: sem asteriscos, sem markdown, sem emojis, sem links.
+` : `[REGRAS ABSOLUTAS DE ALTA PERFORMANCE]
+1. Fale curto e natural: 2 a 4 balões de ~10-25 palavras, uma ideia por balão. Pode marcar cortes com [QUEBRA]; o sistema também quebra em frases sozinho.
+2. Termine com uma pergunta ("?") que faça a conversa avançar. Nunca uma afirmação vazia.
+   ⚠️ EXCEÇÃO: REPASSE DE CONTATO, REVEAL ANTIX${primeiroContato ? ', PRIMEIRO CONTATO' : ''} e quando enviar link de agendamento — encerre com afirmação/convite cordial, sem "?" depois do link.
 3. Nunca faça duas perguntas na mesma mensagem.
 4. Adicione as tags [ESTAGIO:N] e [CLIMA:X] no final.
 5. Texto puro: sem asteriscos, sem markdown.
-`;
+`}`;
+
+    // Chamada ao Together com 1 retry curto em caso de 429 (rate limit) antes de degradar —
+    // esta é a resposta que vai pro cliente, então vale evitar o fallback genérico num pico.
+    const chamarCloser = () => together.chat.completions.create({
+        messages: [
+            { role: 'system', content: promptFinal },
+            ...historico
+        ],
+        model: MODELO_PESADO,
+        temperature: 0.35,
+        max_tokens: 200,
+        presence_penalty: 0.1,
+        frequency_penalty: 0.15
+    });
 
     try {
-        const res = await together.chat.completions.create({
-            messages: [
-                { role: 'system', content: promptFinal },
-                ...historico
-            ],
-            model: MODELO_PESADO,
-            temperature: 0.35,
-            max_tokens: 200,
-            presence_penalty: 0.1,
-            frequency_penalty: 0.15
-        });
+        let res;
+        try {
+            res = await chamarCloser();
+        } catch (e1) {
+            if (e1?.status === 429) {
+                await new Promise(r => setTimeout(r, 1500));
+                res = await chamarCloser();
+            } else {
+                throw e1;
+            }
+        }
 
         const resposta = res.choices[0]?.message?.content;
 
@@ -246,6 +318,7 @@ FRASES RECOMENDADAS (convertem):
         return resposta;
     } catch (error) {
         console.error(`❌ Erro no Closer Agent (intenção: ${intencao} | tipo: ${instanceType}):`, error.message);
+        alertaDegradacaoIA('closerAgent', error).catch(() => {});
         return `Peço desculpas, tive uma instabilidade aqui. Consegue repetir o que disse? [ESTAGIO:${lead?.current_stage ?? 0}] [CLIMA:NEUTRO]`;
     }
 }

@@ -1,6 +1,7 @@
 // agents/profilerAgent.js
 const Groq = require('groq-sdk');
 const groq = new Groq({ apiKey: process.env.GROQ_API_KEY });
+const { alertaDegradacaoIA } = require('../notifier');
 
 async function analisarPerfil(ultimaMsg) {
     const prompt = `
@@ -26,6 +27,7 @@ async function analisarPerfil(ultimaMsg) {
         return res.choices[0].message.content.trim();
     } catch (e) {
         console.error("❌ Erro no Profiler Agent:", e.message);
+        alertaDegradacaoIA('profilerAgent', e).catch(() => {});
         return "Mantenha o tom profissional e direto.";
     }
 }

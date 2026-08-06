@@ -20,11 +20,6 @@ const db = require('./database');
 const emailService = require('./emailService'); // usado no preview de email (gerarCopyOutbound)
 const { alertaCalendly } = require('./notifier');
 
-const { Worker } = require('bullmq');
-const { redisConnection } = require('./queue');
-// Importe aqui a sua função que processa a IA (ajuste o nome para o que você usa hoje)
-const { processarMensagemIA } = require('./4_sdr');
-
 // 📞 MOTOR DE LIGAÇÕES DE VOZ (Twilio Media Streams + Deepgram + ElevenLabs)
 // CARREGAMENTO DEFENSIVO: a pasta voice/ e o SQL de voz (add_voice_calling.sql) ainda não
 // foram deployados/rodados de propósito (feature em standby, sem contas Twilio/Deepgram/
@@ -40,22 +35,10 @@ try {
     console.warn('⚠️ [VOZ] Módulo de voz não encontrado/carregado — canal de voz desativado nesta build:', err.message);
 }
 
-// === INICIA O WORKER DE MENSAGENS ===
-const workerMensagens = new Worker('FilaMensagensIA', async (job) => {
-    console.log(`⏳ [BULLMQ] Processando job ${job.id}: Mensagem de ${job.data.whatsapp_id}`);
-    
-    try {
-        // Chama o motor pesadão (Llama + TTS) de forma controlada
-        await processarMensagemIA(job.data.lead, job.data.mensagem);
-        console.log(`✅ [BULLMQ] Job ${job.id} finalizado com sucesso!`);
-    } catch (error) {
-        console.error(`❌ [BULLMQ] Erro no job ${job.id}:`, error.message);
-        throw error; // Lança o erro para o BullMQ tentar novamente
-    }
-}, { 
-    connection: redisConnection,
-    concurrency: 5 // Processa no máximo 5 leads ao mesmo tempo para não explodir a RAM
-});
+// NOTA: o worker BullMQ 'FilaMensagensIA' foi REMOVIDO daqui — era código morto (nunca recebia
+// job; nada dava .add() nele) e chamava processarMensagemIA, que nem é exportado por 4_sdr.js,
+// então teria crashado se recebesse. O worker de IA que realmente processa inbound é o `workerIA`
+// (fila 'FilaIA') dentro de 4_sdr.js.
 
 // 🚀 O NOVO MOTOR V12 (BAILEYS MULTI-TENANCY)
 let sdr = null;
@@ -623,18 +606,10 @@ app.post('/api/pause-chip/:instanceId', autenticarMiddleware, async (req, res) =
 
 const CAMPOS_INSTANCE_PATCHAVEIS = ['inbound_only', 'use_email_outbound', 'use_sms_outbound', 'dry_run'];
 
-// Campos de texto de campanha de email — self-service, sem precisar editar o Supabase direto.
-// MAX_CONTEXTO_TENANT (emailService.js) já trunca em 2000 chars antes de injetar no LLM;
-// o limite aqui é só uma trava de bom senso contra payload absurdo.
-const REGEX_EMAIL_SIMPLES = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
-const CAMPOS_INSTANCE_PATCHAVEIS_TEXTO = {
-    email_prompt: (v) => v.length <= 4000,
-    email_from_address: (v) => v.length <= 254 && REGEX_EMAIL_SIMPLES.test(v),
-    email_website_url: (v) => v.length <= 500,
-    // Só dígitos, 10-13 (DDD+número, com ou sem 55/9). O link wa.me depende disso — número
-    // errado/vazio quebra o CTA de todo email. Validação de formato só; o usuário confere o real.
-    owner_phone: (v) => /^\d{10,13}$/.test(v.replace(/\D/g, '')) && v.replace(/\D/g, ''),
-};
+// Validadores dos campos de texto de campanha de email — movidos para lib/validadores.js pra
+// serem testáveis sem subir o Express. MAX_CONTEXTO_TENANT (emailService.js) trunca em 2000
+// chars antes do LLM; a trava aqui é só bom senso contra payload absurdo.
+const { CAMPOS_INSTANCE_PATCHAVEIS_TEXTO, emailBriefValido } = require('./lib/validadores');
 
 app.patch('/api/instance/:instanceId', autenticarMiddleware, async (req, res) => {
     const { instanceId } = req.params;
@@ -651,9 +626,7 @@ app.patch('/api/instance/:instanceId', autenticarMiddleware, async (req, res) =>
         if (valido(valor)) updates[campo] = valor;
     }
     // email_brief: respostas cruas do formulário guiado (JSONB) — objeto plano, com trava de tamanho.
-    if (req.body.email_brief && typeof req.body.email_brief === 'object' && !Array.isArray(req.body.email_brief)) {
-        if (JSON.stringify(req.body.email_brief).length <= 6000) updates.email_brief = req.body.email_brief;
-    }
+    if (emailBriefValido(req.body.email_brief)) updates.email_brief = req.body.email_brief;
     if (Object.keys(updates).length === 0) {
         return res.status(400).json({ error: 'Nenhum campo válido para atualizar.' });
     }
@@ -662,6 +635,96 @@ app.patch('/api/instance/:instanceId', autenticarMiddleware, async (req, res) =>
         if (error) throw new Error(error.message);
         if (sdr?.invalidateInstanceCache) sdr.invalidateInstanceCache(instanceId);
         res.json({ ok: true, instanceId, updates });
+    } catch (err) {
+        res.status(500).json({ error: err.message });
+    }
+});
+
+// 🧠 CÉREBRO DA CONVERSA — leitura/edição dos prompts de WhatsApp (tenant_prompts) pela conta.
+// Antes só editáveis direto no Supabase na mão; agora self-service pelo dashboard.
+// Chave: user_id (1 linha por conta). Os 3 especializados vazios = motor cai no system_prompt.
+const CAMPOS_TENANT_PROMPTS = ['system_prompt', 'qualifier_prompt', 'closer_prompt', 'objection_prompt'];
+
+app.get('/api/tenant-prompts', autenticarMiddleware, async (req, res) => {
+    try {
+        const { data, error } = await supabase
+            .from('tenant_prompts')
+            .select('system_prompt, qualifier_prompt, closer_prompt, objection_prompt')
+            .eq('user_id', req.user.id)
+            .maybeSingle();
+        if (error) throw new Error(error.message);
+        // Sempre devolve as 4 chaves (string vazia quando null) pra simplificar o front.
+        const prompts = {};
+        for (const c of CAMPOS_TENANT_PROMPTS) prompts[c] = data?.[c] || '';
+        res.json({ ok: true, prompts });
+    } catch (err) {
+        res.status(500).json({ error: err.message });
+    }
+});
+
+// 🩺 PAINEL DE SAÚDE AO VIVO: estado de cada chip do tenant (conectado/caído, última msg recebida,
+// há quanto tempo parado). Cruza os dados do DB (nome/status) com o snapshot runtime do motor SDR.
+app.get('/api/health', autenticarMiddleware, async (req, res) => {
+    try {
+        const { data: insts, error } = await supabase
+            .from('instances')
+            .select('id, name, whatsapp_status, inbound_only')
+            .eq('user_id', req.user.id);
+        if (error) throw new Error(error.message);
+        const runtime = (sdr && sdr.snapshotSaude) ? sdr.snapshotSaude() : {};
+        const chips = (insts || []).map((inst) => {
+            const r = runtime[inst.id] || {};
+            return {
+                id: inst.id,
+                name: inst.name,
+                whatsapp_status: inst.whatsapp_status || 'UNKNOWN',
+                inbound_only: inst.inbound_only === true,
+                ready: r.ready === true,
+                wsOpen: r.wsOpen === true,
+                recon: r.recon || 0,
+                abandonado: r.abandonado === true,
+                paradoHaMin: r.paradoHaMin ?? null,
+                ultimoInboundAt: r.ultimoInboundAt ?? null,
+                ultimoInboundHaMin: r.ultimoInboundHaMin ?? null,
+            };
+        });
+        res.json({ ok: true, geradoEm: Date.now(), chips });
+    } catch (err) {
+        res.status(500).json({ error: err.message });
+    }
+});
+
+app.put('/api/tenant-prompts', autenticarMiddleware, express.json(), async (req, res) => {
+    const updates = {};
+    for (const campo of CAMPOS_TENANT_PROMPTS) {
+        if (typeof req.body[campo] !== 'string') continue;
+        const valor = req.body[campo].trim();
+        if (valor.length > 8000) {
+            return res.status(400).json({ error: `${campo}: máximo 8000 caracteres.` });
+        }
+        updates[campo] = valor || null; // vazio → null (cai no fallback do system_prompt)
+    }
+    if (Object.keys(updates).length === 0) {
+        return res.status(400).json({ error: 'Nenhum prompt válido para atualizar.' });
+    }
+    // Aviso de segurança: system_prompt < 100 chars faz o motor abortar a resposta (guard do 4_sdr.js).
+    if (typeof updates.system_prompt === 'string' && updates.system_prompt !== null && updates.system_prompt.length > 0 && updates.system_prompt.length < 100) {
+        return res.status(400).json({ error: 'O System Prompt precisa ter pelo menos 100 caracteres (ou fique vazio). Abaixo disso o motor não responde.' });
+    }
+    try {
+        // select-then-update/insert: não depende de constraint UNIQUE em user_id pro upsert.
+        const { data: existente, error: selErr } = await supabase
+            .from('tenant_prompts').select('user_id').eq('user_id', req.user.id).maybeSingle();
+        if (selErr) throw new Error(selErr.message);
+
+        if (existente) {
+            const { error } = await supabase.from('tenant_prompts').update(updates).eq('user_id', req.user.id);
+            if (error) throw new Error(error.message);
+        } else {
+            const { error } = await supabase.from('tenant_prompts').insert({ user_id: req.user.id, ...updates });
+            if (error) throw new Error(error.message);
+        }
+        res.json({ ok: true, updates });
     } catch (err) {
         res.status(500).json({ error: err.message });
     }

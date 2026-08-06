@@ -356,14 +356,18 @@ export default function ConversaList({ onSelect, activeId, socket, instances = [
     const fetchConversas = useCallback(async () => {
         setLoading(true)
         try {
-           const instanceIds = instances.map(i => i.id).filter(Boolean)
-           if (!instanceIds.length) { setConversas([]); return }
+           // 🏢 Visibilidade por TENANT (user_id), não por chip: chips são efêmeros e leads de chip
+           // removido ficam com instance_id=null. Filtrar por user_id garante que a conversa nunca
+           // some do painel só porque o chip caiu/foi deletado.
+           const { data: { session } } = await supabase.auth.getSession()
+           const userId = session?.user?.id
+           if (!userId) { setConversas([]); return }
 
            const { data: leads, error } = await supabase
     .from('leads')
     .select('id, name, whatsapp_id, status, is_paused, manual_pause, last_contact_at, created_at, instance_id, dono, niche, bairro, phone, cnpj, capital_social_numeric, porte, current_stage, lead_temperature, internal_notes, followup_count, link_sent_at, calendly_booked')
     .in('status', ['contact', 'waiting_analysis'])
-    .in('instance_id', instanceIds)
+    .eq('user_id', userId)
     .order('last_contact_at', { ascending: false })
     .limit(300)
 
@@ -374,11 +378,12 @@ export default function ConversaList({ onSelect, activeId, socket, instances = [
 
             const comUltimaMsg = await Promise.all(
                 leads.map(async lead => {
+                    // Preview por whatsapp_id só (unívoco — nenhum número se repete entre leads).
+                    // Sem .eq('instance_id') porque leads órfãos têm instance_id=null e .eq(col,null) não casa.
                     const { data: msgs } = await supabase
                         .from('messages')
                         .select('role, content, created_at')
                         .eq('whatsapp_id', lead.whatsapp_id)
-                        .eq('instance_id', lead.instance_id)
                         .order('created_at', { ascending: false })
                         .limit(1)
 

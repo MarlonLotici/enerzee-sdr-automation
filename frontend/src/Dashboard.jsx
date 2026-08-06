@@ -178,13 +178,15 @@ const carregarDados = useCallback(async () => {
                 .select('id, name, whatsapp_status, daily_limit')
                 .eq('user_id', uid)
 
-            const instanceIds = instancias?.map(i => i.id) || []
-            if (!instanceIds.length) { setCarregando(false); return }
+            // instancias segue sendo buscada só pra alimentar os cards de saúde de chip (chipsSaude).
+            // NÃO é mais portão de visibilidade: leads/mensagens aparecem mesmo com zero chip conectado.
 
             // dateFrom é a janela temporal do período selecionado
             // Para 'all' capamos em 90 dias para não sobrecarregar a query de mensagens
             const dateFrom = getDateFrom(periodo) || new Date(Date.now() - 90 * 86400000).toISOString()
 
+            // 🏢 Isola por TENANT (user_id), não por chip. Chip é efêmero; lead de chip removido tem
+            // instance_id=null e sumia dos KPIs. messages.user_id já foi backfillado a partir dos leads.
             const [
                 { data: leads },
                 { data: mensagens },
@@ -192,13 +194,13 @@ const carregarDados = useCallback(async () => {
                 supabase
                     .from('leads')
                     .select('id, status, created_at, instance_id, is_paused, manual_pause, last_contact_at, current_stage, lead_temperature, followup_count, calendly_booked, whatsapp_id')
-                    .in('instance_id', instanceIds)
+                    .eq('user_id', uid)
                     .order('last_contact_at', { ascending: false, nullsFirst: false })
                     .limit(50000),
                 supabase
                     .from('messages')
                     .select('role, content, created_at, whatsapp_id')
-                    .in('instance_id', instanceIds) // 🔐 isola por tenant — sem isso vaza mensagem de outros clientes
+                    .eq('user_id', uid) // 🔐 isola por tenant
                     .gte('created_at', dateFrom)
                     .order('created_at', { ascending: false })
                     .limit(50000),

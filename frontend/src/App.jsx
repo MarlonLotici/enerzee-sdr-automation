@@ -9,6 +9,7 @@ import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogDescription, Di
 import NicheSelect from './components/NicheSelect'
 import VisualAnalytics from "@/components/VisualAnalytics"
 import ChipStatus from "./components/Chipstatus"
+import HealthPanel from "./components/HealthPanel"
 import ConversaList from './components/ConversaList'
 import OnboardingBriefing from './components/OnboardingBriefing'
 import Dashboard from "./Dashboard"
@@ -188,6 +189,7 @@ function AppSidebar({ activeTab, setActiveTab, leadsCount, onLogout }) {
     const [selectedLeadIds, setSelectedLeadIds] = useState(new Set());
     const [messageInput, setMessageInput] = useState("");
     const [sessionLeadsCount, setSessionLeadsCount] = useState(0);
+    const [liveCall, setLiveCall] = useState(null); // 📞 ligação de voz IA em andamento
     const [showBriefing, setShowBriefing] = useState(false)
     const [briefingCompleted, setBriefingCompleted] = useState(null) // null = loading, true/false
     // --- ESTADOS DO MOTOR IA (MULTI-INSTÂNCIA 2026) ---
@@ -213,6 +215,14 @@ const [botLogs, setBotLogs] = useState([]);
     const [showSettings, setShowSettings] = useState(false);
     const [settingsForm, setSettingsForm] = useState({ calendly_link: '', default_agent_name: '', default_company_name: '', default_daily_limit: '', opening_a: '', opening_b: '', opening_c: '' });
     const [savingSettings, setSavingSettings] = useState(false);
+    // — Cérebro da Conversa (tenant_prompts) —
+    const [showPrompts, setShowPrompts] = useState(false);
+    const [promptsForm, setPromptsForm] = useState({ system_prompt: '', qualifier_prompt: '', closer_prompt: '', objection_prompt: '' });
+    const [activePromptTab, setActivePromptTab] = useState('system_prompt');
+    const [loadingPrompts, setLoadingPrompts] = useState(false);
+    const [savingPrompts, setSavingPrompts] = useState(false);
+    const [promptsError, setPromptsError] = useState(null);
+    const [promptsSaved, setPromptsSaved] = useState(false);
     const [copiedVar, setCopiedVar] = useState(null)
     const [isAtencaoOpen, setIsAtencaoOpen] = useState(false)
     const [showFollowUpPicker, setShowFollowUpPicker] = useState(false)
@@ -433,7 +443,29 @@ if (session?.user?.id) checkBriefing()
             // Recarrega a tabela silenciosamente para atualizar os contadores
             fetchLeadsFromDB();
         });
-        
+
+        // 📞 Eventos de ligação de voz da IA (painel flutuante ao vivo)
+        socket.on('call_status', (d) => {
+            setLiveCall(prev => {
+                if (prev && prev.callId !== d.callId && prev.status !== 'ended') return prev;
+                const base = (prev && prev.callId === d.callId) ? prev : { transcript: [] };
+                return { ...base, callId: d.callId, leadId: d.leadId, leadName: d.leadName, status: d.status };
+            });
+        });
+        socket.on('call_transcript_chunk', (d) => {
+            if (d.parcial) return; // interim results só poluem o painel
+            setLiveCall(prev => {
+                if (!prev || prev.callId !== d.callId) return prev;
+                return { ...prev, transcript: [...(prev.transcript || []), { speaker: d.speaker, text: d.text }].slice(-30) };
+            });
+        });
+        socket.on('call_ended', (d) => {
+            setLiveCall(prev => (prev && prev.callId === d.callId)
+                ? { ...prev, status: 'ended', outcome: d.outcome, durationSeconds: d.durationSeconds }
+                : prev);
+            fetchLeadsFromDB();
+        });
+
         return () => socket.disconnect();
     }, []);
 
@@ -447,17 +479,12 @@ if (session?.user?.id) checkBriefing()
         const userId = currentSession?.user?.id;
         if (!userId) return;
 
-        const { data: userInstances } = await supabase
-            .from('instances')
-            .select('id')
-            .eq('user_id', userId);
-        const instanceIds = userInstances?.map(i => i.id) || [];
-        if (instanceIds.length === 0) { setLeads([]); setRealTotalLeads(0); return; }
-
-        // 2. Baixa leads: por instance_id OU por user_id (captura órfãos de chips removidos)
+        // 2. Baixa leads por TENANT (user_id) — fonte de verdade confiável e independente de chip.
+        // Chip é efêmero; lead de chip removido tem instance_id=null. Filtrar por user_id garante que
+        // nenhum lead entre em "limbo" quando o chip cai/é deletado, inclusive com zero chip conectado.
         const { data } = await supabase.from('leads')
             .select('id, name, phone, status, niche, dono, cnpj, bairro, cep, porte, capital_social_numeric, whatsapp_id, instance_id, lat, lng, created_at, last_contact_at, is_paused, manual_pause, current_stage, lead_temperature, followup_count, opening_template, backup_phones')
-            .or(`instance_id.in.(${instanceIds.join(',')}),user_id.eq.${userId}`)
+            .eq('user_id', userId)
             .order('created_at', { ascending: false })
             .limit(10000);
         if (data) setLeads(data);
@@ -465,7 +492,7 @@ if (session?.user?.id) checkBriefing()
         // 3. Total real filtrado por usuário
         const { count } = await supabase.from('leads')
             .select('*', { count: 'exact', head: true })
-            .or(`instance_id.in.(${instanceIds.join(',')}),user_id.eq.${userId}`);
+            .eq('user_id', userId);
         if (count !== null) setRealTotalLeads(count);
     };
 
@@ -579,6 +606,56 @@ if (session?.user?.id) checkBriefing()
         }
         setSavingSettings(false);
         setShowSettings(false);
+    };
+
+    const openPrompts = async () => {
+        setPromptsError(null);
+        setLoadingPrompts(true);
+        setShowPrompts(true);
+        try {
+            const { data: { session: s } } = await supabase.auth.getSession();
+            const resp = await fetch('/api/tenant-prompts', {
+                headers: { 'Authorization': `Bearer ${s?.access_token}` },
+            });
+            const json = await resp.json();
+            if (json.ok) {
+                setPromptsForm({
+                    system_prompt: json.prompts.system_prompt || '',
+                    qualifier_prompt: json.prompts.qualifier_prompt || '',
+                    closer_prompt: json.prompts.closer_prompt || '',
+                    objection_prompt: json.prompts.objection_prompt || '',
+                });
+            } else {
+                setPromptsError(json.error || 'Falha ao carregar os prompts.');
+            }
+        } catch (e) {
+            setPromptsError(e.message);
+        }
+        setLoadingPrompts(false);
+    };
+
+    const savePrompts = async () => {
+        setSavingPrompts(true);
+        setPromptsError(null);
+        setPromptsSaved(false);
+        try {
+            const { data: { session: s } } = await supabase.auth.getSession();
+            const resp = await fetch('/api/tenant-prompts', {
+                method: 'PUT',
+                headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${s?.access_token}` },
+                body: JSON.stringify(promptsForm),
+            });
+            const json = await resp.json();
+            if (json.ok) {
+                setPromptsSaved(true);
+                setTimeout(() => setPromptsSaved(false), 2500);
+            } else {
+                setPromptsError(json.error || 'Falha ao salvar.');
+            }
+        } catch (e) {
+            setPromptsError(e.message);
+        }
+        setSavingPrompts(false);
     };
 
     const exportLeadsExcel = async (limit) => {
@@ -726,6 +803,36 @@ if (session?.user?.id) checkBriefing()
         fetchLeadsFromDB();
     };
 
+    // --- 📞 LIGAÇÃO DE VOZ IA ---
+    const handleCallLead = async (lead) => {
+        if (!lead?.instance_id) { alert('Lead sem chip vinculado — não é possível ligar.'); return; }
+        if (!confirm(`Ligar agora para ${lead.name}?\nA IA vai conduzir a conversa por telefone.`)) return;
+
+        const disparar = async (force = false) => {
+            const { data: { session: s } } = await supabase.auth.getSession();
+            const res = await fetch('/api/call-lead', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${s?.access_token}` },
+                body: JSON.stringify({ instanceId: lead.instance_id, leadId: lead.id, force }),
+            });
+            return { ok: res.ok, dados: await res.json().catch(() => ({})) };
+        };
+
+        try {
+            let { ok, dados } = await disparar(false);
+            if (!ok && dados.foraDoHorario && confirm(`${dados.error}\n\nLigar mesmo assim?`)) {
+                ({ ok, dados } = await disparar(true));
+            }
+            if (!ok) {
+                alert(`Não foi possível ligar: ${dados.error || 'Falha desconhecida'}`);
+            } else {
+                setLiveCall({ callId: dados.callId, leadId: lead.id, leadName: lead.name, status: 'queued', transcript: [] });
+            }
+        } catch (e) {
+            alert(`Erro de rede: ${e.message}`);
+        }
+    };
+
     
         // --- NÚCLEO DE SEGURANÇA: CONTROLE DE ACESSO ---
     if (authLoading) {
@@ -811,6 +918,43 @@ if (session?.user?.id) checkBriefing()
     // Se estiver logado, libera o cockpit do sistema:
 return (
     <div className="h-screen w-full flex relative bg-[#0A0A0A] overflow-hidden">
+
+    {/* 📞 PAINEL DE LIGAÇÃO IA AO VIVO */}
+    {liveCall && (
+        <div className="fixed bottom-6 right-6 z-[70] w-80 bg-[#111] border border-sky-500/30 rounded-2xl shadow-2xl overflow-hidden">
+            <div className="flex items-center justify-between px-4 py-3 bg-sky-600/10 border-b border-sky-500/20">
+                <div className="flex items-center gap-2 min-w-0">
+                    <Phone className={`h-3.5 w-3.5 text-sky-400 shrink-0 ${['queued','initiated','ringing','in-progress'].includes(liveCall.status) ? 'animate-pulse' : ''}`} />
+                    <span className="text-[10px] font-black text-white uppercase tracking-widest truncate">{liveCall.leadName || 'Ligação IA'}</span>
+                </div>
+                <div className="flex items-center gap-2 shrink-0">
+                    <span className="text-[9px] font-bold text-sky-400 uppercase tracking-wider">
+                        {{ queued: 'Na fila', initiated: 'Chamando…', ringing: 'Tocando…', 'in-progress': 'Em conversa', ended: 'Encerrada' }[liveCall.status] || liveCall.status}
+                    </span>
+                    <button onClick={() => setLiveCall(null)} className="h-5 w-5 rounded bg-white/5 flex items-center justify-center hover:bg-white/10 transition-colors">
+                        <X className="h-3 w-3 text-slate-400" />
+                    </button>
+                </div>
+            </div>
+            <div className="max-h-48 overflow-y-auto p-3 space-y-1.5 custom-scrollbar">
+                {(liveCall.transcript || []).length === 0 ? (
+                    <p className="text-[10px] text-slate-500 text-center py-2">Aguardando conversa…</p>
+                ) : (
+                    liveCall.transcript.map((t, i) => (
+                        <div key={i} className={`text-[11px] leading-snug ${t.speaker === 'ai' ? 'text-sky-300' : 'text-slate-300'}`}>
+                            <span className="font-black uppercase text-[8px] mr-1 opacity-60">{t.speaker === 'ai' ? 'IA' : 'Lead'}</span>
+                            {t.text}
+                        </div>
+                    ))
+                )}
+                {liveCall.status === 'ended' && (
+                    <p className="text-[9px] font-black text-amber-400 uppercase tracking-wider pt-2 border-t border-white/5 mt-2">
+                        Resultado: {liveCall.outcome || '—'} · {liveCall.durationSeconds || 0}s
+                    </p>
+                )}
+            </div>
+        </div>
+    )}
 
     {/* MODAL DE CONFIGURAÇÕES DA CONTA */}
     {showSettings && (
@@ -930,6 +1074,19 @@ return (
                         <p className="text-[9px] text-slate-600 mt-2">O SDR sorteia uma das aberturas preenchidas a cada novo lead. Chips novos herdam essas mensagens automaticamente.</p>
                     </div>
 
+                    {/* — Cérebro da Conversa — */}
+                    <div>
+                        <p className="text-[9px] font-black text-amber-500/60 uppercase tracking-widest mb-1">Cérebro da Conversa</p>
+                        <p className="text-[9px] text-slate-600 mb-2">Os prompts que definem COMO o SDR conversa no WhatsApp (qualificação, fechamento, objeção). Antes só editáveis direto no banco.</p>
+                        <button
+                            type="button"
+                            onClick={() => { setShowSettings(false); openPrompts(); }}
+                            className="w-full h-10 rounded-md bg-amber-500/10 border border-amber-500/25 text-amber-300 hover:bg-amber-500/20 text-xs font-black uppercase tracking-widest transition-colors flex items-center justify-center gap-2"
+                        >
+                            <Cpu className="h-3.5 w-3.5" /> Editar Prompts do SDR
+                        </button>
+                    </div>
+
                 </div>
 
                 <div className="flex gap-3 mt-5 shrink-0">
@@ -938,6 +1095,101 @@ return (
                     </Button>
                     <Button onClick={saveSettings} disabled={savingSettings} className="flex-1 h-9 bg-amber-500 hover:bg-amber-400 text-black font-black text-xs">
                         {savingSettings ? 'Salvando...' : 'Salvar'}
+                    </Button>
+                </div>
+            </div>
+        </div>
+    )}
+
+    {/* MODAL — CÉREBRO DA CONVERSA (tenant_prompts) */}
+    {showPrompts && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/70 backdrop-blur-sm" onClick={() => setShowPrompts(false)}>
+            <div className="bg-[#111] border border-white/10 rounded-2xl p-6 w-full max-w-3xl shadow-2xl max-h-[92vh] flex flex-col" onClick={e => e.stopPropagation()}>
+                <div className="flex items-center justify-between mb-4 shrink-0">
+                    <div>
+                        <h2 className="text-sm font-black text-white uppercase tracking-widest">Cérebro da Conversa</h2>
+                        <p className="text-[10px] text-slate-500 mt-0.5">Prompts do SDR no WhatsApp · {session?.user?.email}</p>
+                    </div>
+                    <button onClick={() => setShowPrompts(false)} className="h-7 w-7 rounded-lg bg-white/5 flex items-center justify-center hover:bg-white/10 transition-colors">
+                        <X className="h-3.5 w-3.5 text-slate-400" />
+                    </button>
+                </div>
+
+                {/* Abas dos 4 prompts */}
+                <div className="flex gap-1.5 mb-3 shrink-0 flex-wrap">
+                    {[
+                        { key: 'system_prompt',    label: 'Sistema (base)' },
+                        { key: 'qualifier_prompt', label: 'Qualificação' },
+                        { key: 'closer_prompt',    label: 'Fechamento' },
+                        { key: 'objection_prompt', label: 'Objeção' },
+                    ].map(({ key, label }) => (
+                        <button
+                            key={key}
+                            type="button"
+                            onClick={() => setActivePromptTab(key)}
+                            className={`px-3 h-8 rounded-lg text-[10px] font-black uppercase tracking-widest transition-colors ${
+                                activePromptTab === key
+                                    ? 'bg-amber-500 text-black'
+                                    : 'bg-white/5 text-slate-400 hover:bg-white/10'
+                            }`}
+                        >
+                            {label}{promptsForm[key]?.trim() ? '' : ' •'}
+                        </button>
+                    ))}
+                </div>
+
+                {/* Dica de roteamento */}
+                <p className="text-[9px] text-slate-600 mb-2 shrink-0">
+                    O roteador escolhe o prompt por intenção do lead: dúvida/continuação → <span className="text-amber-400/70">Qualificação</span>, aceite → <span className="text-amber-400/70">Fechamento</span>, resistência → <span className="text-amber-400/70">Objeção</span>. Vazios caem no <span className="text-amber-400/70">Sistema</span>. O “•” marca prompt ainda em branco.
+                </p>
+
+                {/* Chips de variáveis disponíveis */}
+                <div className="flex gap-1.5 mb-3 shrink-0 flex-wrap">
+                    {['${agentName}', '${companyName}', '${nomeLead}', '${calendlyLink}', '${estagioAtual}'].map(v => (
+                        <button
+                            key={v}
+                            type="button"
+                            onClick={() => { navigator.clipboard.writeText(v); setCopiedVar(v); setTimeout(() => setCopiedVar(null), 1500); }}
+                            className="px-2 py-1 rounded-md bg-amber-500/5 border border-amber-500/15 hover:bg-amber-500/15 font-mono text-[9px] font-black text-amber-400 transition-colors"
+                            title="Clique para copiar — cole no prompt onde quiser que o sistema substitua pelo valor real"
+                        >
+                            {copiedVar === v ? '✓ copiado!' : v}
+                        </button>
+                    ))}
+                </div>
+
+                <div className="overflow-y-auto flex-1 pr-1">
+                    {loadingPrompts ? (
+                        <div className="flex items-center justify-center py-16 text-slate-500 text-xs">Carregando prompts…</div>
+                    ) : (
+                        <textarea
+                            value={promptsForm[activePromptTab]}
+                            onChange={e => setPromptsForm(f => ({ ...f, [activePromptTab]: e.target.value }))}
+                            placeholder={activePromptTab === 'system_prompt'
+                                ? 'Prompt base — a identidade e as regras gerais do SDR. Mínimo 100 caracteres (ou deixe vazio).'
+                                : 'Deixe vazio para usar o prompt de Sistema como base neste caso.'}
+                            rows={16}
+                            className="w-full bg-black/30 border border-white/10 text-white text-[13px] leading-relaxed rounded-md px-3 py-3 focus:outline-none focus:border-amber-500 resize-y font-mono placeholder:text-slate-700"
+                        />
+                    )}
+                    <div className="flex items-center justify-between mt-1.5">
+                        <span className="text-[9px] text-slate-600">{promptsForm[activePromptTab]?.length || 0} caracteres</span>
+                        {activePromptTab === 'system_prompt' && promptsForm.system_prompt.trim().length > 0 && promptsForm.system_prompt.trim().length < 100 && (
+                            <span className="text-[9px] text-rose-400 font-bold">⚠️ Mínimo 100 caracteres — abaixo disso o motor não responde.</span>
+                        )}
+                    </div>
+                </div>
+
+                {promptsError && (
+                    <div className="mt-2 text-[10px] text-rose-400 font-bold shrink-0">⚠️ {promptsError}</div>
+                )}
+
+                <div className="flex gap-3 mt-4 shrink-0">
+                    <Button onClick={() => setShowPrompts(false)} className="flex-1 h-9 bg-transparent border border-white/10 text-slate-400 hover:bg-white/5 text-xs">
+                        Fechar
+                    </Button>
+                    <Button onClick={savePrompts} disabled={savingPrompts || loadingPrompts} className="flex-1 h-9 bg-amber-500 hover:bg-amber-400 text-black font-black text-xs">
+                        {savingPrompts ? 'Salvando...' : promptsSaved ? '✓ Salvo!' : 'Salvar Prompts'}
                     </Button>
                 </div>
             </div>
@@ -1128,32 +1380,32 @@ return (
 
             <KanbanColumn title="Novos Leads" count={getLeadsByStatus('new').length} color="from-slate-700 to-slate-900" icon={<Users className="h-6 w-6 text-slate-300"/>}>
     {getLeadsByStatus('new').map(l => (
-        <LeadCard key={l.id} lead={l} isSelected={selectedLeadIds.has(l.id)} onSelect={() => toggleSelectLead(l.id)} onView={() => setViewingLeadDetail(l)} onEdit={() => setEditingLead(l)} onDelete={() => handleDeleteLead(l.id)} onChat={() => { setActiveChat(l); setActiveTab('connections'); }} />
+        <LeadCard key={l.id} lead={l} isSelected={selectedLeadIds.has(l.id)} onSelect={() => toggleSelectLead(l.id)} onView={() => setViewingLeadDetail(l)} onEdit={() => setEditingLead(l)} onDelete={() => handleDeleteLead(l.id)} onChat={() => { setActiveChat(l); setActiveTab('connections'); }} onCall={() => handleCallLead(l)} />
     ))}
 </KanbanColumn>
                             <KanbanColumn title="Em Atendimento IA" count={getLeadsByStatus('contact').length} color="from-blue-700 to-blue-950" icon={<BrainCircuit className="h-6 w-6 text-blue-300"/>} isActive={true}>
                                 {getLeadsByStatus('contact').map(l => (
-                                    <LeadCard key={l.id} lead={l} isSelected={selectedLeadIds.has(l.id)} onSelect={() => toggleSelectLead(l.id)} onView={() => setViewingLeadDetail(l)} onEdit={() => setEditingLead(l)} onDelete={() => handleDeleteLead(l.id)} onChat={() => { setActiveChat(l); setActiveTab('connections'); }} />
+                                    <LeadCard key={l.id} lead={l} isSelected={selectedLeadIds.has(l.id)} onSelect={() => toggleSelectLead(l.id)} onView={() => setViewingLeadDetail(l)} onEdit={() => setEditingLead(l)} onDelete={() => handleDeleteLead(l.id)} onChat={() => { setActiveChat(l); setActiveTab('connections'); }} onCall={() => handleCallLead(l)} />
                                 ))}
                             </KanbanColumn>
                             <KanbanColumn title="Aguardando Resposta" count={getAwaitingReply().length} color="from-slate-600 to-slate-800" icon={<MessageSquare className="h-6 w-6 text-slate-300"/>}>
                                 {getAwaitingReply().map(l => (
-                                    <LeadCard key={l.id} lead={l} isSelected={selectedLeadIds.has(l.id)} onSelect={() => toggleSelectLead(l.id)} onView={() => setViewingLeadDetail(l)} onEdit={() => setEditingLead(l)} onDelete={() => handleDeleteLead(l.id)} onChat={() => { setActiveChat(l); setActiveTab('connections'); }} />
+                                    <LeadCard key={l.id} lead={l} isSelected={selectedLeadIds.has(l.id)} onSelect={() => toggleSelectLead(l.id)} onView={() => setViewingLeadDetail(l)} onEdit={() => setEditingLead(l)} onDelete={() => handleDeleteLead(l.id)} onChat={() => { setActiveChat(l); setActiveTab('connections'); }} onCall={() => handleCallLead(l)} />
                                 ))}
                             </KanbanColumn>
                             <KanbanColumn title="🔥 Hot Leads" count={getHotLeads().length} color="from-red-700 to-orange-900" icon={<Flame className="h-6 w-6 text-red-300 animate-pulse"/>} isActive={true}>
                                 {getHotLeads().map(l => (
-                                    <LeadCard key={l.id} lead={l} isSelected={selectedLeadIds.has(l.id)} onSelect={() => toggleSelectLead(l.id)} onView={() => setViewingLeadDetail(l)} onEdit={() => setEditingLead(l)} onDelete={() => handleDeleteLead(l.id)} onChat={() => { setActiveChat(l); setActiveTab('connections'); }} />
+                                    <LeadCard key={l.id} lead={l} isSelected={selectedLeadIds.has(l.id)} onSelect={() => toggleSelectLead(l.id)} onView={() => setViewingLeadDetail(l)} onEdit={() => setEditingLead(l)} onDelete={() => handleDeleteLead(l.id)} onChat={() => { setActiveChat(l); setActiveTab('connections'); }} onCall={() => handleCallLead(l)} />
                                 ))}
                             </KanbanColumn>
                             <KanbanColumn title="Agendamentos" count={getLeadsByStatus('booked').length} color="from-emerald-700 to-green-900" icon={<CheckSquare className="h-6 w-6 text-emerald-300"/>}>
                                 {getLeadsByStatus('booked').map(l => (
-                                    <LeadCard key={l.id} lead={l} isSelected={selectedLeadIds.has(l.id)} onSelect={() => toggleSelectLead(l.id)} onView={() => setViewingLeadDetail(l)} onEdit={() => setEditingLead(l)} onDelete={() => handleDeleteLead(l.id)} onChat={() => { setActiveChat(l); setActiveTab('connections'); }} />
+                                    <LeadCard key={l.id} lead={l} isSelected={selectedLeadIds.has(l.id)} onSelect={() => toggleSelectLead(l.id)} onView={() => setViewingLeadDetail(l)} onEdit={() => setEditingLead(l)} onDelete={() => handleDeleteLead(l.id)} onChat={() => { setActiveChat(l); setActiveTab('connections'); }} onCall={() => handleCallLead(l)} />
                                 ))}
                             </KanbanColumn>
                             <KanbanColumn title="Fora do Fluxo" count={getLeadsByStatus('fora_do_fluxo').length} color="from-slate-700 to-slate-900" icon={<Send className="h-6 w-6 text-slate-300"/>}>
                                 {getLeadsByStatus('fora_do_fluxo').map(l => (
-                                    <LeadCard key={l.id} lead={l} isSelected={selectedLeadIds.has(l.id)} onSelect={() => toggleSelectLead(l.id)} onView={() => setViewingLeadDetail(l)} onEdit={() => setEditingLead(l)} onDelete={() => handleDeleteLead(l.id)} onChat={() => { setActiveChat(l); setActiveTab('connections'); }} />
+                                    <LeadCard key={l.id} lead={l} isSelected={selectedLeadIds.has(l.id)} onSelect={() => toggleSelectLead(l.id)} onView={() => setViewingLeadDetail(l)} onEdit={() => setEditingLead(l)} onDelete={() => handleDeleteLead(l.id)} onChat={() => { setActiveChat(l); setActiveTab('connections'); }} onCall={() => handleCallLead(l)} />
                                 ))}
                             </KanbanColumn>
                         </div>
@@ -1632,6 +1884,7 @@ return (
 
         {/* ChipStatus detalhado */}
         <div className="w-full max-w-2xl">
+            <HealthPanel />
             <ChipStatus instances={instances} socket={socket} />
         </div>
     </div>
@@ -2102,7 +2355,7 @@ function KanbanColumn({ title, count, color, children, icon, isActive }) {
     )
 }
 
-function LeadCard({ lead, isSelected, onSelect, onView, onEdit, onChat }) {
+function LeadCard({ lead, isSelected, onSelect, onView, onEdit, onChat, onCall }) {
     // Tenta pegar o valor de ambas as nomenclaturas possíveis do banco
     const valorPotencial = lead?.capital_social_numeric || lead?.capital_social || 0;
     
@@ -2202,6 +2455,11 @@ function LeadCard({ lead, isSelected, onSelect, onView, onEdit, onChat }) {
                     )}
                 </div>
                 <div className="flex items-center gap-1 opacity-0 group-hover:opacity-100 transition-all">
+                    {onCall && (
+                        <div onClick={(e) => { e.stopPropagation(); onCall(); }} className="h-6 w-6 rounded-lg bg-sky-600/10 border border-sky-500/20 flex items-center justify-center" title="Ligar agora (IA por voz)">
+                            <Phone className="h-3 w-3 text-sky-400" />
+                        </div>
+                    )}
                     {onChat && (
                         <div onClick={(e) => { e.stopPropagation(); onChat(); }} className="h-6 w-6 rounded-lg bg-emerald-600/10 border border-emerald-500/20 flex items-center justify-center" title="Abrir conversa">
                             <MessageSquare className="h-3 w-3 text-emerald-400" />

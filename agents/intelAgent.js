@@ -1,5 +1,6 @@
 // agents/intelAgent.js
 const Groq = require('groq-sdk');
+const { empresaConfiavelDoLead } = require('../lib/textPuros');
 const groq = new Groq({ apiKey: process.env.GROQ_API_KEY });
 
 async function analisarEmpresa(historico, lead) {
@@ -24,7 +25,7 @@ REGRA ABSOLUTA DE HONESTIDADE:
 - É MELHOR dizer "sem dados" do que inventar.
 
 [DADOS OFICIAIS DO CRM]
-- Empresa: ${lead.name || 'não informado'}
+- Empresa: ${empresaConfiavelDoLead(lead) || 'não informado (o "nome" pode ser só o contato do WhatsApp — NÃO presuma que é a empresa)'}
 - Nicho: ${lead.niche || 'não informado'}
 - Estado: ${lead.estado || 'não informado'}
 - Capital Social: R$ ${lead.capital_social_numeric || 0}
