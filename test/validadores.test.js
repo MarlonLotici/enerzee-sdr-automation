@@ -3,7 +3,21 @@ const test = require('node:test');
 const assert = require('node:assert/strict');
 const { CAMPOS_INSTANCE_PATCHAVEIS_TEXTO, emailBriefValido } = require('../lib/validadores');
 
-const { owner_phone, email_from_address, email_website_url, email_prompt } = CAMPOS_INSTANCE_PATCHAVEIS_TEXTO;
+const { owner_phone, email_from_address, email_website_url, email_prompt, agent_name, company_name } = CAMPOS_INSTANCE_PATCHAVEIS_TEXTO;
+
+test('agent_name: aceita 1-60 chars, rejeita vazio/longo', () => {
+    assert.ok(agent_name('Sofia'));
+    assert.ok(agent_name('x'.repeat(60)));
+    assert.ok(!agent_name(''));                 // vazio é tratado como "limpar" antes do validador; aqui garante que não passa como valor
+    assert.ok(!agent_name('x'.repeat(61)));
+});
+
+test('company_name: aceita 1-80 chars, rejeita vazio/longo', () => {
+    assert.ok(company_name('Antix'));
+    assert.ok(company_name('x'.repeat(80)));
+    assert.ok(!company_name(''));
+    assert.ok(!company_name('x'.repeat(81)));
+});
 
 test('owner_phone: aceita 10-13 dígitos, com ou sem máscara', () => {
     assert.ok(owner_phone('5548998203038'));       // 13 (55+DDD+9dig)

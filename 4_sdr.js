@@ -3225,10 +3225,18 @@ const nomeEmpresa = limparNomeEmpresa(lead.name);
 const saudacao = primeiroNomeDono ? `Oi ${primeiroNomeDono}` : 'Oi, tudo bem?';
 const bairroLead = lead.bairro || lead.cidade || 'sua região';
 
+// Persona do CHIP (quem está disparando): nome do agente e nome da nossa empresa.
+// Antes o nome ficava hardcoded no template (ex.: "Lorena") e não trocava ao editar o nome do
+// chip. Agora o template usa ${nomeAgente}/${nomeMinhaEmpresa} e resolve pelo instances.agent_name.
+const nomeAgente = instanceData?.agent_name || 'nossa equipe';
+const nomeMinhaEmpresa = instanceData?.company_name || 'nossa empresa';
+
 // Substitui variáveis nos templates vindos do Supabase
 const substituirVarsAbertura = (tpl) => resolverSpintax(tpl
     .replace(/\[Nome\]/gi, primeiroNomeDono || 'você') // alias legado — aceita [Nome] além de ${nomeDono}
     .replace(/\$\{saudacao\}/g, saudacao)
+    .replace(/\$\{nomeAgente\}/g, nomeAgente)
+    .replace(/\$\{nomeMinhaEmpresa\}/g, nomeMinhaEmpresa)
     .replace(/\$\{nomeDono\}/g, primeiroNomeDono || 'você')
     .replace(/\$\{nomeEmpresa\}/g, nomeEmpresa)
     .replace(/\$\{concessionariaLocal\}/g, concessionariaLocal)
@@ -3782,10 +3790,12 @@ await delay(jitterAntiBan);
                     const instancia = sessions.get(ll.instance_id);
                     if (!instancia || !instancia.ready || iaRespondendo.has(ll.whatsapp_id)) continue;
 
-                    // 🛡️ FAIL-SAFE: Culpa o sistema para não ofender se ele já tiver agendado
+                    // Honesto e não-acusatório: "não vi cair aqui" coloca a checagem do NOSSO lado
+                    // (calendly_booked=false), cobrindo tanto quem não reservou quanto quem reservou
+                    // e o sistema não detectou — e oferece ajuda em vez de inventar um erro de sistema.
                     const primeiroNome = saudacaoPrimeiroNome(ll.dono, 'Opa');
 
-                    const msgFollowUpLink = `${primeiroNome}, meu sistema de agenda deu uma travada hoje. Vc conseguiu travar o seu horário lá no link ou deu erro aí também?`;
+                    const msgFollowUpLink = `${primeiroNome}, não vi seu horário cair aqui na nossa agenda depois da nossa conversa. Conseguiu reservar direitinho, ou ficou alguma dúvida que eu possa te ajudar?`;
 
                  // ⚡ FAST-LANE: follow-up de link tem prioridade mínima — cede para inbound imediatamente
                     if (inboundAtivo.has(ll.instance_id)) {

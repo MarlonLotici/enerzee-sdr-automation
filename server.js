@@ -640,6 +640,49 @@ app.patch('/api/instance/:instanceId', autenticarMiddleware, async (req, res) =>
     }
 });
 
+// 👤 APLICAR PERSONA A TODOS OS CHIPS — atalho do "aplicar a todos". A persona (nome do agente /
+// nome da empresa) é por chip (instances.agent_name/company_name), mas o usuário costuma querer que
+// todos os chips falem com o mesmo nome. Este endpoint grava o mesmo valor em TODOS os chips da conta
+// e também no default do profile (pra chips futuros já nascerem com ele). Campo omitido = não mexe.
+app.post('/api/account/apply-persona', autenticarMiddleware, express.json(), async (req, res) => {
+    const updates = {};
+    const profileUpdates = {};
+    if (typeof req.body.agent_name === 'string') {
+        const v = req.body.agent_name.trim();
+        if (v && !CAMPOS_INSTANCE_PATCHAVEIS_TEXTO.agent_name(v))
+            return res.status(400).json({ error: 'Nome do agente inválido (1-60 caracteres).' });
+        updates.agent_name = v || null;                 // vazio = limpar (volta pro default)
+        profileUpdates.default_agent_name = v || null;
+    }
+    if (typeof req.body.company_name === 'string') {
+        const v = req.body.company_name.trim();
+        if (v && !CAMPOS_INSTANCE_PATCHAVEIS_TEXTO.company_name(v))
+            return res.status(400).json({ error: 'Nome da empresa inválido (1-80 caracteres).' });
+        updates.company_name = v || null;
+        profileUpdates.default_company_name = v || null;
+    }
+    if (Object.keys(updates).length === 0)
+        return res.status(400).json({ error: 'Nada para aplicar (envie agent_name e/ou company_name).' });
+    try {
+        // Todos os chips da conta.
+        const { data: insts, error: eSel } = await supabase
+            .from('instances').select('id').eq('user_id', req.user.id);
+        if (eSel) throw new Error(eSel.message);
+        const { error: eUpd } = await supabase
+            .from('instances').update(updates).eq('user_id', req.user.id);
+        if (eUpd) throw new Error(eUpd.message);
+        // Default do profile (best-effort — se RLS/coluna faltar, não derruba o apply nos chips).
+        const { error: eProf } = await supabase
+            .from('profiles').update(profileUpdates).eq('id', req.user.id);
+        if (eProf) console.warn('[apply-persona] profile default não gravado:', eProf.message);
+        // Invalida cache de todos os chips afetados.
+        if (sdr?.invalidateInstanceCache) (insts || []).forEach((i) => sdr.invalidateInstanceCache(i.id));
+        res.json({ ok: true, chipsAtualizados: (insts || []).length, updates, profileWarning: eProf?.message || null });
+    } catch (err) {
+        res.status(500).json({ error: err.message });
+    }
+});
+
 // 🧠 CÉREBRO DA CONVERSA — leitura/edição dos prompts de WhatsApp (tenant_prompts) pela conta.
 // Antes só editáveis direto no Supabase na mão; agora self-service pelo dashboard.
 // Chave: user_id (1 linha por conta). Os 3 especializados vazios = motor cai no system_prompt.

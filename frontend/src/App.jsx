@@ -215,6 +215,10 @@ const [botLogs, setBotLogs] = useState([]);
     const [showSettings, setShowSettings] = useState(false);
     const [settingsForm, setSettingsForm] = useState({ calendly_link: '', default_agent_name: '', default_company_name: '', default_daily_limit: '', opening_a: '', opening_b: '', opening_c: '' });
     const [savingSettings, setSavingSettings] = useState(false);
+    const [settingsError, setSettingsError] = useState(null);
+    const [settingsOk, setSettingsOk] = useState(false);
+    const [applyingPersona, setApplyingPersona] = useState(false);
+    const [personaMsg, setPersonaMsg] = useState(null);
     // — Cérebro da Conversa (tenant_prompts) —
     const [showPrompts, setShowPrompts] = useState(false);
     const [promptsForm, setPromptsForm] = useState({ system_prompt: '', qualifier_prompt: '', closer_prompt: '', objection_prompt: '' });
@@ -592,20 +596,56 @@ if (session?.user?.id) checkBriefing()
 
     const saveSettings = async () => {
         setSavingSettings(true);
+        setSettingsError(null);
+        setSettingsOk(false);
         const { data: { session: s } } = await supabase.auth.getSession();
-        if (s?.user?.id) {
-            const padrao = [settingsForm.opening_a, settingsForm.opening_b, settingsForm.opening_c].filter(Boolean);
-            await supabase.from('profiles').upsert({
-                id: s.user.id,
-                calendly_link: settingsForm.calendly_link || null,
-                default_agent_name: settingsForm.default_agent_name || null,
-                default_company_name: settingsForm.default_company_name || null,
-                default_daily_limit: settingsForm.default_daily_limit ? Number(settingsForm.default_daily_limit) : null,
-                opening_templates: padrao.length > 0 ? { padrao } : null,
-            }, { onConflict: 'id' });
+        if (!s?.user?.id) {
+            setSavingSettings(false);
+            setSettingsError('Sessão expirada. Faça login novamente.');
+            return; // não fecha o modal — o usuário perderia o que digitou
         }
+        const padrao = [settingsForm.opening_a, settingsForm.opening_b, settingsForm.opening_c].filter(Boolean);
+        const { error } = await supabase.from('profiles').upsert({
+            id: s.user.id,
+            calendly_link: settingsForm.calendly_link || null,
+            default_agent_name: settingsForm.default_agent_name || null,
+            default_company_name: settingsForm.default_company_name || null,
+            default_daily_limit: settingsForm.default_daily_limit ? Number(settingsForm.default_daily_limit) : null,
+            opening_templates: padrao.length > 0 ? { padrao } : null,
+        }, { onConflict: 'id' });
         setSavingSettings(false);
-        setShowSettings(false);
+        if (error) {
+            // Antes o erro era engolido e o modal fechava — o usuário achava que salvou (não salvava por RLS).
+            setSettingsError('Não foi possível salvar: ' + error.message);
+            return;
+        }
+        setSettingsOk(true);
+        setTimeout(() => { setSettingsOk(false); setShowSettings(false); }, 900);
+    };
+
+    // Aplica nome do SDR / nome da empresa a TODOS os chips da conta (atalho "aplicar a todos").
+    // A persona é por chip, mas normalmente o usuário quer o mesmo nome em todos.
+    const aplicarPersonaATodos = async () => {
+        setApplyingPersona(true);
+        setPersonaMsg(null);
+        try {
+            const { data: { session: s } } = await supabase.auth.getSession();
+            const resp = await fetch('/api/account/apply-persona', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${s?.access_token}` },
+                body: JSON.stringify({
+                    agent_name: settingsForm.default_agent_name || '',
+                    company_name: settingsForm.default_company_name || '',
+                }),
+            });
+            const json = await resp.json();
+            if (!resp.ok || !json.ok) throw new Error(json.error || 'Falha ao aplicar.');
+            setPersonaMsg({ ok: true, text: `✓ Aplicado a ${json.chipsAtualizados} chip(s).` });
+        } catch (err) {
+            setPersonaMsg({ ok: false, text: err.message });
+        } finally {
+            setApplyingPersona(false);
+        }
     };
 
     const openPrompts = async () => {
@@ -995,6 +1035,18 @@ return (
                                 />
                             </div>
                         </div>
+                        <p className="text-[9px] text-slate-600 mt-2">Este é o padrão da conta (chips novos herdam). Cada chip pode ter um nome próprio na aba de chips.</p>
+                        <button
+                            type="button"
+                            onClick={aplicarPersonaATodos}
+                            disabled={applyingPersona}
+                            className="mt-2 w-full h-9 rounded-md bg-amber-500/10 border border-amber-500/25 text-amber-300 hover:bg-amber-500/20 text-[11px] font-black uppercase tracking-widest transition-colors disabled:opacity-50"
+                        >
+                            {applyingPersona ? 'Aplicando...' : 'Aplicar nome/empresa a TODOS os chips'}
+                        </button>
+                        {personaMsg && (
+                            <p className={`text-[10px] mt-1.5 ${personaMsg.ok ? 'text-emerald-400' : 'text-red-400'}`}>{personaMsg.text}</p>
+                        )}
                     </div>
 
                     {/* — Limites e Agendamento — */}
@@ -1031,6 +1083,8 @@ return (
                                 { key: '${saudacao}',           desc: 'Saudação completa',          ex: 'Oi João'          },
                                 { key: '${nomeDono}',           desc: 'Só o primeiro nome',          ex: 'João'             },
                                 { key: '${nomeEmpresa}',        desc: 'Nome da empresa (CNPJ)',      ex: 'Padaria Central'  },
+                                { key: '${nomeAgente}',         desc: 'Nome do SDR (deste chip)',    ex: 'Sofia'            },
+                                { key: '${nomeMinhaEmpresa}',   desc: 'Sua empresa (deste chip)',    ex: 'Antix'            },
                                 { key: '${bairroLead}',         desc: 'Bairro ou cidade',            ex: 'Vila Madalena'    },
                                 { key: '${concessionariaLocal}',desc: 'Distribuidora local (solar)',  ex: 'Celesc'           },
                                 { key: '${origem}',             desc: 'Empresa que indicou',         ex: 'Empresa XYZ'      },
@@ -1089,6 +1143,12 @@ return (
 
                 </div>
 
+                {settingsError && (
+                    <p className="text-[11px] text-red-400 mt-3 shrink-0 bg-red-500/10 border border-red-500/20 rounded-md px-3 py-2">{settingsError}</p>
+                )}
+                {settingsOk && (
+                    <p className="text-[11px] text-emerald-400 mt-3 shrink-0">✓ Salvo com sucesso.</p>
+                )}
                 <div className="flex gap-3 mt-5 shrink-0">
                     <Button onClick={() => setShowSettings(false)} className="flex-1 h-9 bg-transparent border border-white/10 text-slate-400 hover:bg-white/5 text-xs">
                         Cancelar

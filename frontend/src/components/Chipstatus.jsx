@@ -39,13 +39,27 @@ function timeAgo(isoStr) {
 }
 
 // ─── CHIP CARD ────────────────────────────────────────────────────────────────
-function ChipCard({ instance, dailyCount, statusInfo, onReconnect, onResetSession, qrCode, onLimitChange, onTogglePause, onToggleFlag, onSaveCampaignFields }) {
+function ChipCard({ instance, dailyCount, statusInfo, onReconnect, onResetSession, qrCode, onLimitChange, onTogglePause, onToggleFlag, onSaveCampaignFields, onSavePersona }) {
     const [editingLimit, setEditingLimit] = useState(false)
     const [localLimit,   setLocalLimit]   = useState(instance.daily_limit ?? 30)
     const [saving,       setSaving]       = useState(false)
     const [showResetInfo, setShowResetInfo] = useState(false)
     const [pausando,     setPausando]     = useState(false)
     const [togglingFlag, setTogglingFlag] = useState(null) // nome da flag em voo, evita duplo-clique
+
+    // ── Persona por chip (nome do SDR / empresa) — editável inline ──
+    const [editingPersona, setEditingPersona] = useState(false)
+    const [localAgent,     setLocalAgent]     = useState(instance.agent_name || '')
+    const [localCompany,   setLocalCompany]   = useState(instance.company_name || '')
+    const [savingPersona,  setSavingPersona]  = useState(false)
+    useEffect(() => { setLocalAgent(instance.agent_name || '') }, [instance.agent_name])
+    useEffect(() => { setLocalCompany(instance.company_name || '') }, [instance.company_name])
+    const salvarPersona = async () => {
+        setSavingPersona(true)
+        await onSavePersona?.(instance.id, { agent_name: localAgent.trim(), company_name: localCompany.trim() })
+        setSavingPersona(false)
+        setEditingPersona(false)
+    }
 
     // ── Configuração de campanha de email — formulário guiado, à prova de leigo ──
     const briefInicial = instance.email_brief || {}
@@ -260,27 +274,81 @@ function ChipCard({ instance, dailyCount, statusInfo, onReconnect, onResetSessio
                 </button>
             )}
 
-            {/* ── Agente e empresa ── */}
-            <div style={{ display: 'flex', gap: 10 }}>
-                <div style={{ flex: 1, background: 'rgba(255,255,255,0.03)', borderRadius: '0.75rem', padding: '8px 10px', border: '1px solid rgba(255,255,255,0.05)' }}>
-                    <div style={{ display: 'flex', alignItems: 'center', gap: 5, marginBottom: 3 }}>
-                        <User size={9} color={C.brand} />
-                        <span style={{ fontSize: 8, fontWeight: 900, color: 'rgba(255,255,255,0.3)', textTransform: 'uppercase', letterSpacing: '0.15em' }}>Agente</span>
+            {/* ── Agente e empresa (persona deste chip — editável) ── */}
+            {editingPersona ? (
+                <div style={{ display: 'flex', flexDirection: 'column', gap: 8, background: 'rgba(255,255,255,0.03)', borderRadius: '0.75rem', padding: '10px', border: `1px solid ${C.brand}35` }}>
+                    <div>
+                        <div style={{ display: 'flex', alignItems: 'center', gap: 5, marginBottom: 4 }}>
+                            <User size={9} color={C.brand} />
+                            <span style={{ fontSize: 8, fontWeight: 900, color: 'rgba(255,255,255,0.4)', textTransform: 'uppercase', letterSpacing: '0.15em' }}>Nome do SDR (deste chip)</span>
+                        </div>
+                        <input
+                            value={localAgent}
+                            onChange={e => setLocalAgent(e.target.value)}
+                            placeholder="Ex: Sofia"
+                            maxLength={60}
+                            style={{ width: '100%', boxSizing: 'border-box', background: 'rgba(0,0,0,0.3)', border: '1px solid rgba(255,255,255,0.1)', borderRadius: '0.5rem', padding: '6px 9px', color: '#fff', fontSize: 11, fontFamily: 'inherit', outline: 'none' }}
+                        />
                     </div>
-                    <p style={{ fontSize: 11, fontWeight: 900, color: '#fff' }}>
-                        {instance.agent_name || '—'}
-                    </p>
-                </div>
-                <div style={{ flex: 1, background: 'rgba(255,255,255,0.03)', borderRadius: '0.75rem', padding: '8px 10px', border: '1px solid rgba(255,255,255,0.05)' }}>
-                    <div style={{ display: 'flex', alignItems: 'center', gap: 5, marginBottom: 3 }}>
-                        <Building2 size={9} color={C.brand} />
-                        <span style={{ fontSize: 8, fontWeight: 900, color: 'rgba(255,255,255,0.3)', textTransform: 'uppercase', letterSpacing: '0.15em' }}>Empresa</span>
+                    <div>
+                        <div style={{ display: 'flex', alignItems: 'center', gap: 5, marginBottom: 4 }}>
+                            <Building2 size={9} color={C.brand} />
+                            <span style={{ fontSize: 8, fontWeight: 900, color: 'rgba(255,255,255,0.4)', textTransform: 'uppercase', letterSpacing: '0.15em' }}>Empresa (deste chip)</span>
+                        </div>
+                        <input
+                            value={localCompany}
+                            onChange={e => setLocalCompany(e.target.value)}
+                            placeholder="Ex: Antix"
+                            maxLength={80}
+                            style={{ width: '100%', boxSizing: 'border-box', background: 'rgba(0,0,0,0.3)', border: '1px solid rgba(255,255,255,0.1)', borderRadius: '0.5rem', padding: '6px 9px', color: '#fff', fontSize: 11, fontFamily: 'inherit', outline: 'none' }}
+                        />
                     </div>
-                    <p style={{ fontSize: 11, fontWeight: 900, color: '#fff' }}>
-                        {instance.company_name || '—'}
-                    </p>
+                    <div style={{ display: 'flex', gap: 6 }}>
+                        <button
+                            onClick={() => { setEditingPersona(false); setLocalAgent(instance.agent_name || ''); setLocalCompany(instance.company_name || '') }}
+                            style={{ flex: 1, padding: '6px 0', background: 'transparent', border: '1px solid rgba(255,255,255,0.1)', borderRadius: '0.5rem', cursor: 'pointer', color: 'rgba(255,255,255,0.5)', fontSize: 9, fontWeight: 900, textTransform: 'uppercase', letterSpacing: '0.1em' }}
+                        >
+                            Cancelar
+                        </button>
+                        <button
+                            onClick={salvarPersona}
+                            disabled={savingPersona}
+                            style={{ flex: 1, display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 5, padding: '6px 0', background: `${C.brand}20`, border: `1px solid ${C.brand}55`, borderRadius: '0.5rem', cursor: savingPersona ? 'wait' : 'pointer', opacity: savingPersona ? 0.6 : 1, color: C.brand, fontSize: 9, fontWeight: 900, textTransform: 'uppercase', letterSpacing: '0.1em' }}
+                        >
+                            {savingPersona ? <Loader2 size={11} style={{ animation: 'spin 1s linear infinite' }} /> : <Check size={11} />}
+                            {savingPersona ? 'Salvando...' : 'Salvar'}
+                        </button>
+                    </div>
                 </div>
-            </div>
+            ) : (
+                <div style={{ display: 'flex', gap: 10, position: 'relative' }}>
+                    <div style={{ flex: 1, background: 'rgba(255,255,255,0.03)', borderRadius: '0.75rem', padding: '8px 10px', border: '1px solid rgba(255,255,255,0.05)' }}>
+                        <div style={{ display: 'flex', alignItems: 'center', gap: 5, marginBottom: 3 }}>
+                            <User size={9} color={C.brand} />
+                            <span style={{ fontSize: 8, fontWeight: 900, color: 'rgba(255,255,255,0.3)', textTransform: 'uppercase', letterSpacing: '0.15em' }}>Agente</span>
+                        </div>
+                        <p style={{ fontSize: 11, fontWeight: 900, color: '#fff' }}>
+                            {instance.agent_name || '—'}
+                        </p>
+                    </div>
+                    <div style={{ flex: 1, background: 'rgba(255,255,255,0.03)', borderRadius: '0.75rem', padding: '8px 10px', border: '1px solid rgba(255,255,255,0.05)' }}>
+                        <div style={{ display: 'flex', alignItems: 'center', gap: 5, marginBottom: 3 }}>
+                            <Building2 size={9} color={C.brand} />
+                            <span style={{ fontSize: 8, fontWeight: 900, color: 'rgba(255,255,255,0.3)', textTransform: 'uppercase', letterSpacing: '0.15em' }}>Empresa</span>
+                        </div>
+                        <p style={{ fontSize: 11, fontWeight: 900, color: '#fff' }}>
+                            {instance.company_name || '—'}
+                        </p>
+                    </div>
+                    <button
+                        onClick={() => setEditingPersona(true)}
+                        title="Editar nome do SDR e empresa deste chip"
+                        style={{ position: 'absolute', top: 6, right: 6, background: 'rgba(255,255,255,0.05)', border: '1px solid rgba(255,255,255,0.08)', borderRadius: '0.4rem', padding: '3px 4px', cursor: 'pointer', display: 'flex', alignItems: 'center' }}
+                    >
+                        <Pencil size={9} color="rgba(255,255,255,0.4)" />
+                    </button>
+                </div>
+            )}
 
             {/* ── Progress bar diária ── */}
             <div>
@@ -815,6 +883,24 @@ export default function ChipStatus({ instances = [], socket }) {
         }
     }, [socket])
 
+    const handleSavePersona = useCallback(async (instanceId, { agent_name, company_name }) => {
+        try {
+            const { data: { session } } = await supabase.auth.getSession()
+            // PATCH: string vazia = limpar campo (volta pro default do profile).
+            await fetch(`/api/instance/${instanceId}`, {
+                method: 'PATCH',
+                headers: {
+                    'Content-Type': 'application/json',
+                    'Authorization': `Bearer ${session?.access_token}`,
+                },
+                body: JSON.stringify({ agent_name, company_name }),
+            })
+            socket?.emit('get_instances')
+        } catch (e) {
+            console.error('[ChipStatus] Falha ao salvar persona do chip:', e)
+        }
+    }, [socket])
+
     const handleTogglePause = useCallback(async (instanceId, pausar) => {
         try {
             const { data: { session } } = await supabase.auth.getSession()
@@ -913,6 +999,7 @@ export default function ChipStatus({ instances = [], socket }) {
                             onTogglePause={handleTogglePause}
                             onToggleFlag={handleToggleFlag}
                             onSaveCampaignFields={handleSaveCampaignFields}
+                            onSavePersona={handleSavePersona}
                             qrCode={qrMap[inst.id] || null}
                         />
                     ))}
