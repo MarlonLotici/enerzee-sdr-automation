@@ -48,6 +48,7 @@
     "express": "^5.2.1",
     "express-rate-limit": "^8.6.0",
     "framer-motion": "^12.36.0",
+    "googleapis": "^174.0.1",
     "groq-sdk": "^0.3.3",
     "helmet": "^8.1.0",
     "https-proxy-agent": "^7.0.6",

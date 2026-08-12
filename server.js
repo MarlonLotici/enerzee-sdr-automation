@@ -683,6 +683,86 @@ app.post('/api/account/apply-persona', autenticarMiddleware, express.json(), asy
     }
 });
 
+// ============================================================
+// 📅 GOOGLE AGENDA — OAuth + confirmação diária de reuniões (opt-in por tenant)
+// ============================================================
+const gcalIntegration = require('./integrations/googleCalendar');
+const FRONT_BASE = () => process.env.PUBLIC_BASE_URL || '';
+
+// Inicia o OAuth: devolve a URL de consentimento do Google (o front abre numa aba/redirect).
+app.get('/api/google/oauth/start', autenticarMiddleware, async (req, res) => {
+    if (!gcalIntegration.envOk())
+        return res.status(503).json({ error: 'Integração Google não configurada no servidor (faltam GOOGLE_OAUTH_*).' });
+    try {
+        res.json({ ok: true, url: gcalIntegration.gerarUrlConsentimento(req.user.id) });
+    } catch (err) {
+        res.status(500).json({ error: err.message });
+    }
+});
+
+// Callback do Google (redirect do navegador — SEM bearer; a identidade vem do state assinado).
+app.get('/api/google/oauth/callback', async (req, res) => {
+    const { code, state, error: oauthErr } = req.query;
+    if (oauthErr || !code) return res.redirect(`${FRONT_BASE()}/?gcal=erro`);
+    try {
+        await gcalIntegration.trocarCodeESalvar(code, state);
+        res.redirect(`${FRONT_BASE()}/?gcal=ok`);
+    } catch (err) {
+        console.error('❌ [GCAL] callback falhou:', err.message);
+        res.redirect(`${FRONT_BASE()}/?gcal=erro`);
+    }
+});
+
+// Lista as agendas do tenant (pra ele escolher a de reuniões).
+app.get('/api/google/calendars', autenticarMiddleware, async (req, res) => {
+    try {
+        res.json({ ok: true, calendars: await gcalIntegration.listarCalendarios(req.user.id) });
+    } catch (err) {
+        res.status(500).json({ error: err.message });
+    }
+});
+
+// Lê a config atual da confirmação (sem devolver o refresh_token).
+app.get('/api/google/confirmacao/config', autenticarMiddleware, async (req, res) => {
+    try {
+        const { data } = await supabase.from('calendar_connections')
+            .select('google_email, calendar_id, confirmacao_ativa, confirmacao_hora')
+            .eq('user_id', req.user.id).maybeSingle();
+        res.json({ ok: true, conectado: !!data?.google_email, config: data || null });
+    } catch (err) {
+        res.status(500).json({ error: err.message });
+    }
+});
+
+// Grava a config: qual agenda, ligar/desligar, hora do disparo.
+app.post('/api/google/confirmacao/config', autenticarMiddleware, express.json(), async (req, res) => {
+    const updates = { updated_at: new Date().toISOString() };
+    if (typeof req.body.calendar_id === 'string') updates.calendar_id = req.body.calendar_id || null;
+    if (typeof req.body.confirmacao_ativa === 'boolean') updates.confirmacao_ativa = req.body.confirmacao_ativa;
+    if (Number.isInteger(req.body.confirmacao_hora) && req.body.confirmacao_hora >= 0 && req.body.confirmacao_hora <= 23)
+        updates.confirmacao_hora = req.body.confirmacao_hora;
+    try {
+        // Upsert garante a linha mesmo se o usuário configurar antes de reconectar (não deve, mas seguro).
+        const { error } = await supabase.from('calendar_connections')
+            .upsert({ user_id: req.user.id, ...updates }, { onConflict: 'user_id' });
+        if (error) throw new Error(error.message);
+        res.json({ ok: true, updates });
+    } catch (err) {
+        res.status(500).json({ error: err.message });
+    }
+});
+
+// Dispara a confirmação AGORA (teste no staging — não espera as 11h).
+app.post('/api/google/confirmacao/run-now', autenticarMiddleware, async (req, res) => {
+    if (!sdr?.rodarConfirmacaoAgora)
+        return res.status(503).json({ error: 'Motor SDR não inicializado.' });
+    try {
+        res.json({ ok: true, resultado: await sdr.rodarConfirmacaoAgora(req.user.id) });
+    } catch (err) {
+        res.status(500).json({ error: err.message });
+    }
+});
+
 // 🧠 CÉREBRO DA CONVERSA — leitura/edição dos prompts de WhatsApp (tenant_prompts) pela conta.
 // Antes só editáveis direto no Supabase na mão; agora self-service pelo dashboard.
 // Chave: user_id (1 linha por conta). Os 3 especializados vazios = motor cai no system_prompt.

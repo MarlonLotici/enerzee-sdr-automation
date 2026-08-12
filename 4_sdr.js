@@ -124,6 +124,10 @@ function identificarArtigo(nome) {
 // subir Redis/BullMQ. Mesma lógica, só mudou de arquivo.
 const { extrairNomeHumano, saudacaoPrimeiroNome, extrairNomeDeclarado, empresaConfiavelDoLead } = require('./lib/textPuros');
 const { dividirEmBaloes } = require('./lib/baloes');
+// 📅 Confirmação diária de reuniões via Google Agenda (feature opt-in por tenant).
+const { extrairTelefoneDescricao, eventoEhReuniao, digitosParaJids } = require('./lib/gcalParse');
+const { classificarConfirmacao } = require('./lib/confirmacao');
+const gcal = require('./integrations/googleCalendar');
 
 // ✂️ LÂMINA DE CORTE: Transforma "Merci Delicatessen Restaurante e Pizzaria LTDA" em "Merci Delicatessen"
 function limparNomeEmpresa(nomeOriginal) {
@@ -3559,6 +3563,134 @@ const mensagensSplit = textoFinal.split('[QUEBRA]').map(t => t.trim()).filter(t 
 
 
 // ============================================================================
+// 📅 CONFIRMAÇÃO DIÁRIA DE REUNIÕES (Google Agenda) — opt-in POR TENANT
+// ============================================================================
+// Lê a agenda do tenant, extrai o telefone da DESCRIÇÃO do evento e manda WhatsApp
+// confirmando presença. Marca ❓ no card do lead e no título do evento. A resposta
+// (✅/❌) é tratada no workerIA (hook de confirmação). Isolamento total: só roda pra
+// tenants com confirmacao_ativa=true e dispara pelo chip do PRÓPRIO tenant.
+
+// Mesmo dia no fuso BRT (-03:00)? Compara as datas deslocadas 3h.
+function _ehHojeBRT(iso) {
+    if (!iso) return false;
+    const d1 = new Date(new Date(iso).getTime() - 3 * 3600 * 1000).toISOString().slice(0, 10);
+    const d2 = new Date(Date.now() - 3 * 3600 * 1000).toISOString().slice(0, 10);
+    return d1 === d2;
+}
+
+async function processarConfirmacoesDeUmTenant(userId) {
+    const { data: conn } = await supabase.from('calendar_connections')
+        .select('calendar_id, confirmacao_ativa').eq('user_id', userId).maybeSingle();
+    if (!conn || !conn.confirmacao_ativa || !conn.calendar_id) return { ok: false, motivo: 'nao_configurado' };
+
+    // Chip PRONTO do tenant — dispara por ele (isolamento).
+    const entrada = [...sessions.entries()].find(([, s]) => s.userId === userId && s.ready);
+    if (!entrada) {
+        enviarAlerta(`📅 *Confirmação de reuniões*: nenhum chip conectado pro tenant \`${userId.slice(0, 8)}\`. Tento de novo no próximo ciclo.`).catch(() => {});
+        return { ok: false, motivo: 'sem_chip' };
+    }
+    const [instanceId, sess] = entrada;
+    const regras = await getRegrasEmCache(instanceId);
+    const nomeAgente = regras?.agent_name || 'nossa equipe';
+    const nomeEmpresa = regras?.company_name || 'nossa equipe';
+
+    let eventos = [];
+    try { eventos = await gcal.listarEventosDeHoje(userId, conn.calendar_id); }
+    catch (e) { console.error(`❌ [CONFIRMA] Falha ao ler agenda do tenant ${userId.slice(0, 8)}: ${e.message}`); return { ok: false, motivo: 'erro_agenda' }; }
+
+    let enviados = 0, pulados = 0;
+    for (const ev of eventos) {
+        if (!eventoEhReuniao(ev)) { pulados++; continue; }
+        const digitos = extrairTelefoneDescricao(ev.description);
+        if (!digitos) { console.log(`⏭️ [CONFIRMA] Evento "${ev.summary}" sem telefone na descrição — pulado.`); pulados++; continue; }
+        const jids = digitosParaJids(digitos);
+        if (!jids.length) { pulados++; continue; }
+
+        // Idempotência: já pedimos confirmação hoje pra esse evento? Não repete.
+        const { data: existente } = await supabase.from('leads')
+            .select('id, whatsapp_id, dono, confirmacao_pedido_em')
+            .eq('gcal_event_id', ev.id).eq('user_id', userId).maybeSingle();
+        if (existente && _ehHojeBRT(existente.confirmacao_pedido_em)) continue;
+
+        // Acha lead por qualquer variação de JID (dentro do tenant).
+        let lead = existente || null;
+        if (!lead) {
+            for (const jid of jids) {
+                const { data } = await supabase.from('leads').select('id, whatsapp_id, dono')
+                    .eq('whatsapp_id', jid).eq('user_id', userId).maybeSingle();
+                if (data) { lead = data; break; }
+            }
+        }
+
+        const convidado = Array.isArray(ev.attendees)
+            ? ev.attendees.find(a => a.email && a.email.toLowerCase() !== (ev.organizer?.email || '').toLowerCase())
+            : null;
+        const nomeConvidado = convidado?.displayName || null;
+        const jidEnvio = lead?.whatsapp_id || jids[0];
+        const primeiroNome = saudacaoPrimeiroNome(lead?.dono || nomeConvidado, 'tudo bem');
+        const horaReuniao = ev.start?.dateTime
+            ? new Date(ev.start.dateTime).toLocaleTimeString('pt-BR', { hour: '2-digit', minute: '2-digit', timeZone: 'America/Sao_Paulo' })
+            : 'hoje';
+
+        const tpl = regras?.opening_templates?.confirmacao_reuniao;
+        const msg = (tpl || `${primeiroNome}, aqui é ${nomeAgente} da ${nomeEmpresa}. Passando pra confirmar nossa reunião de hoje às ${horaReuniao}. Você consegue participar?`)
+            .replace(/\$\{primeiroNome\}/g, primeiroNome)
+            .replace(/\$\{hora\}/g, horaReuniao)
+            .replace(/\$\{nomeAgente\}/g, nomeAgente)
+            .replace(/\$\{nomeMinhaEmpresa\}/g, nomeEmpresa);
+
+        const patch = {
+            gcal_event_id: ev.id,
+            gcal_calendar_id: conn.calendar_id,
+            calendly_event_at: ev.start?.dateTime || null,
+            confirmacao_status: 'pendente',
+            confirmacao_pedido_em: new Date().toISOString(),
+        };
+        try {
+            if (lead) {
+                await supabase.from('leads').update(patch).eq('id', lead.id);
+            } else {
+                await supabase.from('leads').insert({
+                    whatsapp_id: jidEnvio, user_id: userId, instance_id: instanceId,
+                    name: nomeConvidado || 'Convidado', dono: extrairNomeHumano(nomeConvidado) || null,
+                    origin: 'gcal_confirmacao', status: 'booked', ...patch,
+                });
+            }
+            await enviarMensagemIA(sess.sock, jidEnvio, { text: msg }, instanceId);
+            await db.saveMessage(jidEnvio, 'assistant', msg, instanceId);
+            gcal.atualizarEmojiTitulo(userId, conn.calendar_id, ev.id, '❓').catch(() => {});
+            enviados++;
+            console.log(`📅 [CONFIRMA] Confirmação enviada p/ ${primeiroNome} (${jidEnvio}) — reunião ${horaReuniao}.`);
+        } catch (e) {
+            console.error(`❌ [CONFIRMA] Falha ao enviar p/ ${jidEnvio}: ${e.message}`);
+        }
+        await delay(Math.floor(Math.random() * 20000) + 20000); // ritmo humano entre envios
+    }
+    console.log(`📅 [CONFIRMA] Tenant ${userId.slice(0, 8)}: ${enviados} enviado(s), ${pulados} pulado(s).`);
+    return { ok: true, enviados, pulados };
+}
+
+// Varre todos os tenants opt-in; roda 1x/dia/tenant a partir da hora configurada (idempotente).
+async function varrerConfirmacoesDiarias() {
+    const horaAtual = new Date(new Date().toLocaleString('en-US', { timeZone: 'America/Sao_Paulo' })).getHours();
+    const hojeStr = new Date(Date.now() - 3 * 3600 * 1000).toISOString().slice(0, 10);
+    const { data: conns } = await supabase.from('calendar_connections')
+        .select('user_id, confirmacao_hora').eq('confirmacao_ativa', true);
+    if (!conns || !conns.length) return;
+    global.ultimaConfirmacaoPorTenant = global.ultimaConfirmacaoPorTenant || {};
+    for (const c of conns) {
+        const hora = Number.isInteger(c.confirmacao_hora) ? c.confirmacao_hora : 11;
+        if (horaAtual < hora) continue;                                         // ainda não deu a hora dele
+        if (global.ultimaConfirmacaoPorTenant[c.user_id] === hojeStr) continue; // já rodou hoje
+        try {
+            await processarConfirmacoesDeUmTenant(c.user_id);
+            global.ultimaConfirmacaoPorTenant[c.user_id] = hojeStr;
+        } catch (e) { console.error(`❌ [CONFIRMA] Tenant ${c.user_id?.slice(0, 8)}: ${e.message}`); }
+    }
+}
+
+
+// ============================================================================
 // 🔄 LOOP TRIPLO DE RECUPERAÇÃO E FOLLOW-UP (OTIMIZADO)
 // ============================================================================
 let vigiaEmExecucao = false; 
@@ -3882,10 +4014,12 @@ await delay(jitterAntiBan);
             const vinteQuatroHorasISO   = new Date(agora + 24 * 60 * 60 * 1000).toISOString();
             const vinteCincoHorasISO    = new Date(agora + 25 * 60 * 60 * 1000).toISOString();
 
+            // status: o webhook do Calendly grava 'booked' (server.js), não 'closed' — filtrar só
+            // 'closed' fazia o lembrete NUNCA disparar. Aceita ambos por segurança.
             const { data: leadsReuniao } = await supabase
                 .from('leads')
                 .select('id, name, whatsapp_id, instance_id, dono, calendly_event_at')
-                .eq('status', 'closed')
+                .in('status', ['booked', 'closed'])
                 .eq('calendly_booked', true)
                 .is('reminder_sent', null)
                 .gte('calendly_event_at', vinteQuatroHorasISO)
@@ -3912,6 +4046,10 @@ await delay(jitterAntiBan);
                     await delay(Math.floor(Math.random() * 30000) + 30000);
                 }
             }
+
+            // 📅 CONFIRMAÇÃO DIÁRIA DE REUNIÕES (opt-in por tenant) — 1x/dia/tenant a partir da
+            // hora configurada. Idempotente por evento, então rodar no ciclo de 5min é seguro.
+            await varrerConfirmacoesDiarias().catch(e => console.error(`❌ [CONFIRMA] varredura: ${e.message}`));
         }
 
         // ====================================================================
@@ -4159,9 +4297,36 @@ if (funilEncerrado) {
         // Vira flag DURO pro closer acolher em vez de disparar qualificação abrupta no 1º turno.
         const primeiroContato = !historico.some(m => m.role === 'assistant');
 
+        const ultimaMsg = historico[historico.length - 1].content;
+
+        // 📅 HOOK DE CONFIRMAÇÃO DE REUNIÃO: se esse lead recebeu um pedido de confirmação hoje,
+        // interpretamos a resposta (✅/❌) e NÃO rodamos o funil de venda. 'indefinido' segue normal.
+        if (lead.confirmacao_status === 'pendente' && _ehHojeBRT(lead.calendly_event_at)) {
+            const veredito = classificarConfirmacao(ultimaMsg);
+            if (veredito !== 'indefinido') {
+                const primeiroNome = saudacaoPrimeiroNome(lead.dono, 'perfeito');
+                const horaR = lead.calendly_event_at
+                    ? new Date(lead.calendly_event_at).toLocaleTimeString('pt-BR', { hour: '2-digit', minute: '2-digit', timeZone: 'America/Sao_Paulo' })
+                    : 'no horário';
+                const novoStatus = veredito === 'confirmado' ? 'confirmado' : 'desmarcado';
+                const emoji = veredito === 'confirmado' ? '✅' : '❌';
+                await supabase.from('leads').update({ confirmacao_status: novoStatus }).eq('id', lead.id);
+                if (lead.gcal_event_id && lead.gcal_calendar_id) {
+                    gcal.atualizarEmojiTitulo(lead.user_id, lead.gcal_calendar_id, lead.gcal_event_id, emoji).catch(() => {});
+                }
+                const ack = veredito === 'confirmado'
+                    ? `${primeiroNome}, combinado! Tô te esperando às ${horaR} então. Até já 🙌`
+                    : `Sem problema, ${primeiroNome}. Quer que eu veja um outro horário pra gente remarcar?`;
+                const sockConf = instancia?.sock || sessions.get(instanceId)?.sock;
+                if (sockConf) await enviarMensagemIA(sockConf, whatsappId, { text: ack }, instanceId);
+                await db.saveMessage(whatsappId, 'assistant', ack, instanceId);
+                console.log(`📅 [CONFIRMA] ${lead.name}: ${novoStatus} (resposta: "${ultimaMsg.slice(0, 40)}").`);
+                return; // confirmação tratada — não aciona o funil de venda
+            }
+        }
+
 // 🚀 Executa os 3 agentes EM PARALELO com SKIP INTELIGENTE
         console.log(`🧠 [WORKER-IA] Despachando Router + Intel + Profiler em paralelo para ${lead.name}...`);
-        const ultimaMsg = historico[historico.length - 1].content;
 
         // 🎯 Mensagens de 1-2 palavras ("oi", "ok", "sim") não geram análise útil
         // e fazem o Intel alucinar. Então pulamos esses 2 agentes e economizamos ~1.5s + evitamos invenção.
@@ -5277,5 +5442,8 @@ module.exports = {
                 dentro_janela_08_18: dentroDaJanela,
             }
         };
-    }
+    },
+
+    // 📅 Dispara a confirmação de reuniões AGORA pro tenant (usado pelo endpoint de teste no staging).
+    rodarConfirmacaoAgora: async (userId) => processarConfirmacoesDeUmTenant(userId),
 };

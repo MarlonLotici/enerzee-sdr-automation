@@ -219,6 +219,21 @@ const [botLogs, setBotLogs] = useState([]);
     const [settingsOk, setSettingsOk] = useState(false);
     const [applyingPersona, setApplyingPersona] = useState(false);
     const [personaMsg, setPersonaMsg] = useState(null);
+    // — Google Agenda (confirmação diária de reuniões) —
+    const [gcalConfig, setGcalConfig] = useState(null); // { google_email, calendar_id, confirmacao_ativa, confirmacao_hora }
+    const [gcalConectado, setGcalConectado] = useState(false);
+    const [gcalCalendars, setGcalCalendars] = useState([]);
+    const [gcalMsg, setGcalMsg] = useState(null);
+    const [gcalBusy, setGcalBusy] = useState(false);
+    // Retorno do OAuth do Google (?gcal=ok|erro): abre Settings e mostra o resultado.
+    useEffect(() => {
+        const p = new URLSearchParams(window.location.search).get('gcal');
+        if (!p) return;
+        window.history.replaceState({}, '', window.location.pathname);
+        if (p === 'ok') { setGcalMsg({ ok: true, text: '✓ Google Agenda conectada!' }); openSettings(); }
+        else setGcalMsg({ ok: false, text: 'Não foi possível conectar a Google Agenda. Tente de novo.' });
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+    }, []);
     // — Cérebro da Conversa (tenant_prompts) —
     const [showPrompts, setShowPrompts] = useState(false);
     const [promptsForm, setPromptsForm] = useState({ system_prompt: '', qualifier_prompt: '', closer_prompt: '', objection_prompt: '' });
@@ -487,7 +502,7 @@ if (session?.user?.id) checkBriefing()
         // Chip é efêmero; lead de chip removido tem instance_id=null. Filtrar por user_id garante que
         // nenhum lead entre em "limbo" quando o chip cai/é deletado, inclusive com zero chip conectado.
         const { data } = await supabase.from('leads')
-            .select('id, name, phone, status, niche, dono, cnpj, bairro, cep, porte, capital_social_numeric, whatsapp_id, instance_id, lat, lng, created_at, last_contact_at, is_paused, manual_pause, current_stage, lead_temperature, followup_count, opening_template, backup_phones')
+            .select('id, name, phone, status, niche, dono, cnpj, bairro, cep, porte, capital_social_numeric, whatsapp_id, instance_id, lat, lng, created_at, last_contact_at, is_paused, manual_pause, current_stage, lead_temperature, followup_count, opening_template, backup_phones, confirmacao_status')
             .eq('user_id', userId)
             .order('created_at', { ascending: false })
             .limit(10000);
@@ -591,6 +606,8 @@ if (session?.user?.id) checkBriefing()
             opening_c: data?.opening_templates?.padrao?.[2] || '',
         });
         if (data?.notes != null) setNotesContent(data.notes);
+        setGcalMsg(null);
+        fetchGcal();
         setShowSettings(true);
     };
 
@@ -646,6 +663,65 @@ if (session?.user?.id) checkBriefing()
         } finally {
             setApplyingPersona(false);
         }
+    };
+
+    // ── Google Agenda ──────────────────────────────────────────────
+    const _authHeader = async () => {
+        const { data: { session: s } } = await supabase.auth.getSession();
+        return { 'Content-Type': 'application/json', 'Authorization': `Bearer ${s?.access_token}` };
+    };
+    const fetchGcal = async () => {
+        try {
+            const headers = await _authHeader();
+            const resp = await fetch('/api/google/confirmacao/config', { headers });
+            const json = await resp.json();
+            if (json.ok) {
+                setGcalConectado(json.conectado);
+                setGcalConfig(json.config || { calendar_id: '', confirmacao_ativa: false, confirmacao_hora: 11 });
+                if (json.conectado) {
+                    const rc = await fetch('/api/google/calendars', { headers });
+                    const jc = await rc.json();
+                    if (jc.ok) setGcalCalendars(jc.calendars || []);
+                }
+            }
+        } catch { /* silencioso — a seção só não carrega */ }
+    };
+    const conectarGoogle = async () => {
+        setGcalBusy(true); setGcalMsg(null);
+        try {
+            const resp = await fetch('/api/google/oauth/start', { headers: await _authHeader() });
+            const json = await resp.json();
+            if (!resp.ok || !json.url) throw new Error(json.error || 'Falha ao iniciar conexão.');
+            window.location.href = json.url; // redireciona pro consentimento do Google
+        } catch (err) {
+            setGcalMsg({ ok: false, text: err.message }); setGcalBusy(false);
+        }
+    };
+    const salvarGcalConfig = async (patch) => {
+        setGcalBusy(true); setGcalMsg(null);
+        try {
+            const resp = await fetch('/api/google/confirmacao/config', {
+                method: 'POST', headers: await _authHeader(), body: JSON.stringify(patch),
+            });
+            const json = await resp.json();
+            if (!resp.ok || !json.ok) throw new Error(json.error || 'Falha ao salvar.');
+            setGcalConfig(c => ({ ...c, ...patch }));
+            setGcalMsg({ ok: true, text: '✓ Configuração salva.' });
+        } catch (err) {
+            setGcalMsg({ ok: false, text: err.message });
+        } finally { setGcalBusy(false); }
+    };
+    const rodarConfirmacaoAgora = async () => {
+        setGcalBusy(true); setGcalMsg(null);
+        try {
+            const resp = await fetch('/api/google/confirmacao/run-now', { method: 'POST', headers: await _authHeader() });
+            const json = await resp.json();
+            if (!resp.ok || !json.ok) throw new Error(json.error || 'Falha ao disparar.');
+            const r = json.resultado || {};
+            setGcalMsg({ ok: true, text: r.ok ? `✓ ${r.enviados || 0} confirmação(ões) enviada(s).` : `Nada enviado (${r.motivo || 'sem eventos'}).` });
+        } catch (err) {
+            setGcalMsg({ ok: false, text: err.message });
+        } finally { setGcalBusy(false); }
     };
 
     const openPrompts = async () => {
@@ -1126,6 +1202,72 @@ return (
                             ))}
                         </div>
                         <p className="text-[9px] text-slate-600 mt-2">O SDR sorteia uma das aberturas preenchidas a cada novo lead. Chips novos herdam essas mensagens automaticamente.</p>
+                    </div>
+
+                    {/* — Google Agenda: confirmação diária de reuniões — */}
+                    <div>
+                        <p className="text-[9px] font-black text-amber-500/60 uppercase tracking-widest mb-1">Google Agenda — Confirmação de Reuniões</p>
+                        <p className="text-[9px] text-slate-600 mb-2">O SDR liga pra sua agenda e confirma no WhatsApp, todo dia, quem tem reunião marcada — marcando ✅/❌/❓ no card e no evento.</p>
+                        {!gcalConectado ? (
+                            <button
+                                type="button"
+                                onClick={conectarGoogle}
+                                disabled={gcalBusy}
+                                className="w-full h-10 rounded-md bg-white/5 border border-white/15 text-slate-200 hover:bg-white/10 text-xs font-black uppercase tracking-widest transition-colors flex items-center justify-center gap-2 disabled:opacity-50"
+                            >
+                                <Calendar className="h-3.5 w-3.5" /> Conectar Google Agenda
+                            </button>
+                        ) : (
+                            <div className="space-y-2.5">
+                                <p className="text-[10px] text-emerald-400">✓ Conectado{gcalConfig?.google_email ? `: ${gcalConfig.google_email}` : ''}</p>
+                                <div>
+                                    <label className="text-[10px] font-black text-amber-300/80 uppercase tracking-widest block mb-1.5">Agenda das reuniões</label>
+                                    <select
+                                        value={gcalConfig?.calendar_id || ''}
+                                        onChange={e => salvarGcalConfig({ calendar_id: e.target.value })}
+                                        className="w-full bg-black/30 border border-white/10 text-white text-sm rounded-md px-3 h-10 focus:outline-none focus:border-amber-500"
+                                    >
+                                        <option value="">Selecione a agenda…</option>
+                                        {gcalCalendars.map(c => (
+                                            <option key={c.id} value={c.id}>{c.summary}{c.primary ? ' (principal)' : ''}</option>
+                                        ))}
+                                    </select>
+                                </div>
+                                <div className="flex items-center gap-3">
+                                    <label className="flex items-center gap-2 text-[11px] text-slate-300 cursor-pointer">
+                                        <input
+                                            type="checkbox"
+                                            checked={!!gcalConfig?.confirmacao_ativa}
+                                            onChange={e => salvarGcalConfig({ confirmacao_ativa: e.target.checked })}
+                                            className="accent-amber-500"
+                                        />
+                                        Confirmar reuniões automaticamente
+                                    </label>
+                                    <div className="flex items-center gap-1 ml-auto">
+                                        <span className="text-[10px] text-slate-500">às</span>
+                                        <input
+                                            type="number" min={0} max={23}
+                                            value={gcalConfig?.confirmacao_hora ?? 11}
+                                            onChange={e => setGcalConfig(c => ({ ...c, confirmacao_hora: Number(e.target.value) }))}
+                                            onBlur={e => salvarGcalConfig({ confirmacao_hora: Number(e.target.value) })}
+                                            className="w-14 bg-black/30 border border-white/10 text-white text-sm h-9 rounded-md text-center focus:outline-none focus:border-amber-500"
+                                        />
+                                        <span className="text-[10px] text-slate-500">h</span>
+                                    </div>
+                                </div>
+                                <button
+                                    type="button"
+                                    onClick={rodarConfirmacaoAgora}
+                                    disabled={gcalBusy || !gcalConfig?.calendar_id}
+                                    className="w-full h-9 rounded-md bg-amber-500/10 border border-amber-500/25 text-amber-300 hover:bg-amber-500/20 text-[11px] font-black uppercase tracking-widest transition-colors disabled:opacity-50"
+                                >
+                                    {gcalBusy ? 'Processando…' : 'Testar agora (disparar confirmações de hoje)'}
+                                </button>
+                            </div>
+                        )}
+                        {gcalMsg && (
+                            <p className={`text-[10px] mt-1.5 ${gcalMsg.ok ? 'text-emerald-400' : 'text-red-400'}`}>{gcalMsg.text}</p>
+                        )}
                     </div>
 
                     {/* — Cérebro da Conversa — */}
@@ -2457,6 +2599,18 @@ function LeadCard({ lead, isSelected, onSelect, onView, onEdit, onChat, onCall }
             {/* LINHA 2: IDENTIFICAÇÃO E CONTATO RÁPIDO */}
             <div className="mb-2">
                 <h3 className="text-[13px] font-black text-white tracking-tight leading-none uppercase truncate group-hover:text-blue-400 transition-colors">{lead?.name || "Sem Nome"}</h3>
+                {/* Confirmação de reunião (Google Agenda): ✅ confirmado / ❌ desmarcado / ❓ pendente */}
+                {lead?.confirmacao_status && (
+                    <span className={`inline-flex items-center gap-1 mt-1.5 text-[8px] font-black uppercase tracking-tighter px-1.5 py-0.5 rounded ${
+                        lead.confirmacao_status === 'confirmado' ? 'bg-emerald-500/15 text-emerald-400' :
+                        lead.confirmacao_status === 'desmarcado' ? 'bg-red-500/15 text-red-400' :
+                        'bg-amber-500/15 text-amber-400'
+                    }`}>
+                        {lead.confirmacao_status === 'confirmado' ? '✅ Confirmado'
+                            : lead.confirmacao_status === 'desmarcado' ? '❌ Desmarcou'
+                            : '❓ Aguardando'}
+                    </span>
+                )}
                 <div className="flex flex-col gap-1 mt-2">
                     <div className="flex items-center gap-2">
                       <Badge className="bg-amber-500/10 text-amber-400 border-none text-[7px] h-3 px-1 uppercase leading-none">{lead?.porte || 'ME'}</Badge>
