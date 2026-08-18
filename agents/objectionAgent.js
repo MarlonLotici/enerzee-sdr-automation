@@ -1,11 +1,5 @@
 // agents/objectionAgent.js
-const { OpenAI } = require('openai');
-const together = new OpenAI({
-    apiKey: process.env.TOGETHER_API_KEY,
-    baseURL: 'https://api.together.xyz/v1',
-});
-
-const MODELO_PESADO = "meta-llama/Llama-3.3-70B-Instruct-Turbo";
+const { chamarLLM, MODELOS } = require('../lib/llm');
 
 /**
  * Agente especialista em quebra de objeções (The Tank).
@@ -50,19 +44,12 @@ TÁTICA OBRIGATÓRIA (3 PASSOS):
 `;
 
     try {
-        const res = await together.chat.completions.create({
-            messages: [
-                { role: 'system', content: promptTank },
-                ...historico 
-            ],
-            model: MODELO_PESADO,
-            temperature: 0.35, // Ligeiramente criativo para gerar empatia natural
-            max_tokens: 160,
-            presence_penalty: 0.2, // Penaliza repetição do que o cliente acabou de dizer
-            frequency_penalty: 0.1
+        const resposta = await chamarLLM({
+            system: promptTank,
+            messages: historico,
+            model: MODELOS.cerebro,
+            maxTokens: 160,
         });
-        
-        const resposta = res.choices[0]?.message?.content;
 
         // 🛡️ BLINDAGEM DE ALTA PERFORMANCE: A IA esqueceu a tag? Nós injetamos à força via código.
         if (resposta && !resposta.includes('[ESTAGIO:')) {

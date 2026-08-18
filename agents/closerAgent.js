@@ -1,14 +1,7 @@
 // agents/closerAgent.js
-const { OpenAI } = require('openai');
+const { chamarLLM, MODELOS } = require('../lib/llm');
 const { getNicheData } = require('../nicheCache');
 const { alertaDegradacaoIA } = require('../notifier');
-
-const together = new OpenAI({
-    apiKey: process.env.TOGETHER_API_KEY,
-    baseURL: 'https://api.together.xyz/v1',
-});
-
-const MODELO_PESADO = "meta-llama/Llama-3.3-70B-Instruct-Turbo";
 
 /**
  * @param {Array}  historico          - Mensagens formatadas [{role, content}]
@@ -281,34 +274,14 @@ ${isVoz ? `[REGRAS ABSOLUTAS DE ALTA PERFORMANCE — VOZ]
 5. Texto puro: sem asteriscos, sem markdown.
 `}`;
 
-    // Chamada ao Together com 1 retry curto em caso de 429 (rate limit) antes de degradar —
-    // esta é a resposta que vai pro cliente, então vale evitar o fallback genérico num pico.
-    const chamarCloser = () => together.chat.completions.create({
-        messages: [
-            { role: 'system', content: promptFinal },
-            ...historico
-        ],
-        model: MODELO_PESADO,
-        temperature: 0.35,
-        max_tokens: 200,
-        presence_penalty: 0.1,
-        frequency_penalty: 0.15
-    });
-
+    // Resposta que vai pro cliente → cérebro (Sonnet 5). O adaptador trata 429.
     try {
-        let res;
-        try {
-            res = await chamarCloser();
-        } catch (e1) {
-            if (e1?.status === 429) {
-                await new Promise(r => setTimeout(r, 1500));
-                res = await chamarCloser();
-            } else {
-                throw e1;
-            }
-        }
-
-        const resposta = res.choices[0]?.message?.content;
+        const resposta = await chamarLLM({
+            system: promptFinal,
+            messages: historico,
+            model: MODELOS.cerebro,
+            maxTokens: 200,
+        });
 
         if (!resposta || resposta.trim().length < 3) {
             console.warn(`⚠️ [CLOSER] LLM devolveu resposta vazia. Intenção: ${intencao} | Tipo: ${instanceType}`);

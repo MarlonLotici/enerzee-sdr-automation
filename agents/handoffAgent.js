@@ -1,14 +1,4 @@
-const { OpenAI } = require('openai');
-const Groq = require('groq-sdk');
-
-const together = new OpenAI({
-    apiKey: process.env.TOGETHER_API_KEY,
-    baseURL: 'https://api.together.xyz/v1',
-});
-const groq = new Groq({ apiKey: process.env.GROQ_API_KEY });
-
-const MODELO_LEVE    = "meta-llama/Llama-3.3-70B-Instruct-Turbo";
-const MODELO_DECISOR = "llama-3.3-70b-versatile";
+const { chamarLLM, MODELOS } = require('../lib/llm');
 
 // ─────────────────────────────────────────────────────────────────────────────
 // EXTRAÇÃO DE DADOS DO DECISOR
@@ -36,14 +26,7 @@ ${ultimasMsgs.map(m => `[${m.role}]: ${m.content}`).join('\n')}
 Retorne apenas o JSON. Exemplo válido: {"nomeDecisor":"Carlos","telefoneDecisor":"5548999991234"}`;
 
     try {
-        const res = await groq.chat.completions.create({
-            messages: [{ role: 'user', content: prompt }],
-            model: MODELO_DECISOR,
-            temperature: 0.0,
-            max_tokens: 60,
-        });
-
-        const raw = res.choices[0]?.message?.content?.trim() || '{}';
+        const raw = (await chamarLLM({ messages: [{ role: 'user', content: prompt }], model: MODELOS.rapido, maxTokens: 60 }) || '').trim() || '{}';
         const parsed = JSON.parse(raw);
 
         return {
@@ -69,17 +52,8 @@ async function gerarResumoHandoff(historico) {
     Seja técnico e direto. Este texto será injetado no cérebro da IA para ela não se perder. NUNCA gere fala simulada.`;
 
     try {
-        const res = await together.chat.completions.create({
-            messages: [
-                { role: 'system', content: prompt },
-                ...ultimasMsgs
-            ],
-            model: MODELO_LEVE,
-            temperature: 0.1, // Quase zero, queremos fatos, não criatividade
-            max_tokens: 100
-        });
-
-        return res.choices[0]?.message?.content || "";
+        const res = await chamarLLM({ system: prompt, messages: ultimasMsgs, model: MODELOS.rapido, maxTokens: 100 });
+        return res || "";
     } catch (error) {
         console.error("❌ Erro no Handoff Agent:", error.message);
         return "";

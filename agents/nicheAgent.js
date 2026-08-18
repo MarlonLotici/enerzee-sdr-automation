@@ -1,7 +1,4 @@
-const Groq = require('groq-sdk');
-
-const groq  = new Groq({ apiKey: process.env.GROQ_API_KEY });
-const MODELO = 'llama-3.1-8b-instant';
+const { chamarLLM, MODELOS } = require('../lib/llm');
 
 /**
  * Gera inteligência de vendas solar para um nicho comercial desconhecido.
@@ -22,14 +19,7 @@ Retorne SOMENTE um JSON válido com exatamente estas 3 chaves. Sem markdown, sem
 Exemplo de retorno válido:
 {"equipamentos":"freezers, câmaras frias, iluminação LED","dor_principal":"freezer rodando 24h eleva muito a conta de luz","angulo_venda":"com solar você zera o custo do freezer que nunca desliga"}`;
 
-    const res = await groq.chat.completions.create({
-        messages: [{ role: 'user', content: prompt }],
-        model:       MODELO,
-        temperature: 0.1,
-        max_tokens:  120,
-    });
-
-    const raw = res.choices[0]?.message?.content?.trim() || '{}';
+    const raw = (await chamarLLM({ messages: [{ role: 'user', content: prompt }], model: MODELOS.rapido, maxTokens: 120 }) || '').trim() || '{}';
 
     let parsed;
     try {

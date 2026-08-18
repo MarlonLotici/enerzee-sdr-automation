@@ -1,7 +1,4 @@
-const Groq = require('groq-sdk');
-
-const groq  = new Groq({ apiKey: process.env.GROQ_API_KEY });
-const MODELO = 'llama-3.3-70b-versatile';
+const { chamarLLM, MODELOS } = require('../lib/llm');
 
 /**
  * Audita uma conversa encerrada e retorna um relatório estruturado.
@@ -57,14 +54,7 @@ Exemplo de saída válida:
 {"desfecho":"PERDIDO_CARO","nota_ia":7,"erro_critico_ia":"A IA perguntou o valor da conta antes de qualificar o equipamento.","resumo_executivo":"Lead descartado por conta abaixo do mínimo após qualificação incompleta."}`;
 
     try {
-        const res = await groq.chat.completions.create({
-            messages: [{ role: 'user', content: prompt }],
-            model:       MODELO,
-            temperature: 0.0,
-            max_tokens:  200,
-        });
-
-        const raw = res.choices[0]?.message?.content?.trim() || '{}';
+        const raw = (await chamarLLM({ messages: [{ role: 'user', content: prompt }], model: MODELOS.rapido, maxTokens: 200 }) || '').trim() || '{}';
         const parsed = JSON.parse(raw);
 
         // Valida estrutura mínima antes de retornar

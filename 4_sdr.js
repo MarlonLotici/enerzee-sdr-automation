@@ -197,14 +197,9 @@ const pausasIntradiarias = new Map(); // instanceId → { dataGerada, breaks: [{
 
 // --- CONFIGURAÇÃO E SEGURANÇA ---
 const supabase = createClient(process.env.SUPABASE_URL, process.env.SUPABASE_KEY);
-const { OpenAI } = require('openai');
-const groq = new Groq({ apiKey: process.env.GROQ_API_KEY }); // mantém para Whisper
-const together = new OpenAI({
-    apiKey: process.env.TOGETHER_API_KEY,
-    baseURL: 'https://api.together.xyz/v1',
-});
-const MODELO_CEREBRO = "meta-llama/Llama-3.3-70B-Instruct-Turbo";
-const MODELO_VISAO = "meta-llama/Llama-3.2-11B-Vision-Instruct-Turbo";
+const groq = new Groq({ apiKey: process.env.GROQ_API_KEY }); // mantido SÓ para transcrição de áudio (Whisper)
+// 🤖 Todo LLM de texto/visão passa pelo adaptador único do Claude (lib/llm.js).
+const { chamarLLM, MODELOS } = require('./lib/llm');
 
 // === INÍCIO CONFIG REDIS & BULLMQ ===
 const { Queue, Worker } = require('bullmq');
@@ -1283,18 +1278,13 @@ async function gerarRespostaIA(historico, contextoLead, instanceData) {
 
     for (let tentativa = 1; tentativa <= MAX_TENTATIVAS; tentativa++) {
         try {
-            const chatCompletion = await together.chat.completions.create({
-                messages: [
-                    { role: 'system', content: promptFinal },
-                    ...historicoPodado
-                ],
-                model: MODELO_CEREBRO,
-                temperature: 0.3,
-                max_tokens: 180,
-                presence_penalty: 0.1,
-                frequency_penalty: 0.15
+            const respostaDaIA = await chamarLLM({
+                system: promptFinal,
+                messages: historicoPodado,
+                model: MODELOS.cerebro,
+                maxTokens: 180,
             });
-            const respostaDaIA = chatCompletion.choices[0].message.content;
+            if (!respostaDaIA) throw new Error('resposta vazia da LLM');
             return respostaDaIA.replace(/[\*_~`]/g, '');
         } catch (e) {
             console.error(`❌ [LLM] Tentativa ${tentativa}/${MAX_TENTATIVAS} falhou: ${e.message}`);
@@ -1311,15 +1301,10 @@ async function gerarRespostaIA(historico, contextoLead, instanceData) {
 
 async function executarLeituraIA(buffer) {
     try {
-        const completion = await groq.chat.completions.create({
-            messages: [{ 
-                role: "user", 
-                content: [
-                    { 
-                        type: "text", 
-                        text: `Você é um motor de extração de dados. 
-                        Analise a imagem e identifique se é uma conta de energia. 
-                        Se não for, retorne: {"error": "invalid_media"}. 
+        const rawResponse = await chamarLLM({
+            messages: [{ role: 'user', content: `Você é um motor de extração de dados.
+                        Analise a imagem e identifique se é uma conta de energia.
+                        Se não for, retorne: {"error": "invalid_media"}.
                         Se for, extraia EXATAMENTE neste formato JSON, convertendo valores para números puros:
                         {
                           "concessionaria": "nome da empresa",
@@ -1327,19 +1312,11 @@ async function executarLeituraIA(buffer) {
                           "consumo_kwh": 0,
                           "estado": "UF",
                           "mes_referencia": "MM/AAAA"
-                        }` 
-                    }, 
-                    { 
-                        type: "image_url", 
-                        image_url: { url: `data:image/jpeg;base64,${buffer.toString('base64')}` } 
-                    }
-                ] 
-            }],
-            model: MODELO_VISAO,
-            temperature: 0,
+                        }` }],
+            imagens: [{ media_type: 'image/jpeg', dataBase64: buffer.toString('base64') }],
+            model: MODELOS.visao,
+            maxTokens: 500,
         });
-
-        const rawResponse = completion.choices[0].message.content;
         const match = rawResponse.match(/\{[\s\S]*\}/);
         if (!match) return { error: "parse_error" };
 
@@ -2042,16 +2019,11 @@ async function extrairDataISO(textoData) {
     try {
         const agora = new Date(Date.now() - 3 * 60 * 60 * 1000); // BRT
         const hoje  = agora.toISOString().split('T')[0];
-        const res   = await groq.chat.completions.create({
-            model:       'llama-3.1-8b-instant',
-            temperature: 0,
-            max_tokens:  25,
-            messages: [{
-                role:    'system',
-                content: `Converta a expressão de data/hora "${textoData}" para ISO 8601 no fuso UTC-3 (BRT). Hoje é ${hoje}. Responda APENAS com a string ISO (ex: 2026-06-24T15:00:00-03:00), sem nenhum texto adicional.`
-            }]
-        });
-        const iso = res.choices[0]?.message?.content?.trim();
+        const iso = (await chamarLLM({
+            messages: [{ role: 'user', content: `Converta a expressão de data/hora "${textoData}" para ISO 8601 no fuso UTC-3 (BRT). Hoje é ${hoje}. Responda APENAS com a string ISO (ex: 2026-06-24T15:00:00-03:00), sem nenhum texto adicional.` }],
+            model: MODELOS.rapido,
+            maxTokens: 25,
+        }) || '').trim();
         if (!iso) return null;
         const d = new Date(iso);
         return isNaN(d.getTime()) ? null : d.toISOString();
@@ -2648,13 +2620,12 @@ if (fromMe) {
                 Texto extraído do PDF:
                 ${data.text}`;
 
-                const res = await groq.chat.completions.create({
-                    messages: [{ role: "user", content: promptPDF }],
-                    model: MODELO_CEREBRO,
-                    temperature: 0
+                const _pdfRaw = await chamarLLM({
+                    messages: [{ role: 'user', content: promptPDF }],
+                    model: MODELOS.rapido,
+                    maxTokens: 300,
                 });
-
-                const match = res.choices[0].message.content.match(/\{[\s\S]*\}/);
+                const match = (_pdfRaw || '').match(/\{[\s\S]*\}/);
                 analise = match ? JSON.parse(match[0]) : null;
             }
 
@@ -2832,13 +2803,12 @@ async function gerarResumoHandoff(historicoRecente) {
         const msgs = (historicoRecente || []).slice(-12)
             .map(m => `${m.role === 'user' ? 'Lead' : 'IA'}: ${m.content}`)
             .join('\n');
-        const res = await groq.chat.completions.create({
+        const res = await chamarLLM({
             messages: [{ role: 'user', content: `Analise o histórico de conversa de energia solar abaixo e gere um resumo executivo de no máximo 2 frases para o consultor humano assumir o chat. Foque em: 1. Perfil do negócio (o que é, porte), 2. Dor/Dados coletados (valor da conta se houver), 3. Motivo do travamento/handoff. Seja direto, sem introduções.\n\n${msgs}` }],
-            model: 'llama-3.1-8b-instant',
-            temperature: 0.2,
-            max_tokens: 100,
+            model: MODELOS.rapido,
+            maxTokens: 100,
         });
-        return res.choices[0].message.content.trim();
+        return (res || '').trim() || 'Resumo indisponível.';
     } catch (err) {
         console.error('[HANDOFF] Erro ao gerar resumo:', err.message);
         return 'Resumo indisponível.';
@@ -3316,16 +3286,14 @@ if (lead.opening_template && lead.opening_template.length > 15 && lead.opening_t
                 .replace(/\$\{capitalDesc\}/g,         capitalDesc)
                 .replace(/\$\{descontoEstimado\}/g,    descontoEstimado)
                 .replace(/\$\{nicheCtx\}/g,            nicheCtx ? '\nContexto do setor: ' + nicheCtx : '');
-            const llmPromise = groq.chat.completions.create({
+            const llmPromise = chamarLLM({
                 messages: [{ role: 'user', content: llmPromptFinal }],
-                model: 'llama-3.1-8b-instant',
-                temperature: 0.8,
-                max_tokens: 80,
+                model: MODELOS.rapido,
+                maxTokens: 80,
             });
             const timeoutPromise = new Promise((_, reject) =>
                 setTimeout(() => reject(new Error('timeout')), 3500));
-            const llmRes = await Promise.race([llmPromise, timeoutPromise]);
-            const llmTexto = llmRes.choices[0].message.content.trim().replace(/^["'`]|["'`]$/g, '');
+            const llmTexto = (await Promise.race([llmPromise, timeoutPromise]) || '').trim().replace(/^["'`]|["'`]$/g, '');
             if (llmTexto && llmTexto.length > 10) {
                 textoFinal = llmTexto;
                 console.log(`🧠 [LLM] Abertura gerada para ${lead.name}: "${textoFinal}"`);

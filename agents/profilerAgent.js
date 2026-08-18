@@ -1,6 +1,5 @@
 // agents/profilerAgent.js
-const Groq = require('groq-sdk');
-const groq = new Groq({ apiKey: process.env.GROQ_API_KEY });
+const { chamarLLM, MODELOS } = require('../lib/llm');
 const { alertaDegradacaoIA } = require('../notifier');
 
 async function analisarPerfil(ultimaMsg) {
@@ -18,13 +17,8 @@ async function analisarPerfil(ultimaMsg) {
     `;
 
     try {
-        const res = await groq.chat.completions.create({
-            messages: [{ role: "system", content: prompt }],
-            model: "llama-3.1-8b-instant", // Rápido e barato
-            temperature: 0.1,
-            max_tokens: 60,
-        });
-        return res.choices[0].message.content.trim();
+        const res = await chamarLLM({ messages: [{ role: 'user', content: prompt }], model: MODELOS.rapido, maxTokens: 60 });
+        return (res || '').trim() || "Mantenha o tom profissional e direto.";
     } catch (e) {
         console.error("❌ Erro no Profiler Agent:", e.message);
         alertaDegradacaoIA('profilerAgent', e).catch(() => {});

@@ -1,10 +1,6 @@
 // agents/routerAgent.js
-const Groq = require('groq-sdk');
-const groq = new Groq({ apiKey: process.env.GROQ_API_KEY });
+const { chamarLLM, MODELOS } = require('../lib/llm');
 const { alertaDegradacaoIA } = require('../notifier');
-
-// Usando o modelo mais rápido para latência zero na triagem
-const MODELO_ROTEADOR = "llama-3.1-8b-instant";
 
 async function classificarMensagem(ultimaMensagemLead) {
     // 🛡️ NÍVEL 1: Blindagem de Custo Zero (Bypass Cego)
@@ -131,28 +127,14 @@ MENSAGEM DO CLIENTE: "${ultimaMensagemLead}"
 Retorne APENAS a palavra da intenção. Nada de pontuação, aspas ou justificações.
 `.trim();
 
-    // Chamada à Groq com 1 retry curto em caso de 429 (rate limit) antes de degradar.
-    const chamarGroq = () => groq.chat.completions.create({
-        messages: [{ role: "system", content: prompt }],
-        model: MODELO_ROTEADOR,
-        temperature: 0.0, // Zero criatividade, queremos classificação determinística
-        max_tokens: 10,
-    });
-
+    // Chamada ao Claude (Haiku) — classificação determinística. O adaptador trata 429.
     try {
-        let res;
-        try {
-            res = await chamarGroq();
-        } catch (e1) {
-            if (e1?.status === 429) {
-                await new Promise(r => setTimeout(r, 1500));
-                res = await chamarGroq();
-            } else {
-                throw e1;
-            }
-        }
-
-        const resposta = res.choices[0].message.content.trim().toUpperCase();
+        const raw = await chamarLLM({
+            messages: [{ role: 'user', content: prompt }],
+            model: MODELOS.rapido,
+            maxTokens: 10,
+        });
+        const resposta = (raw || '').trim().toUpperCase();
 
         // Mapeamento à prova de balas
         if (resposta.includes('AGENDA_RETORNO') || resposta.includes('AGENDA')) return 'AGENDA_RETORNO';

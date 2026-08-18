@@ -1,7 +1,6 @@
 // agents/intelAgent.js
-const Groq = require('groq-sdk');
+const { chamarLLM, MODELOS } = require('../lib/llm');
 const { empresaConfiavelDoLead } = require('../lib/textPuros');
-const groq = new Groq({ apiKey: process.env.GROQ_API_KEY });
 
 async function analisarEmpresa(historico, lead) {
     // 🛡️ Blindagem 1: histórico muito curto = não tem o que analisar
@@ -49,13 +48,8 @@ Uma única frase curta. Sem tópicos, sem explicação, sem inventar.
     `.trim();
 
     try {
-        const res = await groq.chat.completions.create({
-            messages: [{ role: "system", content: prompt }],
-            model: "llama-3.1-8b-instant",
-            temperature: 0,  // 🎯 ZERO criatividade — evita alucinação
-            max_tokens: 80,
-        });
-        return res.choices[0].message.content.trim();
+        const res = await chamarLLM({ messages: [{ role: 'user', content: prompt }], model: MODELOS.rapido, maxTokens: 80 });
+        return (res || '').trim() || `Sem dados adicionais. Seguir Constituição padrão.`;
     } catch (e) {
         console.error("❌ Erro no Intel Agent:", e.message);
         return `Sem dados adicionais. Seguir Constituição padrão.`;
