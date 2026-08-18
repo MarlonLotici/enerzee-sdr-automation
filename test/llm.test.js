@@ -1,8 +1,8 @@
 'use strict';
 const test = require('node:test');
 const assert = require('node:assert/strict');
-// Env dummy pra o require do adaptador não estourar ao instanciar o client Anthropic.
-process.env.ANTHROPIC_API_KEY = process.env.ANTHROPIC_API_KEY || 'sk-ant-dummy';
+// Env dummy pra o require do adaptador não estourar ao instanciar o client Together.
+process.env.TOGETHER_API_KEY = process.env.TOGETHER_API_KEY || 'together-dummy';
 const { normalizarMensagens, extrairTexto, MODELOS } = require('../lib/llm');
 
 test('normalizarMensagens: vazio vira 1 turno user', () => {
@@ -31,11 +31,12 @@ test('normalizarMensagens: funde consecutivos do mesmo role e tira vazios', () =
     ]);
 });
 
-test('extrairTexto: concatena blocos text, ignora thinking, trata refusal/vazio', () => {
-    assert.equal(extrairTexto({ stop_reason: 'end_turn', content: [{ type: 'text', text: ' oi ' }, { type: 'thinking', thinking: 'x' }] }), 'oi');
-    assert.equal(extrairTexto({ stop_reason: 'refusal', content: [] }), '');
+test('extrairTexto: lê choices[0].message.content (formato OpenAI), sempre string, nunca lança', () => {
+    assert.equal(extrairTexto({ choices: [{ message: { content: ' oi ' } }] }), 'oi');
+    assert.equal(extrairTexto({ choices: [] }), '');            // sem choices → ''
+    assert.equal(extrairTexto({ choices: [{ message: {} }] }), ''); // message sem content → ''
     assert.equal(extrairTexto(null), '');
-    assert.equal(extrairTexto({ content: 'nao-array' }), '');
+    assert.equal(extrairTexto({}), '');
 });
 
 test('MODELOS: mapa central tem os 3 papéis', () => {
