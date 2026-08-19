@@ -19,6 +19,7 @@ const { enriquecerLeadIndividual } = require('./3_enrich');
 const db = require('./database');
 const emailService = require('./emailService'); // usado no preview de email (gerarCopyOutbound)
 const { alertaCalendly } = require('./notifier');
+const budgetGuard = require('./budgetGuard'); // teto de custo / uso do dia por tenant (Redis)
 
 // 📞 MOTOR DE LIGAÇÕES DE VOZ (Twilio Media Streams + Deepgram + ElevenLabs)
 // CARREGAMENTO DEFENSIVO: a pasta voice/ e o SQL de voz (add_voice_calling.sql) ainda não
@@ -812,6 +813,28 @@ app.get('/api/health', autenticarMiddleware, async (req, res) => {
             };
         });
         res.json({ ok: true, geradoEm: Date.now(), chips });
+    } catch (err) {
+        res.status(500).json({ error: err.message });
+    }
+});
+
+// 💸 USO DE CUSTO DO DIA (por tenant) — quanto a conta já gastou hoje (BRT) por tipo.
+// Lê os contadores do budgetGuard (Redis). Serve pra um card de custo no painel e pra
+// você enxergar margem por cliente antes de escalar. Não bloqueia nada — só reporta.
+app.get('/api/uso', autenticarMiddleware, async (req, res) => {
+    try {
+        const uid = req.user.id;
+        const tipos = ['llm_cerebro', 'llm_rapido', 'llm_visao', 'email'];
+        const usados = await Promise.all(tipos.map((t) => budgetGuard.consultar(uid, t)));
+        const uso = {};
+        tipos.forEach((t, i) => { uso[t] = usados[i] || 0; });
+        // Tetos configurados (mesmos defaults do lib/llm; email é por-chip, não global).
+        const limites = {
+            llm_cerebro: parseInt(process.env.BUDGET_LLM_CEREBRO_DIA, 10) || 5000,
+            llm_rapido:  parseInt(process.env.BUDGET_LLM_RAPIDO_DIA, 10)  || 12000,
+            llm_visao:   parseInt(process.env.BUDGET_LLM_VISAO_DIA, 10)   || 2000,
+        };
+        res.json({ ok: true, geradoEm: Date.now(), diaBRT: true, uso, limites });
     } catch (err) {
         res.status(500).json({ error: err.message });
     }

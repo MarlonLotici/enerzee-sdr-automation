@@ -200,6 +200,7 @@ const supabase = createClient(process.env.SUPABASE_URL, process.env.SUPABASE_KEY
 const groq = new Groq({ apiKey: process.env.GROQ_API_KEY }); // mantido SÓ para transcrição de áudio (Whisper)
 // 🤖 Todo LLM de texto/visão passa pelo adaptador único do Claude (lib/llm.js).
 const { chamarLLM, MODELOS } = require('./lib/llm');
+const { definirTenantLLM } = require('./lib/llmContext');
 
 // === INÍCIO CONFIG REDIS & BULLMQ ===
 const { Queue, Worker } = require('bullmq');
@@ -1246,6 +1247,10 @@ async function gerarRespostaIA(historico, contextoLead, instanceData) {
         console.error("❌ ERRO FATAL: user_id não encontrado. Impossível buscar o prompt.");
         return null;
     }
+
+    // 💸 Garante o tenant no contexto p/ o teto de custo (caso este cérebro seja
+    // chamado fora do workerIA — ex.: caminho de conversa humana).
+    definirTenantLLM(userId);
 
     // 2. Busca o Cérebro Centralizado
     const { data: brain } = await supabase
@@ -4247,6 +4252,10 @@ if (funilEncerrado) {
         // 2. Regras do chip primeiro — precisamos do provider antes de exigir socket.
         const instanceData = await getRegrasEmCache(instanceId);
         const ehOficial = instanceData?.whatsapp_provider === 'official';
+
+        // 💸 Marca o tenant do fluxo p/ o teto de custo de LLM contar por conta
+        // (cobre os agentes despachados abaixo, que não recebem userId na assinatura).
+        definirTenantLLM(lead.user_id || instanceData?.user_id);
 
         // Socket Baileys: exigido só para chips Baileys. Oficiais (Cloud API) respondem por
         // HTTP e não têm socket na memória — pulam essa checagem.
