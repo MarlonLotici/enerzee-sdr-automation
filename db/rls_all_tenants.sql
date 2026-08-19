@@ -28,12 +28,15 @@
 --  service_role ainda as vê). Se der > 0, faça o backfill do user_id antes de
 --  aplicar em produção, senão o cliente "perde" esses registros no painel.
 -- ----------------------------------------------------------------------------
---  SELECT 'instances'       AS tabela, count(*) FROM public.instances       WHERE user_id IS NULL
---  UNION ALL SELECT 'leads',            count(*) FROM public.leads            WHERE user_id IS NULL
---  UNION ALL SELECT 'messages',         count(*) FROM public.messages         WHERE user_id IS NULL
---  UNION ALL SELECT 'client_briefings', count(*) FROM public.client_briefings WHERE user_id IS NULL
---  UNION ALL SELECT 'tenant_prompts',   count(*) FROM public.tenant_prompts   WHERE user_id IS NULL
---  UNION ALL SELECT 'calls',            count(*) FROM public.calls            WHERE user_id IS NULL;
+--  DO $$
+--  DECLARE t text; tabelas text[] := ARRAY['instances','leads','messages','client_briefings','tenant_prompts','calls']; n bigint;
+--  BEGIN
+--    FOREACH t IN ARRAY tabelas LOOP
+--      IF to_regclass('public.'||t) IS NULL THEN RAISE NOTICE '%: tabela nao existe (ok, sera ignorada)', t; CONTINUE; END IF;
+--      EXECUTE format('SELECT count(*) FROM public.%I WHERE user_id IS NULL', t) INTO n;
+--      RAISE NOTICE '%: % linha(s) com user_id NULL', t, n;
+--    END LOOP;
+--  END $$;
 -- ----------------------------------------------------------------------------
 
 
@@ -55,6 +58,13 @@ DECLARE
     ];
 BEGIN
     FOREACH t IN ARRAY tabelas LOOP
+        -- Pula tabelas que não existem neste banco (ex.: 'calls' se a feature de voz
+        -- nunca foi deployada). to_regclass devolve NULL quando a relação não existe.
+        IF to_regclass('public.' || t) IS NULL THEN
+            RAISE NOTICE 'RLS: pulando % (tabela não existe neste banco)', t;
+            CONTINUE;
+        END IF;
+
         EXECUTE format('ALTER TABLE public.%I ENABLE ROW LEVEL SECURITY;', t);
 
         EXECUTE format('DROP POLICY IF EXISTS %I ON public.%I;', t || '_select_own', t);
@@ -101,6 +111,10 @@ DECLARE
     ];
 BEGIN
     FOREACH t IN ARRAY tabelas LOOP
+        IF to_regclass('public.' || t) IS NULL THEN
+            RAISE NOTICE 'RLS lockdown: pulando % (tabela não existe neste banco)', t;
+            CONTINUE;
+        END IF;
         EXECUTE format('ALTER TABLE public.%I ENABLE ROW LEVEL SECURITY;', t);
         -- Nenhuma policy criada de propósito: sem policy + RLS on = deny-all pra anon.
         -- Limpa qualquer policy legada que porventura exista (mantém o deny-all).
