@@ -280,7 +280,7 @@ ${isVoz ? `[REGRAS ABSOLUTAS DE ALTA PERFORMANCE — VOZ]
             system: promptFinal,
             messages: historico,
             model: MODELOS.cerebro,
-            maxTokens: 200,
+            maxTokens: 500, // folga p/ o gpt-oss não cortar a resposta no meio (latência não é gargalo)
         });
 
         if (!resposta || resposta.trim().length < 3) {

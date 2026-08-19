@@ -48,7 +48,7 @@ TÁTICA OBRIGATÓRIA (3 PASSOS):
             system: promptTank,
             messages: historico,
             model: MODELOS.cerebro,
-            maxTokens: 160,
+            maxTokens: 400, // folga p/ o gpt-oss não cortar a resposta no meio (latência não é gargalo)
         });
 
         // 🛡️ BLINDAGEM DE ALTA PERFORMANCE: A IA esqueceu a tag? Nós injetamos à força via código.

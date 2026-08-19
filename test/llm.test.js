@@ -3,7 +3,7 @@ const test = require('node:test');
 const assert = require('node:assert/strict');
 // Env dummy pra o require do adaptador não estourar ao instanciar o client Together.
 process.env.TOGETHER_API_KEY = process.env.TOGETHER_API_KEY || 'together-dummy';
-const { normalizarMensagens, extrairTexto, MODELOS, _tipoBudget, _limiteBudget } = require('../lib/llm');
+const { normalizarMensagens, extrairTexto, MODELOS, _tipoBudget, _limiteBudget, _reasoningEffortPara } = require('../lib/llm');
 const { definirTenantLLM, tenantLLMAtual } = require('../lib/llmContext');
 
 test('normalizarMensagens: vazio vira 1 turno user', () => {
@@ -59,6 +59,16 @@ test('_limiteBudget: usa env quando válido, senão o default alto de segurança
     process.env.BUDGET_LLM_CEREBRO_DIA = '0';           // 0/inválido → cai no default
     assert.equal(_limiteBudget('llm_cerebro'), 5000);
     delete process.env.BUDGET_LLM_CEREBRO_DIA;
+});
+
+test('_reasoningEffortPara: só o gpt-oss recebe reasoning_effort (default low)', () => {
+    delete process.env.LLM_REASONING_EFFORT;
+    assert.equal(_reasoningEffortPara('openai/gpt-oss-120b'), 'low');
+    assert.equal(_reasoningEffortPara('deepseek-ai/DeepSeek-V4-Flash-0731'), undefined);
+    assert.equal(_reasoningEffortPara('Qwen/Qwen3.5-9B'), undefined);
+    process.env.LLM_REASONING_EFFORT = 'medium';
+    assert.equal(_reasoningEffortPara('openai/gpt-oss-120b'), 'medium'); // env sobrescreve
+    delete process.env.LLM_REASONING_EFFORT;
 });
 
 test('llmContext: definir/ler tenant do fluxo atual', () => {

@@ -1287,7 +1287,7 @@ async function gerarRespostaIA(historico, contextoLead, instanceData) {
                 system: promptFinal,
                 messages: historicoPodado,
                 model: MODELOS.cerebro,
-                maxTokens: 180,
+                maxTokens: 500, // folga p/ o gpt-oss não cortar a resposta no meio (latência não é gargalo)
             });
             if (!respostaDaIA) throw new Error('resposta vazia da LLM');
             return respostaDaIA.replace(/[\*_~`]/g, '');
