@@ -1,17 +1,22 @@
 /**
- * TRANSPORTE: WhatsApp Cloud API OFICIAL via 360dialog.
+ * TRANSPORTE: WhatsApp Cloud API OFICIAL — direto na META (sem 360dialog).
  *
  * Usado por instâncias com whatsapp_provider='official'. Imune a soft-ban (é canal
  * legítimo), mas: (a) abertura fria fora da janela de 24h exige TEMPLATE aprovado pela
  * Meta; (b) resposta dentro de 24h pode ser texto livre; (c) inbound chega por WEBHOOK
  * (não por socket) — o server.js recebe e chama normalizarInbound aqui.
  *
- * 360dialog usa o formato NATIVO da Meta (Cloud API), autenticando por header D360-API-KEY.
- * config = { apiKey, baseUrl } vindo da instância (cloud_api_key / cloud_base_url).
+ * Vai DIRETO na Meta Cloud API (graph.facebook.com), autenticando por Bearer token —
+ * mais barato que um BSP revendedor (360dialog etc.): a hospedagem da API é grátis, paga-se
+ * só a conversa à Meta. Cada cliente tem a PRÓPRIA WABA/número/token (o nome verificado que
+ * aparece no WhatsApp é o da empresa dele). config = { apiKey, baseUrl } vindo da instância:
+ *   - cloud_api_key  = ACCESS TOKEN permanente da Meta (vai no header Authorization: Bearer)
+ *   - cloud_base_url = URL do endpoint COM o phone number id, ex.:
+ *                      https://graph.facebook.com/v20.0/123456789012345
  *
- * ⚠️ ENDPOINT/BASE URL: o default abaixo é o do 360dialog Cloud API (waba-v2). Confirmar
- * no painel do 360dialog quando a conta existir; se divergir, é só setar cloud_base_url
- * na instância (ou CLOUD_BASE_URL no env) — nenhum código muda.
+ * ⚠️ O cloud_base_url PRECISA incluir o {PHONE_NUMBER_ID} do número do cliente — a Meta
+ * roteia o envio por esse id no path. O default abaixo é só a versão da graph API (sem id),
+ * suficiente pra falhar com erro claro se a instância não setar o cloud_base_url.
  *
  * CONTRATO (compatível com baileysTransport):
  *   normalizarInbound(webhookBody) -> ObjetoNormalizado | null   (mesma forma do Baileys)
@@ -19,7 +24,7 @@
  *   enviarTemplate(config, jid, nome, idioma, componentes) -> { id, raw }
  */
 
-const DEFAULT_BASE_URL = 'https://waba-v2.360dialog.io';
+const DEFAULT_BASE_URL = 'https://graph.facebook.com/v20.0';
 
 function _base(config) {
     return String(config?.baseUrl || process.env.CLOUD_BASE_URL || DEFAULT_BASE_URL).replace(/\/+$/, '');
@@ -34,10 +39,10 @@ function _soDigitos(jid) {
 
 async function _post(config, payload) {
     const apiKey = _apiKey(config);
-    if (!apiKey) throw new Error('Cloud API sem D360-API-KEY configurada (cloud_api_key).');
+    if (!apiKey) throw new Error('Cloud API (Meta) sem access token configurado (cloud_api_key).');
     const resp = await fetch(`${_base(config)}/messages`, {
         method: 'POST',
-        headers: { 'Content-Type': 'application/json', 'D360-API-KEY': apiKey },
+        headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${apiKey}` },
         body: JSON.stringify(payload),
     });
     let data = {};
@@ -72,8 +77,8 @@ async function enviarTemplate(config, jid, nomeTemplate, idioma = 'pt_BR', compo
     });
 }
 
-// Converte o webhook (formato Meta, usado pelo 360dialog) no MESMO objeto normalizado
-// do baileysTransport, pra reusar toda a esteira do motor sem mudar a lógica de negócio.
+// Converte o webhook (formato Meta Cloud API) no MESMO objeto normalizado do
+// baileysTransport, pra reusar toda a esteira do motor sem mudar a lógica de negócio.
 function normalizarInbound(webhookBody) {
     try {
         const value = webhookBody?.entry?.[0]?.changes?.[0]?.value;

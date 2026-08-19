@@ -5320,7 +5320,7 @@ module.exports = {
         return lead;
     },
 
-    // 🌐 INBOUND OFICIAL (Cloud API/360dialog): o webhook /webhook/whatsapp do server.js
+    // 🌐 INBOUND OFICIAL (Meta Cloud API): o webhook /webhook/whatsapp do server.js
     // repassa o corpo bruto do Meta + o instanceId (da URL). Normaliza, acha/cria o lead e
     // injeta na MESMA fila FilaIA que o Baileys usa — daí a esteira de agentes é idêntica.
     receberInboundOficial: async (instanceId, webhookBody) => {
