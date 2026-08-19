@@ -8,6 +8,7 @@
     "build": "cd frontend && npm install && npm run build",
     "dev": "node server.js",
     "test": "node --test",
+    "backup": "node scripts/backup_supabase.js",
     "sdr": "node 4_SDR_IA_ULTIMATE_V4.js"
   },
   "keywords": [
