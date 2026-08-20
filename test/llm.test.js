@@ -40,6 +40,13 @@ test('extrairTexto: lê choices[0].message.content (formato OpenAI), sempre stri
     assert.equal(extrairTexto({}), '');
 });
 
+test('extrairTexto: corta tokens de controle harmony do gpt-oss (<|...|>)', () => {
+    const vazado = 'Entendi, sem problema. Você poderia me dizer o produto?<|end|><|start|>assistant<|channel|>analysis<|message|>the user...';
+    assert.equal(extrairTexto({ choices: [{ message: { content: vazado } }] }), 'Entendi, sem problema. Você poderia me dizer o produto?');
+    // sem vazamento, texto normal passa intacto
+    assert.equal(extrairTexto({ choices: [{ message: { content: 'resposta normal' } }] }), 'resposta normal');
+});
+
 test('MODELOS: mapa central tem os 3 papéis', () => {
     assert.ok(MODELOS.rapido && MODELOS.cerebro && MODELOS.visao);
 });

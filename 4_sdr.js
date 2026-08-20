@@ -228,6 +228,10 @@ const abandonadoEm = new Map();          // instanceId → timestamp (ms) em que
 const ultimoAlertaAbandono = new Map();  // instanceId → timestamp do último alerta Discord (anti-flood)
 const ultimoInboundAt = new Map();       // instanceId → timestamp da última mensagem recebida (painel de saúde)
 const COOLDOWN_ABANDONO_MS = 20 * 60 * 1000; // espera antes de tentar recuperar um chip abandonado
+// Intervalo MÍNIMO entre disparos de saudação (anti-ban). Pedido do operador: >= 20 min.
+// O jitter real soma um spread aleatório em cima disso pra não ficar mecânico.
+const INTERVALO_DISPARO_MIN_MS = parseInt(process.env.INTERVALO_DISPARO_MIN_MS, 10) || 20 * 60 * 1000;
+const INTERVALO_DISPARO_SPREAD_MS = parseInt(process.env.INTERVALO_DISPARO_SPREAD_MS, 10) || 10 * 60 * 1000;
 const REALERTA_ABANDONO_MS = 15 * 60 * 1000; // re-alerta no Discord no máx a cada 15min enquanto down
 const instanciasDeletadas = new Set(); // chips removidos pelo painel — bloqueia reentrada de timeouts pendentes
 const instanciasEmResetManual = new Set(); // impede duplo reset_session simultâneo no mesmo chip
@@ -3105,13 +3109,11 @@ console.log(`🔒 [RESERVA] Lead ${lead.name} travado atomicamente para chip ${c
                 const isStaleRetry = staleRetryFlag.get(instanceId) === true;
                 if (isStaleRetry) staleRetryFlag.delete(instanceId);
                 const isColdStart = !isStaleRetry && chipNovo && enviosHoje === 0 && !global.chipsAquecidosHoje.has(instanceId);
+                // staleRetry é re-tentativa do MESMO lead após ACK stale (transitório) — mantém curto.
+                // Todo disparo NOVO respeita o piso de 20 min (anti-ban) + spread aleatório.
                 const jitter = isStaleRetry
                     ? Math.random() * 30000 + 15000     // retry pós-stale: 15-45s (chip já provou conectividade)
-                    : isColdStart
-                        ? Math.random() * 300000 + 300000   // cold-start: 5-10 min (uma vez por dia)
-                        : chipNovo
-                            ? Math.random() * 120000 + 60000   // chip novo aquecido: 1-3 min
-                            : Math.random() * 180000 + 120000; // maduro: 2-5 min
+                    : Math.random() * INTERVALO_DISPARO_SPREAD_MS + INTERVALO_DISPARO_MIN_MS; // >= 20 min entre disparos
                 console.log(`🎯 [${config.nome}] Mirando em: ${lead.name} (${enviosHoje + 1}/${config.limite}). Aguardando ${Math.round(jitter/1000)}s${isColdStart ? " (cold-start)" : isStaleRetry ? " (stale-retry)" : ""}...`);
 
                 // ⚡ FAST-LANE CHECK 1: antes de entrar no jitter, verifica se chegou inbound neste chip
