@@ -77,8 +77,8 @@ AÇÃO OBRIGATÓRIA (exatamente nesta ordem):
 ⚠️ O REVEAL é o fechamento mais poderoso — ele prova o produto na hora. NÃO omita.
 ⚠️ NÃO peça documentos, faturas ou informações adicionais.
 `;
-        } else {
-            // Solar e demais produtos: fechamento padrão
+        } else if (calendlyLink) {
+            // Solar e demais produtos: fechamento padrão COM link de agenda configurado.
             overrideTatico = `
 =======================================================
 ⚡ MODO OPERACIONAL: SINAL DE COMPRA DETECTADO
@@ -91,6 +91,24 @@ AÇÃO OBRIGATÓRIA:
 - Adicione [ESTAGIO:4] no final.
 - NÃO explique novamente o benefício. NÃO faça rapport. APENAS trave o horário.
 ${isSolar ? '- Peça para ele ter uma fatura de luz em mãos na hora da call.' : ''}
+`;
+        } else {
+            // SEM link de agenda configurado → PROIBIDO fingir agendamento.
+            // A IA não pode "confirmar horário" nem dizer que está agendado sem ação real.
+            overrideTatico = `
+=======================================================
+⚡ MODO OPERACIONAL: SINAL DE COMPRA (SEM AGENDA CONFIGURADA)
+=======================================================
+O lead quer avançar, mas NÃO há link de agenda disponível para enviar.
+
+⚠️ REGRA CRÍTICA — PROIBIDO AGENDAMENTO FAKE:
+- É TERMINANTEMENTE PROIBIDO dizer "confirmado", "agendado", "marquei" ou citar um horário como fechado.
+- NÃO invente horário. NÃO finja que reservou nada. Isso engana o lead e queima a empresa.
+
+AÇÃO OBRIGATÓRIA:
+- Demonstre que vai encaminhar: diga que um especialista humano vai confirmar o melhor horário com ele em seguida.
+- Pergunte qual o melhor período pra ele (manhã/tarde) pra facilitar o contato do especialista.
+- Adicione [ESTAGIO:4] no final (sinaliza interesse quente pra o time humano assumir).
 `;
         }
 

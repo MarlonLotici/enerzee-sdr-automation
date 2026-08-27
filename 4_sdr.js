@@ -2174,10 +2174,26 @@ if (matchEstagio) {
     }
 }
 if (matchClima) updates.sentiment = matchClima[1].toLowerCase();
+    // 🛡️ ANTI-AGENDAMENTO-FAKE: só marca 'booked' se houver AÇÃO REAL nesta mensagem —
+    // um link de agenda/reunião de fato enviado (Calendly/cal.com/Meet/wa.me). A IA emitir
+    // [AGENDAMENTO_MANUAL] ou dizer "confirmado" NÃO é evidência de agendamento real.
+    // (O webhook do Calendly, em server.js, marca booked por outro caminho — legítimo.)
+    const temLinkAgendamentoReal = /(calendly\.com|cal\.com|meet\.google\.com|wa\.me\/)/i.test(textoLimpo);
     if (matchManual) {
-        updates.calendly_booked = true;
-        updates.status = 'booked';
-        updates.current_stage = 5;
+        if (temLinkAgendamentoReal) {
+            updates.calendly_booked = true;
+            updates.status = 'booked';
+            updates.current_stage = 5;
+        } else {
+            // A IA tentou "confirmar" sem link/evento real → NÃO marca agendado (evita lead fantasma).
+            // Sinaliza handoff humano pra alguém agendar de verdade.
+            console.warn(`⚠️ [AGENDAMENTO-FAKE BLOQUEADO] ${lead.name}: IA sinalizou agendamento sem enviar link real. Não marcado como booked.`);
+            enviarAlerta(
+                `⚠️ Agendamento sem link — ${lead.name}`,
+                `A IA tentou confirmar um agendamento sem enviar link/evento real. Verifique a conversa e agende manualmente se fizer sentido.`,
+                15158332
+            ).catch(() => {});
+        }
     }
     await supabase.from('leads').update(updates).eq('id', lead.id);
     console.log(`📊 [FILTRO] Lead atualizado:`, updates);
@@ -4091,17 +4107,17 @@ async function loopAuditor() {
     auditorEmExecucao = true;
 
     try {
-        // Filtra apenas leads dos chips ativos — isolamento entre tenants
-        const chipsAudit = [...sessions.keys()];
-        if (!chipsAudit.length) { auditorEmExecucao = false; return; }
-
+        // Auditoria é POST-MORTEM: lê o histórico do banco, não precisa do chip online.
+        // (Antes exigia sessions.keys() → com chip caindo, quase nada era auditado.)
+        // Backend usa service_role; o dashboard filtra por user_id, então varrer todos
+        // os tenants aqui é seguro e aumenta a cobertura.
+        const AUDIT_LIMITE = parseInt(process.env.AUDITOR_LIMITE_CICLO, 10) || 20;
         const { data: leadsParaAuditar } = await supabase
             .from('leads')
             .select('id, name, whatsapp_id, instance_id, status, niche')
             .in('status', ['booked', 'dead', 'invalid', 'closed'])
             .or('is_audited.eq.false,is_audited.is.null')
-            .in('instance_id', chipsAudit)
-            .limit(5);
+            .limit(AUDIT_LIMITE);
 
         if (leadsParaAuditar && leadsParaAuditar.length > 0) {
             // Busca product_type de cada instância para o auditor contextualizar corretamente
@@ -4175,8 +4191,9 @@ async function loopAuditor() {
         console.error("❌ [QA AUDITOR] Erro na varredura:", erroAuditor.message);
     } finally {
         auditorEmExecucao = false;
-        // Roda a cada 2 horas (7200000 ms) para não gastar tokens à toa
-        setTimeout(loopAuditor, 7200000); 
+        // Intervalo entre ciclos (default 1h). Menor = limpa backlog mais rápido, gasta mais token.
+        const AUDIT_INTERVALO_MS = parseInt(process.env.AUDITOR_INTERVALO_MS, 10) || 60 * 60 * 1000;
+        setTimeout(loopAuditor, AUDIT_INTERVALO_MS);
     }
 }
 

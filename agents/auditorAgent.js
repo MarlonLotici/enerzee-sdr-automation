@@ -1,5 +1,18 @@
 const { chamarLLM, MODELOS } = require('../lib/llm');
 
+// Parse tolerante: o LLM às vezes envolve o JSON em cerca markdown (```json) ou põe
+// texto em volta. Extrai o bloco { ... } (do primeiro { ao último }) e tenta parsear.
+// Retorna o objeto ou null (nunca lança).
+function _parseJsonRobusto(txt) {
+    if (!txt || typeof txt !== 'string') return null;
+    const limpo = txt.replace(/```json/gi, '').replace(/```/g, '').trim();
+    const ini = limpo.indexOf('{');
+    const fim = limpo.lastIndexOf('}');
+    const candidato = (ini !== -1 && fim > ini) ? limpo.slice(ini, fim + 1) : limpo;
+    try { return JSON.parse(candidato); } catch { /* tenta o texto cru abaixo */ }
+    try { return JSON.parse(limpo); } catch { return null; }
+}
+
 /**
  * Audita uma conversa encerrada e retorna um relatório estruturado.
  * Atua como gerente de vendas sênior: avalia tom, oportunidades perdidas e desfecho.
@@ -54,8 +67,11 @@ Exemplo de saída válida:
 {"desfecho":"PERDIDO_CARO","nota_ia":7,"erro_critico_ia":"A IA perguntou o valor da conta antes de qualificar o equipamento.","resumo_executivo":"Lead descartado por conta abaixo do mínimo após qualificação incompleta."}`;
 
     try {
-        const raw = (await chamarLLM({ messages: [{ role: 'user', content: prompt }], model: MODELOS.rapido, maxTokens: 200 }) || '').trim() || '{}';
-        const parsed = JSON.parse(raw);
+        // Modelo CÉREBRO: julgar uma conversa + emitir JSON estrito é tarefa de raciocínio.
+        // O rápido (DeepSeek-Flash) volta vazio/inválido demais pra isso (visto nos logs do roteador).
+        const raw = (await chamarLLM({ messages: [{ role: 'user', content: prompt }], model: MODELOS.cerebro, maxTokens: 500 }) || '').trim();
+        const parsed = _parseJsonRobusto(raw);
+        if (!parsed) throw new Error('LLM não devolveu JSON parseável.');
 
         // Valida estrutura mínima antes de retornar
         if (!parsed.desfecho || parsed.nota_ia === undefined) {

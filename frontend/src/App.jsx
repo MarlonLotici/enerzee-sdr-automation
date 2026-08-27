@@ -14,6 +14,7 @@ import ConversaList from './components/ConversaList'
 import OnboardingBriefing from './components/OnboardingBriefing'
 import Dashboard from "./Dashboard"
 import AuditorDashboard from "./components/AuditorDashboard"
+import { textoTemperatura, rotuloTemperatura } from './lib/temperatura'
 // --- ÍCONES (FULL SET 2026) ---
 import { 
     Rocket, MapPin, LayoutDashboard, MessageSquare, Phone, Play, LocateFixed, Send,
@@ -291,6 +292,11 @@ const getLeadsByStatus = (coluna) => {
         // Coluna "Fora do Fluxo": status que antes eram invisíveis no Kanban (buracos-negros).
         // O lead levou email frio, não tem email, ou está no meio de uma reserva atômica.
         if (coluna === 'fora_do_fluxo') return ['email_sent', 'no_email', 'reservado'].includes(l.status);
+        // Coluna "Encerrados": CATCH-ALL real — qualquer lead que não caia em nenhuma outra coluna
+        // (dead/invalid/closed/blacklisted/waiting_analysis/error/status desconhecido). Garante que
+        // NENHUM lead fique invisível no pipeline, mesmo com o funil todo em status terminal.
+        if (coluna === 'encerrados')
+            return !isAgendado && !['new', 'contact', 'email_sent', 'no_email', 'reservado'].includes(l.status);
 
         return false;
     });
@@ -1595,7 +1601,7 @@ return (
                                     <LeadCard key={l.id} lead={l} isSelected={selectedLeadIds.has(l.id)} onSelect={() => toggleSelectLead(l.id)} onView={() => setViewingLeadDetail(l)} onEdit={() => setEditingLead(l)} onDelete={() => handleDeleteLead(l.id)} onChat={() => { setActiveChat(l); setActiveTab('connections'); }} onCall={() => handleCallLead(l)} />
                                 ))}
                             </KanbanColumn>
-                            <KanbanColumn title="🔥 Hot Leads" count={getHotLeads().length} color="from-red-700 to-orange-900" icon={<Flame className="h-6 w-6 text-red-300 animate-pulse"/>} isActive={true}>
+                            <KanbanColumn title="🔥 Quentes" count={getHotLeads().length} color="from-red-700 to-orange-900" icon={<Flame className="h-6 w-6 text-red-300 animate-pulse"/>} isActive={true}>
                                 {getHotLeads().map(l => (
                                     <LeadCard key={l.id} lead={l} isSelected={selectedLeadIds.has(l.id)} onSelect={() => toggleSelectLead(l.id)} onView={() => setViewingLeadDetail(l)} onEdit={() => setEditingLead(l)} onDelete={() => handleDeleteLead(l.id)} onChat={() => { setActiveChat(l); setActiveTab('connections'); }} onCall={() => handleCallLead(l)} />
                                 ))}
@@ -1607,6 +1613,11 @@ return (
                             </KanbanColumn>
                             <KanbanColumn title="Fora do Fluxo" count={getLeadsByStatus('fora_do_fluxo').length} color="from-slate-700 to-slate-900" icon={<Send className="h-6 w-6 text-slate-300"/>}>
                                 {getLeadsByStatus('fora_do_fluxo').map(l => (
+                                    <LeadCard key={l.id} lead={l} isSelected={selectedLeadIds.has(l.id)} onSelect={() => toggleSelectLead(l.id)} onView={() => setViewingLeadDetail(l)} onEdit={() => setEditingLead(l)} onDelete={() => handleDeleteLead(l.id)} onChat={() => { setActiveChat(l); setActiveTab('connections'); }} onCall={() => handleCallLead(l)} />
+                                ))}
+                            </KanbanColumn>
+                            <KanbanColumn title="Encerrados" count={getLeadsByStatus('encerrados').length} color="from-slate-800 to-slate-950" icon={<XCircle className="h-6 w-6 text-slate-400"/>}>
+                                {getLeadsByStatus('encerrados').map(l => (
                                     <LeadCard key={l.id} lead={l} isSelected={selectedLeadIds.has(l.id)} onSelect={() => toggleSelectLead(l.id)} onView={() => setViewingLeadDetail(l)} onEdit={() => setEditingLead(l)} onDelete={() => handleDeleteLead(l.id)} onChat={() => { setActiveChat(l); setActiveTab('connections'); }} onCall={() => handleCallLead(l)} />
                                 ))}
                             </KanbanColumn>
@@ -2130,21 +2141,10 @@ return (
                     )}
                     {/* Temperatura no perfil lateral */}
                     {activeChat.lead_temperature && activeChat.lead_temperature !== 'cold' && (
-                        <div className={`p-3 rounded-xl border ${
-                            activeChat.lead_temperature === 'hot' ? 'bg-red-500/10 border-red-500/20' :
-                            activeChat.lead_temperature === 'warm' ? 'bg-amber-500/10 border-amber-500/20' :
-                            'bg-slate-500/10 border-slate-500/20'
-                        }`}>
-                            <p className="text-[8px] font-black uppercase mb-0.5" style={{
-                                color: activeChat.lead_temperature === 'hot' ? '#ef4444' :
-                                       activeChat.lead_temperature === 'warm' ? '#f59e0b' : '#64748b'
-                            }}>Temperatura</p>
-                            <p className="text-sm font-black" style={{
-                                color: activeChat.lead_temperature === 'hot' ? '#ef4444' :
-                                       activeChat.lead_temperature === 'warm' ? '#f59e0b' : '#64748b'
-                            }}>
-                                {activeChat.lead_temperature === 'hot' ? '🔥 Hot' :
-                                 activeChat.lead_temperature === 'warm' ? '🟡 Warm' : '💀 Dead'}
+                        <div className={`p-3 rounded-xl border ${rotuloTemperatura(activeChat.lead_temperature).bg}`}>
+                            <p className="text-[8px] font-black uppercase mb-0.5" style={{ color: rotuloTemperatura(activeChat.lead_temperature).cor }}>Temperatura</p>
+                            <p className="text-sm font-black" style={{ color: rotuloTemperatura(activeChat.lead_temperature).cor }}>
+                                {textoTemperatura(activeChat.lead_temperature)}
                             </p>
                         </div>
                     )}
@@ -2466,15 +2466,8 @@ className="glass-panel border-white/20 text-white max-w-5xl w-[95vw] max-h-[95vh
                     </div>
                     <div className="glass-card p-3 rounded-2xl border-white/5">
                         <span className="text-[8px] text-slate-600 uppercase font-black block mb-1">Temperatura</span>
-                        <span className={`text-lg font-black ${
-                            viewingLeadDetail?.lead_temperature === 'hot' ? 'text-red-400' :
-                            viewingLeadDetail?.lead_temperature === 'warm' ? 'text-amber-400' :
-                            viewingLeadDetail?.lead_temperature === 'dead' ? 'text-slate-500' :
-                            'text-blue-400'
-                        }`}>
-                            {viewingLeadDetail?.lead_temperature === 'hot' ? '🔥 Hot' :
-                             viewingLeadDetail?.lead_temperature === 'warm' ? '🟡 Warm' :
-                             viewingLeadDetail?.lead_temperature === 'dead' ? '💀 Dead' : '❄️ Cold'}
+                        <span className={`text-lg font-black ${rotuloTemperatura(viewingLeadDetail?.lead_temperature).tw}`}>
+                            {textoTemperatura(viewingLeadDetail?.lead_temperature)}
                         </span>
                     </div>
                     <div className="glass-card p-3 rounded-2xl border-white/5">
@@ -2585,13 +2578,8 @@ function LeadCard({ lead, isSelected, onSelect, onView, onEdit, onChat, onCall }
     </span>
 )}
                 {lead?.lead_temperature && lead.lead_temperature !== 'cold' && (
-                    <Badge className={`border-none text-[7px] h-4 px-1.5 font-black uppercase tracking-tighter ${
-                        lead.lead_temperature === 'hot'  ? 'bg-red-500/15 text-red-400' :
-                        lead.lead_temperature === 'warm' ? 'bg-amber-500/15 text-amber-400' :
-                        lead.lead_temperature === 'dead' ? 'bg-slate-500/15 text-slate-500' :
-                        'bg-slate-500/10 text-slate-600'
-                    }`}>
-                        {lead.lead_temperature === 'hot' ? '🔥 Hot' : lead.lead_temperature === 'warm' ? '🟡 Warm' : lead.lead_temperature === 'dead' ? '💀 Dead' : lead.lead_temperature}
+                    <Badge className={`border-none text-[7px] h-4 px-1.5 font-black uppercase tracking-tighter ${rotuloTemperatura(lead.lead_temperature).tw}`}>
+                        {textoTemperatura(lead.lead_temperature)}
                     </Badge>
                 )}
             </div>
