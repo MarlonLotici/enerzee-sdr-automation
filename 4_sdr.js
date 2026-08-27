@@ -128,6 +128,7 @@ const { dividirEmBaloes } = require('./lib/baloes');
 const { extrairTelefoneDescricao, eventoEhReuniao, digitosParaJids } = require('./lib/gcalParse');
 const { classificarConfirmacao } = require('./lib/confirmacao');
 const gcal = require('./integrations/googleCalendar');
+const { detectarConfirmacaoSlot } = require('./lib/agendamento');
 
 // ✂️ LÂMINA DE CORTE: Transforma "Merci Delicatessen Restaurante e Pizzaria LTDA" em "Merci Delicatessen"
 function limparNomeEmpresa(nomeOriginal) {
@@ -4038,6 +4039,38 @@ await delay(jitterAntiBan);
                 }
             }
 
+            // ================================================================
+            // 📅 5b. LEMBRETE 1H ANTES (agendamento real na Google Agenda)
+            // Janela: evento entre agora+45min e agora+75min. Flag lembrete_1h_enviado.
+            // ================================================================
+            const quarentaCincoMinISO = new Date(agora + 45 * 60 * 1000).toISOString();
+            const setentaCincoMinISO   = new Date(agora + 75 * 60 * 1000).toISOString();
+            const { data: leads1h } = await supabase
+                .from('leads')
+                .select('id, name, whatsapp_id, instance_id, dono, calendly_event_at, gcal_meet_link')
+                .in('status', ['booked', 'closed'])
+                .eq('calendly_booked', true)
+                .not('lembrete_1h_enviado', 'is', true)
+                .gte('calendly_event_at', quarentaCincoMinISO)
+                .lte('calendly_event_at', setentaCincoMinISO)
+                .limit(3);
+
+            if (leads1h && leads1h.length > 0) {
+                for (const lr of leads1h) {
+                    const instanciaL = sessions.get(lr.instance_id);
+                    if (!instanciaL || !instanciaL.ready) continue;
+                    const horaF = new Date(lr.calendly_event_at).toLocaleTimeString('pt-BR', { hour: '2-digit', minute: '2-digit', timeZone: 'America/Sao_Paulo' });
+                    const nome  = saudacaoPrimeiroNome(lr.dono, 'você');
+                    const linkTxt = lr.gcal_meet_link ? ` Link: ${lr.gcal_meet_link}` : '';
+                    const msg1h = `${nome}, nossa conversa é daqui a pouco, às ${horaF}!${linkTxt} Até já 🙌`;
+                    await enviarMensagemIA(instanciaL.sock, lr.whatsapp_id, { text: msg1h }, lr.instance_id);
+                    await db.saveMessage(lr.whatsapp_id, 'assistant', msg1h, lr.instance_id);
+                    await supabase.from('leads').update({ lembrete_1h_enviado: true }).eq('id', lr.id);
+                    console.log(`🔔 [LEMBRETE-1H] Enviado para ${lr.name} — reunião às ${horaF}`);
+                    await delay(Math.floor(Math.random() * 20000) + 20000);
+                }
+            }
+
             // 📅 CONFIRMAÇÃO DIÁRIA DE REUNIÕES (opt-in por tenant) — 1x/dia/tenant a partir da
             // hora configurada. Idempotente por evento, então rodar no ciclo de 5min é seguro.
             await varrerConfirmacoesDiarias().catch(e => console.error(`❌ [CONFIRMA] varredura: ${e.message}`));
@@ -4252,6 +4285,77 @@ if (!histRaw || histRaw.length === 0) return;
 // ============================================================================
 // 🏭 WORKER DA FILA (A FÁBRICA INDUSTRIAL DE RESPOSTAS)
 // ============================================================================
+// ============================================================================
+// 📅 AGENDAMENTO REAL na Google Agenda (Fase B)
+// Orquestra: propor 2 horários livres → detectar confirmação → criar evento + Meet.
+// INERTE se o tenant não conectou a agenda / não ativou booking (booking_ativo).
+// Retorna { tratado, resposta }: se tratado=true, o worker envia `resposta` e NÃO
+// aciona o funil de venda normal (evita a IA fingir/duplicar agendamento).
+// ============================================================================
+async function orquestrarAgendamento(lead, ultimaMsg, instanceData, userId, intencao) {
+    const temSlots = Array.isArray(lead.slots_propostos) && lead.slots_propostos.length > 0;
+    // Só faz sentido rodar se há slots aguardando confirmação, ou se é sinal de compra.
+    if (!temSlots && intencao !== 'COMPRA') return { tratado: false };
+
+    const { data: cfg } = await supabase.from('calendar_connections')
+        .select('booking_ativo, booking_calendar_id, calendar_id, booking_hora_inicio, booking_hora_fim, booking_duracao_min')
+        .eq('user_id', userId).maybeSingle();
+    if (!cfg || cfg.booking_ativo !== true) return { tratado: false }; // feature desligada → fluxo normal
+
+    const calId = cfg.booking_calendar_id || cfg.calendar_id || 'primary';
+    const listaLabels = (slots) => slots.map(s => s.label).join(' ou ');
+
+    // ── FASE CONFIRMAÇÃO: já propusemos horários, o lead está respondendo ──
+    if (temSlots) {
+        const escolhido = detectarConfirmacaoSlot(ultimaMsg, lead.slots_propostos);
+        if (escolhido) {
+            try {
+                const ev = await gcal.criarEvento(userId, calId, {
+                    inicioISO: escolhido.inicioISO,
+                    fimISO:    escolhido.fimISO,
+                    titulo:    `Reunião — ${lead.name || 'Lead'}`,
+                    descricao: `Agendado pela SDR IA (Antix). Lead: ${lead.name || ''} · ${lead.phone || lead.whatsapp_id}`,
+                });
+                if (!ev?.eventId) throw new Error('Google não retornou eventId');
+                await supabase.from('leads').update({
+                    status: 'booked', calendly_booked: true, current_stage: 5, is_paused: true,
+                    gcal_event_id: ev.eventId, gcal_meet_link: ev.meetLink || null,
+                    calendly_event_at: escolhido.inicioISO, slots_propostos: null, slot_calendar_id: null,
+                    reminder_sent: null, lembrete_1h_enviado: false, // libera o lembrete 24h (loop existente) + 1h (novo)
+                    internal_notes: `Reunião criada na Google Agenda (${escolhido.label}) em ${new Date().toLocaleString('pt-BR')}.`,
+                }).eq('id', lead.id);
+                console.log(`✅ [AGENDAMENTO] ${lead.name}: evento criado (${escolhido.label}) ${ev.meetLink || ''}`);
+                const linkTxt = ev.meetLink ? `\n[QUEBRA]\nSegue o link da nossa reunião: ${ev.meetLink}` : '';
+                return { tratado: true, resposta: `Perfeito! Agendei nossa conversa pra ${escolhido.label}. ✅${linkTxt}` };
+            } catch (e) {
+                console.error(`❌ [AGENDAMENTO] Falha ao criar evento pra ${lead.name}:`, e.message);
+                enviarAlerta(`⚠️ Falha ao criar evento — ${lead.name}`, e.message, 15158332).catch(() => {});
+                return { tratado: true, resposta: `Opa, tive um probleminha aqui pra travar o horário. Consegue confirmar de novo: ${listaLabels(lead.slots_propostos)}?` };
+            }
+        }
+        // Resposta ambígua → re-pergunta com os MESMOS horários (não inventa novos, não finge).
+        return { tratado: true, resposta: `Só pra confirmar certinho: qual fica melhor pra você, ${listaLabels(lead.slots_propostos)}?` };
+    }
+
+    // ── FASE OFERTA: sinal de compra e ainda sem horários propostos ──
+    const slots = await gcal.listarHorariosLivres(userId, calId, {
+        horaInicio: cfg.booking_hora_inicio ?? 9,
+        horaFim:    cfg.booking_hora_fim ?? 18,
+        duracaoMin: cfg.booking_duracao_min ?? 30,
+        maxSlots:   2,
+    });
+    if (!slots.length) {
+        // Agenda cheia → handoff humano, SEM fingir horário.
+        enviarAlerta(`📅 Agenda cheia — ${lead.name}`, `Lead quente sem horário livre nos próximos dias. Agende manualmente.`, 15158332).catch(() => {});
+        return { tratado: true, resposta: `Adorei seu interesse! Minha agenda tá bem concorrida nos próximos dias — um especialista vai te chamar pra achar o melhor horário. 🙌` };
+    }
+    await supabase.from('leads').update({
+        slots_propostos: slots, slot_calendar_id: calId, current_stage: 4,
+    }).eq('id', lead.id);
+    console.log(`📅 [AGENDAMENTO] ${lead.name}: propondo ${listaLabels(slots)}`);
+    return { tratado: true, resposta: `Que bom! Consigo te encaixar ${listaLabels(slots)}. Qual fica melhor pra você? 😊` };
+}
+
 const workerIA = new Worker('FilaIA', async (job) => {
     const { leadId, whatsappId, instanceId, remoteJid } = job.data;
     console.log(`⚙️ [WORKER] Processando o job de IA para o WhatsApp ID: ${whatsappId}`);
@@ -4375,6 +4479,23 @@ if (!userId) {
 if (!userId) {
     console.error(`❌ [WORKER] user_id não encontrado para lead ${lead.name} (instance_id: ${lead.instance_id}, job instanceId: ${instanceId}). Abortando.`);
     return;
+}
+
+// 📅 AGENDAMENTO REAL: se o tenant ativou booking na Google Agenda, este bloco
+// assume o fluxo de marcar reunião (propor→confirmar→criar) e curto-circuita o funil
+// normal. Inerte (tratado=false) pra quem não usa. Roda ANTES do anti-loop pra uma
+// confirmação de horário sempre vencer.
+{
+    const agend = await orquestrarAgendamento(lead, ultimaMsg, instanceData, userId, intencao).catch((e) => {
+        console.error(`❌ [AGENDAMENTO] Orquestração falhou para ${lead.name}:`, e.message);
+        return { tratado: false };
+    });
+    if (agend?.tratado) {
+        if (agend.resposta) {
+            await filtrarEEnviarResposta(instancia?.sock, remoteJid, agend.resposta, historico, lead, instanceId, instanceData?.tts_voice || null);
+        }
+        return;
+    }
 }
 
 const { data: brain } = await supabase

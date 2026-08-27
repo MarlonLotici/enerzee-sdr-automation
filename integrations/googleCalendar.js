@@ -13,6 +13,7 @@ const crypto = require('crypto');
 const { google } = require('googleapis');
 const { createClient } = require('@supabase/supabase-js');
 const { tituloComEmoji } = require('../lib/gcalParse');
+const { calcularSlotsLivres } = require('../lib/agendaSlots');
 
 const supabase = createClient(process.env.SUPABASE_URL, process.env.SUPABASE_KEY);
 
@@ -137,6 +138,69 @@ async function listarEventosDeHoje(userId, calendarId) {
     return res.data.items || [];
 }
 
+// ── AGENDAMENTO REAL (Fase B) ────────────────────────────────────────────────
+
+/**
+ * Retorna os próximos slots livres do tenant (free/busy do Google + horário comercial).
+ * @param {string} userId
+ * @param {string} calendarId
+ * @param {object} opts { diasAdiante, horaInicio, horaFim, duracaoMin, maxSlots, antecedenciaMin }
+ * @returns {Promise<Array<{inicioISO,fimISO,label}>>} (vazio se não conectado)
+ */
+async function listarHorariosLivres(userId, calendarId, opts = {}) {
+    const auth = await _authDoTenant(userId);
+    if (!auth) return [];
+    const cal = google.calendar({ version: 'v3', auth });
+    const diasAdiante = opts.diasAdiante ?? 5;
+    const timeMin = new Date().toISOString();
+    const timeMax = new Date(Date.now() + (diasAdiante + 1) * 24 * 60 * 60 * 1000).toISOString();
+
+    let ocupados = [];
+    try {
+        const fb = await cal.freebusy.query({
+            requestBody: { timeMin, timeMax, items: [{ id: calendarId || 'primary' }] },
+        });
+        const busy = fb.data.calendars?.[calendarId || 'primary']?.busy || [];
+        ocupados = busy.map((b) => ({ inicio: b.start, fim: b.end }));
+    } catch (e) {
+        console.error('[GCAL] freebusy falhou:', e.message);
+        return [];
+    }
+    return calcularSlotsLivres({ ...opts, diasAdiante, ocupados });
+}
+
+/**
+ * Cria um evento na agenda do tenant, com link de Google Meet automático.
+ * @returns {Promise<{eventId, htmlLink, meetLink}|null>}
+ */
+async function criarEvento(userId, calendarId, { inicioISO, fimISO, titulo, descricao, emailConvidado } = {}) {
+    const auth = await _authDoTenant(userId);
+    if (!auth) return null;
+    const cal = google.calendar({ version: 'v3', auth });
+    const requestBody = {
+        summary: titulo || 'Reunião',
+        description: descricao || '',
+        start: { dateTime: inicioISO, timeZone: 'America/Sao_Paulo' },
+        end: { dateTime: fimISO, timeZone: 'America/Sao_Paulo' },
+        conferenceData: {
+            createRequest: { requestId: crypto.randomUUID(), conferenceSolutionKey: { type: 'hangoutsMeet' } },
+        },
+    };
+    if (emailConvidado) requestBody.attendees = [{ email: emailConvidado }];
+
+    const res = await cal.events.insert({
+        calendarId: calendarId || 'primary',
+        conferenceDataVersion: 1, // necessário pra gerar o link do Meet
+        sendUpdates: emailConvidado ? 'all' : 'none',
+        requestBody,
+    });
+    const ev = res.data;
+    const meetLink = ev.hangoutLink
+        || ev.conferenceData?.entryPoints?.find((p) => p.entryPointType === 'video')?.uri
+        || null;
+    return { eventId: ev.id, htmlLink: ev.htmlLink || null, meetLink };
+}
+
 // Reescreve o emoji de status no título do evento (✅/❌/❓). Idempotente.
 async function atualizarEmojiTitulo(userId, calendarId, eventId, emoji) {
     const auth = await _authDoTenant(userId);
@@ -155,6 +219,8 @@ module.exports = {
     trocarCodeESalvar,
     listarCalendarios,
     listarEventosDeHoje,
+    listarHorariosLivres,
+    criarEvento,
     atualizarEmojiTitulo,
     assinarState,
     verificarState,
