@@ -260,6 +260,7 @@ const jidsInvalidos = new Set();    // JIDs confirmados inválidos nesta sessão
 const ultimoEnvioTimestamp = new Map(); // jid → timestamp do último envio confirmado (para detecção de autoresposta)
 const primeiroEnvioSucesso = new Map(); // instanceId → true se já houve ao menos 1 envio confirmado na sessão atual (soft-ban detection)
 const proxy504Tentativas   = new Map(); // instanceId → contador de retries por proxy 504 (máx 3 antes de contar como falha normal)
+const proxyRotacao         = new Map(); // instanceId → nº de rotação da sessão de proxy (incrementa a cada 504 → força IP novo no pool)
 const chipsEmConflito      = new Set(); // chips que receberam connectionReplaced e aguardam reconnect (para logar [CONFLITO-RECOVERY])
 // 🩹 CATCH-UP DE QUEDA: instanceId → timestamp (ms) da última desconexão detectada.
 // messages.upsert só processa eventos type='notify' (ao vivo) — mensagens que chegam durante
@@ -380,8 +381,12 @@ function isChipNovo(instanceData) {
 function generateProxyUrl(instanceId) {
     const base = process.env.PROXY_BASE_URL;
     if (!base) return null;
-    // 16 chars = baixíssima chance de dois chips receberem o mesmo IP
-    const sessionId = instanceId.replace(/-/g, '').substring(0, 16);
+    // Sticky por chip, MAS com sufixo de rotação: quando a sessão gruda num IP morto
+    // (proxy 504), incrementamos proxyRotacao e a sessão muda → o pool entrega um IP novo.
+    // 14 hex do chip + 2 dígitos de rotação = 16 chars (baixa colisão entre chips).
+    const rot = proxyRotacao.get(instanceId) || 0;
+    const semHifen = instanceId.replace(/-/g, '');
+    const sessionId = `${semHifen.substring(0, 14)}${String(rot % 100).padStart(2, '0')}`;
     return base.replace('SESSION_ID', sessionId);
 }
 
@@ -1438,16 +1443,25 @@ async function startInstance(instanceId, instanceName, preloadedUserId = null) {
         if (err.proxyError === '504') {
             const tentativas = (proxy504Tentativas.get(instanceId) || 0) + 1;
             proxy504Tentativas.set(instanceId, tentativas);
-            if (tentativas <= 3) {
-                console.log(`[PROXY-RETRY-AGENDADO] Chip ${instanceId.slice(0,8)}: tentativa ${tentativas}/3 em 3min (proxy 504 transitório — não conta como reconexão)`);
-                instanciasLigando.delete(instanceId);
-                setTimeout(() => startInstance(instanceId, instanceName, preloadedUserId), 3 * 60 * 1000);
+            // 🔁 ROTACIONA a sessão de proxy → próxima tentativa pega um IP FRESCO do pool
+            // (antes ficava preso no mesmo IP morto e nunca se recuperava).
+            proxyRotacao.set(instanceId, (proxyRotacao.get(instanceId) || 0) + 1);
+            instanciasLigando.delete(instanceId);
+            if (tentativas <= 6) {
+                const delayMs = 30 * 1000; // IP novo a cada tentativa → não precisa esperar 3min
+                console.log(`🔁 [PROXY-ROTAÇÃO] Chip ${instanceId.slice(0,8)}: 504, trocando de IP (tentativa ${tentativas}/6). Retry em ${delayMs/1000}s.`);
+                setTimeout(() => startInstance(instanceId, instanceName, preloadedUserId).catch(e => console.error(`❌ [PROXY-RETRY] ${instanceName}: ${e.message}`)), delayMs);
                 return;
             }
+            // Esgotou as rotações rápidas → NÃO re-lança (evita unhandled rejection).
+            // Agenda um retry longo; o VIGIA também cobre. O contador zera pra recomeçar limpo.
             proxy504Tentativas.delete(instanceId);
-            console.warn(`⚠️ [PROXY-504-PERSISTENTE] Chip ${instanceId.slice(0,8)}: 3 retries esgotados — proxy ainda em 504. Tratando como falha normal.`);
+            console.warn(`⚠️ [PROXY-504-PERSISTENTE] Chip ${instanceId.slice(0,8)}: 6 rotações sem IP bom. Novo ciclo em 10min (proxy pode estar sem saldo/instável).`);
+            enviarAlerta(`⚠️ Proxy do chip ${instanceName} instável`, `6 tentativas com IPs diferentes e todas deram 504. Verifique o saldo/estado do IPRoyal. Vou tentar de novo em 10min.`, 15158332).catch(() => {});
+            setTimeout(() => startInstance(instanceId, instanceName, preloadedUserId).catch(e => console.error(`❌ [PROXY-RETRY] ${instanceName}: ${e.message}`)), 10 * 60 * 1000);
+            return;
         }
-        return _cleanupLock(err); // limpa instanciasLigando e re-lança
+        return _cleanupLock(err); // erro não-proxy: limpa instanciasLigando e re-lança
     }
     if (!agent) console.log(`ℹ️ [PROXY] ${instanceName} sem proxy configurado — modo direto.`);
 
