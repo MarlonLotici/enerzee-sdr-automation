@@ -4335,8 +4335,11 @@ if (!histRaw || histRaw.length === 0) return;
 // ============================================================================
 async function orquestrarAgendamento(lead, ultimaMsg, instanceData, userId, intencao) {
     const temSlots = Array.isArray(lead.slots_propostos) && lead.slots_propostos.length > 0;
-    // Só faz sentido rodar se há slots aguardando confirmação, ou se é sinal de compra.
-    if (!temSlots && intencao !== 'COMPRA') return { tratado: false };
+    // Dispara: (a) na CONFIRMAÇÃO (já tem slots propostos), (b) em sinal de COMPRA, ou
+    // (c) quando o lead PEDE agendamento explicitamente — o roteador nem sempre marca COMPRA
+    // num "quero marcar uma reunião" (às vezes vira DÚVIDA), então checamos as palavras também.
+    const querAgendar = /\b(agendar|agende|marcar|marca[r]?\s+uma|remarcar|reuni[aã]o|hor[aá]rio|hor[aá]rios|dispon[ií]vel|que\s+dia|que\s+horas)\b/i.test(ultimaMsg || '');
+    if (!temSlots && intencao !== 'COMPRA' && !querAgendar) return { tratado: false };
 
     const { data: cfg } = await supabase.from('calendar_connections')
         .select('booking_ativo, booking_calendar_id, calendar_id, booking_hora_inicio, booking_hora_fim, booking_duracao_min')
