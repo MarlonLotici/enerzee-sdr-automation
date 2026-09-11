@@ -80,6 +80,33 @@ async function classificarMensagem(ultimaMensagemLead) {
         return 'REPASSE';
     }
 
+    // 🛡️ NÍVEL 2e: AGENDA_RETORNO — lead empurra pra um momento futuro SEM aceitar agora.
+    // Vem ANTES de COMPRA porque "me chama amanhã" é adiamento, não aceite de horário.
+    const padraoAgendaRetorno = (
+        /\b(me\s+(chama|liga|ligue|chame|manda|envia|procura|retorna)|volta[r]?\s+a\s+falar|entra[r]?\s+em\s+contato|fala[r]?\s+comigo)\b[^?]{0,40}\b(amanh[ãa]|depois|mais\s+tarde|semana\s+que\s+vem|m[êe]s\s+que\s+vem|segunda|ter[çc]a|quarta|quinta|sexta|s[áa]bado|domingo|feriado|outro\s+dia|outra\s+hora|à\s+noite|de\s+manh[ãa]|de\s+tarde)\b/i.test(ultimaMensagemLead) ||
+        /\b(semana\s+que\s+vem|m[êe]s\s+que\s+vem|depois\s+do\s+feriado|mais\s+tarde|outro\s+dia|agora\s+n[ãa]o\s+(posso|d[áa]|consigo))\b/i.test(ultimaMensagemLead)
+    );
+    if (padraoAgendaRetorno) {
+        console.log("📅 [ROTEADOR] Pedido de retorno futuro detectado. Bypass para AGENDA_RETORNO.");
+        return 'AGENDA_RETORNO';
+    }
+
+    // 🛡️ NÍVEL 2f: COMPRA — aceite de agendar / pedir link / escolher horário / confirmar slot.
+    // Camada determinística (o roteador LLM às vezes classifica errado; estes sinais são inequívocos).
+    const padraoCompra = (
+        /\b(quero|posso|podemos|vamos|d[áa]\s+pra|consigo|pode)\s+(agendar|marcar)\b/i.test(ultimaMensagemLead) ||
+        /\b(agendar|marcar|remarcar)\s+(uma\s+|a\s+)?(reuni[ãa]o|call|conversa|hor[áa]rio|demonstra)/i.test(ultimaMensagemLead) ||
+        /\b(pode\s+ser|combinado|fechado|fechou|bora|t[ôo]\s+dentro|topo|aceito|vamos\s+(l[áa]|nessa|marcar))\b/i.test(ultimaMensagemLead) ||
+        /\b(me\s+)?(manda|envia|mandar|enviar)\s+(o\s+|esse\s+|aquele\s+)?link\b/i.test(ultimaMensagemLead) ||
+        /\bqual\s+(o\s+)?link\b/i.test(ultimaMensagemLead) ||
+        /\b(o|a)\s+(primeir[oa]|segund[oa]|terceir[oa])\b/i.test(ultimaMensagemLead) ||        // confirma slot proposto ("o primeiro")
+        /\b(?:[àa]s\s?\d{1,2}|\d{1,2}\s?h(?:oras)?|\d{1,2}:\d{2})\b/i.test(ultimaMensagemLead)     // escolhe horário ("às 10", "10h", "15:00")
+    );
+    if (padraoCompra) {
+        console.log("💰 [ROTEADOR] Aceite/escolha de horário detectado. Bypass para COMPRA.");
+        return 'COMPRA';
+    }
+
     // 🧠 NÍVEL 3: Análise Semântica de Alta Precisão
     const prompt = `
 Você é o classificador de intenções ultra-rápido de um sistema SDR B2B de alta performance.
@@ -127,12 +154,15 @@ MENSAGEM DO CLIENTE: "${ultimaMensagemLead}"
 Retorne APENAS a palavra da intenção. Nada de pontuação, aspas ou justificações.
 `.trim();
 
-    // Chamada ao Claude (Haiku) — classificação determinística. O adaptador trata 429.
+    // Classificação semântica. Usa o CÉREBRO (gpt-oss) — o modelo `rapido` (DeepSeek-Flash)
+    // vinha devolvendo string VAZIA 100% das vezes (modelo de raciocínio comia o token no
+    // maxTokens=10 → tudo caía no fallback DUVIDA e a IA "burra"). O cérebro classifica de
+    // verdade; maxTokens com folga pro reasoning não truncar. O adaptador trata 429 e corta harmony.
     try {
         const raw = await chamarLLM({
             messages: [{ role: 'user', content: prompt }],
-            model: MODELOS.rapido,
-            maxTokens: 10,
+            model: MODELOS.cerebro,
+            maxTokens: 200,
         });
         const resposta = (raw || '').trim().toUpperCase();
 

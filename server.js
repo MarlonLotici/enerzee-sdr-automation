@@ -726,10 +726,15 @@ app.get('/api/google/calendars', autenticarMiddleware, async (req, res) => {
 // Lê a config atual da confirmação (sem devolver o refresh_token).
 app.get('/api/google/confirmacao/config', autenticarMiddleware, async (req, res) => {
     try {
+        // 'conectado' = existe refresh_token (a prova real da conexão OAuth). NÃO usar google_email:
+        // quando só o escopo calendar.events é concedido, o email vem null e o painel dizia "desconectado"
+        // mesmo com a agenda autorizada. O token nunca é devolvido ao cliente — só o booleano tem_token.
         const { data } = await supabase.from('calendar_connections')
-            .select('google_email, calendar_id, confirmacao_ativa, confirmacao_hora')
+            .select('google_email, calendar_id, confirmacao_ativa, confirmacao_hora, refresh_token, booking_ativo')
             .eq('user_id', req.user.id).maybeSingle();
-        res.json({ ok: true, conectado: !!data?.google_email, config: data || null });
+        const conectado = !!(data?.refresh_token || data?.google_email);
+        const config = data ? { ...data, refresh_token: undefined, tem_token: !!data.refresh_token } : null;
+        res.json({ ok: true, conectado, config });
     } catch (err) {
         res.status(500).json({ error: err.message });
     }

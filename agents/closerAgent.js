@@ -17,7 +17,12 @@ const { alertaDegradacaoIA } = require('../notifier');
  *   alta (o link vai por WhatsApp depois da ligação).
  */
 async function gerarRespostaCloser(historico, lead, promptPersonalidade, intencao = 'DUVIDA', opcoes = {}) {
-    const calendlyLink   = opcoes.calendlyLink   || '';
+    // 📅 Booking automático (Google Agenda) ligado pra este tenant? Então o CLOSER NÃO agenda:
+    // quem propõe horário, cria evento e manda link é o orquestrarAgendamento (4_sdr.js), ANTES
+    // do closer. Aqui zeramos o Calendly e proibimos o closer de fingir/propor horário — isso
+    // mata o "Confirmado amanhã às 10h" + link de Calendly falso quando existe agenda real.
+    const bookingAtivo   = opcoes.bookingAtivo === true;
+    const calendlyLink   = bookingAtivo ? '' : (opcoes.calendlyLink || '');
     const instanceType   = opcoes.instanceType   || 'solar';
     const isSolar        = instanceType === 'solar';
     const isAntix        = instanceType === 'antix';
@@ -148,7 +153,11 @@ O lead fez uma pergunta real ou está na fase inicial de descoberta.
 
 ⚠️ HARD RULE — PROIBIDO CONFIRMAÇÕES VAZIAS: Se o lead confirmar que é o decisor, NÃO diga "Que ótimo!", "Entendi", "Perfeito". Avance IMEDIATAMENTE para o próximo estágio.
 
-⚡ FAST-TRACK: Se o lead demonstrar alta receptividade ("quando começa?", "como faço?", "quero ver"), PULE qualquer qualificação restante e envie o link: ${calendlyLink} com [ESTAGIO:4].
+${calendlyLink
+    ? `⚡ FAST-TRACK: Se o lead demonstrar alta receptividade ("quando começa?", "como faço?", "quero ver"), PULE qualquer qualificação restante e envie o link: ${calendlyLink} com [ESTAGIO:4].`
+    : bookingAtivo
+        ? `⚡ FAST-TRACK: Se o lead demonstrar alta receptividade, sinalize que já vai verificar os horários disponíveis e marque [ESTAGIO:4]. NÃO invente horário nem diga que agendou — o sistema propõe os horários reais em seguida.`
+        : `⚡ FAST-TRACK: Se o lead demonstrar alta receptividade, diga que um especialista vai confirmar o melhor horário com ele e marque [ESTAGIO:4]. PROIBIDO inventar/confirmar horário ou dizer que agendou.`}
 
 ⚠️ REGRA DE OURO - QUALIFICAÇÃO CONSULTIVA:
 - OBRIGATÓRIO: Se o lead confirmar que é o decisor, mude imediatamente para [ESTAGIO:1].
@@ -246,11 +255,30 @@ REGRAS DE VOZ (SOBRESCREVEM instruções de formato de chat acima):
 ` : '';
 
     // ─────────────────────────────────────────────────────────────────────────
+    // AGENDAMENTO AUTOMÁTICO (Google Agenda) — override DURO anti-agendamento-fake.
+    // Vem DEPOIS do overrideTatico pra vencer qualquer instrução de fechamento acima.
+    // ─────────────────────────────────────────────────────────────────────────
+    const blocoBookingAuto = bookingAtivo ? `
+=======================================================
+📅 AGENDAMENTO AUTOMÁTICO ATIVO — LEIA E OBEDEÇA
+=======================================================
+Este tenant tem uma agenda automática que cuida SOZINHA de marcar reuniões.
+Você (closer) NÃO agenda, NÃO tem link e NÃO controla horários.
+
+⚠️ REGRAS ABSOLUTAS (SOBRESCREVEM TUDO ACIMA):
+- É TERMINANTEMENTE PROIBIDO dizer "confirmado", "agendado", "marquei", "reservei" ou citar um horário como fechado.
+- É PROIBIDO enviar qualquer link de agenda (Calendly, Meet, etc.) — você não tem link.
+- É PROIBIDO propor horários específicos ("amanhã às 10h") por conta própria.
+- Se o lead quiser marcar, responda em 1 frase curta que você JÁ VAI VERIFICAR os horários livres — o sistema propõe os horários reais e cria o evento logo em seguida. Depois PARE (não invente nada).
+` : '';
+
+    // ─────────────────────────────────────────────────────────────────────────
     // PROMPT FINAL = Constituição + Override + DNA do Vendedor
     // ─────────────────────────────────────────────────────────────────────────
     const promptFinal = `${promptPersonalidade}
 ${blocoStandby}
 ${overrideTatico}
+${blocoBookingAuto}
 ${blocoVoz}
 ========================================================
 🎭 DNA DO VENDEDOR — VOCÊ NÃO É UM ASSISTENTE, VOCÊ É UM CLOSER

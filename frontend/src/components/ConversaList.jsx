@@ -449,49 +449,13 @@ const conversasFiltradas = conversas.filter(({ lead, ultimaMsg }) => {
     }
 })
 
-// 🎯 SORT TÁTICO: ordena por prioridade comercial, não cronológica
-// Quanto MENOR o número de prioridade, mais alto na lista
-function calcularPrioridade({ lead, ultimaMsg }) {
-    const aguardandoResposta = !lead.is_paused && !lead.manual_pause && ultimaMsg?.role === 'user'
-    const pausado = lead.is_paused || lead.manual_pause
-    
-    // 1. Hot lead aguardando resposta — DINHEIRO ESCORRENDO, atenção total
-    if (lead.lead_temperature === 'hot' && aguardandoResposta) return 1
-    
-    // 2. Lead em Estágio 4+ (Agenda) aguardando — quase fechando
-    if ((lead.current_stage || 0) >= 4 && aguardandoResposta) return 2
-    
-    // 3. Hot lead (mesmo se IA já respondeu) — manter no radar
-    if (lead.lead_temperature === 'hot') return 3
-    
-    // 4. Estágio 4+ em geral — agenda em andamento
-    if ((lead.current_stage || 0) >= 4) return 4
-    
-    // 5. Aguardando resposta (qualquer estágio) — vácuo da IA
-    if (aguardandoResposta) return 5
-    
-    // 6. Warm leads — em construção
-    if (lead.lead_temperature === 'warm') return 6
-    
-    // 7. IA ativa em conversa normal
-    if (!pausado) return 7
-    
-    // 8. Pausados (no fim da lista)
-    return 8
-}
-
+// 🕒 ORDEM CRONOLÓGICA (igual ao WhatsApp): a conversa com movimentação mais recente fica no
+// topo. Usa o timestamp da última mensagem, com fallback no last_contact_at do lead. A prioridade
+// comercial (hot/estágio) continua visível pelos badges e pelos filtros — mas a lista segue o tempo.
 const conversasOrdenadas = [...conversasFiltradas].sort((a, b) => {
-    const prioA = calcularPrioridade(a)
-    const prioB = calcularPrioridade(b)
-
-    // Tiebreaker por timestamp real da última mensagem (movimentação mais recente primeiro)
-    if (prioA === prioB) {
-        const tA = new Date(a.ultimaMsg?.created_at || a.lead.last_contact_at || 0).getTime()
-        const tB = new Date(b.ultimaMsg?.created_at || b.lead.last_contact_at || 0).getTime()
-        return tB - tA
-    }
-
-    return prioA - prioB
+    const tA = new Date(a.ultimaMsg?.created_at || a.lead.last_contact_at || 0).getTime()
+    const tB = new Date(b.ultimaMsg?.created_at || b.lead.last_contact_at || 0).getTime()
+    return tB - tA
 })
 
 // Agrupa por chip para separação visual
