@@ -1780,9 +1780,13 @@ async function startInstance(instanceId, instanceName, preloadedUserId = null) {
             const remoteJid = evento.remoteJid;
             if (remoteJid.includes('@g.us')) continue; // Ignora grupos
 
-            // Acusa leitura imediatamente (ticks azuis) — bots normalmente não fazem isso
+            // Acusa leitura com ATRASO ALEATÓRIO (ticks azuis). Instantâneo é cara de bot;
+            // uma pessoa real leva alguns segundos pra abrir. Config via env (default 2-10s).
             if (!evento.fromMe) {
-                sock.readMessages([msg.key]).catch(() => {});
+                const minL = parseInt(process.env.LEITURA_DELAY_MIN_MS, 10) || 2000;
+                const maxL = parseInt(process.env.LEITURA_DELAY_MAX_MS, 10) || 10000;
+                const delayLeitura = Math.floor(Math.random() * Math.max(1, maxL - minL)) + minL;
+                setTimeout(() => sock.readMessages([msg.key]).catch(() => {}), delayLeitura);
             }
 
             const isFromMe = evento.fromMe;
@@ -2390,10 +2394,33 @@ if (!lead) {
         .single();
 
     if (erroLeadOrganico || !leadCriado) {
-        console.error(`❌ [INBOUND ORGÂNICO] Falha ao criar lead para ${jidParaSalvar}:`, erroLeadOrganico?.message);
-        return;
+        // O lead pode JÁ EXISTIR (mesmo whatsapp_id de uma conversa/chip antigo) → a constraint
+        // unique_whatsapp_id barra o INSERT. Antes isso descartava a mensagem (bug "mandei e não
+        // recebi nada"). Agora recupera o lead existente e re-vincula a este chip pra reprocessar.
+        const ehDuplicado = erroLeadOrganico?.code === '23505'
+            || /unique_whatsapp_id|duplicate key/i.test(erroLeadOrganico?.message || '');
+        if (ehDuplicado) {
+            const { data: leadExistente } = await supabase
+                .from('leads').select('*').eq('whatsapp_id', jidParaSalvar).maybeSingle();
+            if (leadExistente) {
+                if (leadExistente.instance_id !== instanceId || leadExistente.user_id !== userIdInbound) {
+                    await supabase.from('leads')
+                        .update({ instance_id: instanceId, user_id: userIdInbound })
+                        .eq('id', leadExistente.id);
+                    leadExistente.instance_id = instanceId;
+                    leadExistente.user_id = userIdInbound;
+                }
+                lead = leadExistente;
+                console.log(`🔗 [INBOUND ORGÂNICO] Lead ${jidParaSalvar} já existia — re-vinculado ao chip e reprocessado.`);
+            }
+        }
+        if (!lead) {
+            console.error(`❌ [INBOUND ORGÂNICO] Falha ao criar/recuperar lead para ${jidParaSalvar}:`, erroLeadOrganico?.message);
+            return;
+        }
+    } else {
+        lead = leadCriado;
     }
-    lead = leadCriado;
 }
 
 // 🎯 A MÁGICA DA IDENTIDADE: Atualização dinâmica do nome pelo WhatsApp
