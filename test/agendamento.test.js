@@ -1,7 +1,7 @@
 'use strict';
 const test = require('node:test');
 const assert = require('node:assert/strict');
-const { detectarConfirmacaoSlot } = require('../lib/agendamento');
+const { detectarConfirmacaoSlot, extrairHorarioPedido } = require('../lib/agendamento');
 
 const SLOTS = [
     { inicioISO: '2026-08-21T13:00:00Z', fimISO: '2026-08-21T13:30:00Z', label: 'hoje às 10h' },
@@ -32,4 +32,26 @@ test('recusa/ambiguidade → null', () => {
 test('sem slots → null', () => {
     assert.equal(detectarConfirmacaoSlot('o primeiro', []), null);
     assert.equal(detectarConfirmacaoSlot('o primeiro', null), null);
+});
+
+// Dois slots na MESMA hora (9h e 9h30): o parser tem que diferenciar pelos minutos.
+const SLOTS_MESMA_HORA = [
+    { inicioISO: '2026-08-24T12:00:00Z', fimISO: '2026-08-24T12:30:00Z', label: 'seg às 9h' },
+    { inicioISO: '2026-08-24T12:30:00Z', fimISO: '2026-08-24T13:00:00Z', label: 'seg às 9h30' },
+];
+
+test('minutos: "9:30" cai no slot 9h30 (não no 9h)', () => {
+    assert.equal(detectarConfirmacaoSlot('pode ser 9:30', SLOTS_MESMA_HORA).label, 'seg às 9h30');
+    assert.equal(detectarConfirmacaoSlot('9h30 tá ótimo', SLOTS_MESMA_HORA).label, 'seg às 9h30');
+});
+
+test('minutos: "9h" (minuto 0) casa exatamente o slot 9h, não o 9h30', () => {
+    assert.equal(detectarConfirmacaoSlot('pode ser 9h', SLOTS_MESMA_HORA).label, 'seg às 9h');
+});
+
+test('extrairHorarioPedido: pega o horário pedido mesmo fora dos ofertados', () => {
+    assert.deepEqual(extrairHorarioPedido('quero as 14 horas'), { h: 14, m: 0 });
+    assert.deepEqual(extrairHorarioPedido('pode ser 9:30'), { h: 9, m: 30 });
+    assert.deepEqual(extrairHorarioPedido('as 11'), { h: 11, m: 0 });
+    assert.equal(extrairHorarioPedido('bom dia'), null);
 });

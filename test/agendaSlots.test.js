@@ -8,17 +8,28 @@ function brtISO(ano, mesHumano, dia, hora, min = 0) {
     return new Date(Date.UTC(ano, mesHumano - 1, dia, hora + 3, min, 0)).toISOString();
 }
 
-test('calcularSlotsLivres: acha 2 slots livres no expediente, respeitando antecedência', () => {
-    // Sexta 2026-08-21 08:00 BRT como "agora"
+test('calcularSlotsLivres: propõe 2 horários ESPAÇADOS (manhã + tarde), respeitando antecedência', () => {
+    // Sexta 2026-08-21 08:00 BRT como "agora". rng=0 → pega o 1º da manhã e o 1º da tarde.
     const agora = brtISO(2026, 8, 21, 8);
     const slots = calcularSlotsLivres({
-        agora, ocupados: [], diasAdiante: 3,
+        agora, ocupados: [], diasAdiante: 3, rng: () => 0,
         horaInicio: 9, horaFim: 18, duracaoMin: 60, maxSlots: 2, antecedenciaMin: 120,
     });
     assert.equal(slots.length, 2);
-    // 08:00 + 120min antecedência = 10:00 → primeiro slot livre é 10h (não 9h)
+    // 08:00 + 120min = 10:00 → manhã começa em 10h; tarde (>=13h) começa em 13h. Espaçado, não 10h/11h.
     assert.equal(rotularSlotBRT(slots[0].inicioISO, agora), 'hoje às 10h');
-    assert.equal(rotularSlotBRT(slots[1].inicioISO, agora), 'hoje às 11h');
+    assert.equal(rotularSlotBRT(slots[1].inicioISO, agora), 'hoje às 13h');
+});
+
+test('calcularSlotsLivres: variação ("ginga") — rng diferente muda os horários ofertados', () => {
+    const agora = brtISO(2026, 8, 21, 8);
+    const slots = calcularSlotsLivres({
+        agora, ocupados: [], diasAdiante: 3, rng: () => 0.99, // pega o último de cada período
+        horaInicio: 9, horaFim: 18, duracaoMin: 60, maxSlots: 2, antecedenciaMin: 120,
+    });
+    // manhã: 10h,11h → último = 11h; tarde: 13..17h → último = 17h
+    assert.equal(rotularSlotBRT(slots[0].inicioISO, agora), 'hoje às 11h');
+    assert.equal(rotularSlotBRT(slots[1].inicioISO, agora), 'hoje às 17h');
 });
 
 test('calcularSlotsLivres: pula intervalos ocupados', () => {
@@ -27,12 +38,12 @@ test('calcularSlotsLivres: pula intervalos ocupados', () => {
         { inicio: brtISO(2026, 8, 21, 10), fim: brtISO(2026, 8, 21, 11) }, // 10-11 ocupado
     ];
     const slots = calcularSlotsLivres({
-        agora, ocupados, diasAdiante: 1,
+        agora, ocupados, diasAdiante: 1, rng: () => 0,
         horaInicio: 9, horaFim: 18, duracaoMin: 60, maxSlots: 2, antecedenciaMin: 120,
     });
-    // 10h está ocupado → primeiro livre é 11h
+    // 10h está ocupado → manhã livre começa em 11h; tarde em 13h.
     assert.equal(rotularSlotBRT(slots[0].inicioISO, agora), 'hoje às 11h');
-    assert.equal(rotularSlotBRT(slots[1].inicioISO, agora), 'hoje às 12h');
+    assert.equal(rotularSlotBRT(slots[1].inicioISO, agora), 'hoje às 13h');
 });
 
 test('calcularSlotsLivres: pula fim de semana por padrão', () => {

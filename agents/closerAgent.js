@@ -21,9 +21,12 @@ async function gerarRespostaCloser(historico, lead, promptPersonalidade, intenca
     // quem propõe horário, cria evento e manda link é o orquestrarAgendamento (4_sdr.js), ANTES
     // do closer. Aqui zeramos o Calendly e proibimos o closer de fingir/propor horário — isso
     // mata o "Confirmado amanhã às 10h" + link de Calendly falso quando existe agenda real.
-    const bookingAtivo   = opcoes.bookingAtivo === true;
-    const calendlyLink   = bookingAtivo ? '' : (opcoes.calendlyLink || '');
-    const instanceType   = opcoes.instanceType   || 'solar';
+    const bookingAtivo    = opcoes.bookingAtivo === true;
+    const agendaConectada = opcoes.agendaConectada === true;
+    // Se há Google Agenda conectada (com booking ativo OU não), NUNCA manda Calendly — o
+    // agendamento real é a fonte da verdade. Calendly só sobra pra quem não conectou agenda.
+    const calendlyLink    = (bookingAtivo || agendaConectada) ? '' : (opcoes.calendlyLink || '');
+    const instanceType    = opcoes.instanceType   || 'solar';
     const isSolar        = instanceType === 'solar';
     const isAntix        = instanceType === 'antix';
     const isVoz          = opcoes.modo === 'voz';

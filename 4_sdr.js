@@ -128,7 +128,8 @@ const { dividirEmBaloes } = require('./lib/baloes');
 const { extrairTelefoneDescricao, eventoEhReuniao, digitosParaJids } = require('./lib/gcalParse');
 const { classificarConfirmacao } = require('./lib/confirmacao');
 const gcal = require('./integrations/googleCalendar');
-const { detectarConfirmacaoSlot } = require('./lib/agendamento');
+const { detectarConfirmacaoSlot, extrairHorarioPedido } = require('./lib/agendamento');
+const { rotularSlotBRT } = require('./lib/agendaSlots');
 
 // ✂️ LÂMINA DE CORTE: Transforma "Merci Delicatessen Restaurante e Pizzaria LTDA" em "Merci Delicatessen"
 function limparNomeEmpresa(nomeOriginal) {
@@ -4333,83 +4334,132 @@ if (!histRaw || histRaw.length === 0) return;
 // Retorna { tratado, resposta }: se tratado=true, o worker envia `resposta` e NÃO
 // aciona o funil de venda normal (evita a IA fingir/duplicar agendamento).
 // ============================================================================
+// Pequena variação de frase ("ginga") pra não repetir texto robótico fixo.
+function _variar(frases) { return frases[Math.floor(Math.random() * frases.length)]; }
+
+// Constrói um slot no MESMO dia (BRT) de um slot de referência, na hora/min pedidos.
+function _montarSlotNoDia(baseISO, h, min, duracaoMin) {
+    if (!baseISO) return null;
+    const b = new Date(new Date(baseISO).getTime() - 3 * 60 * 60 * 1000); // relógio BRT (UTC-3)
+    const iniMs = Date.UTC(b.getUTCFullYear(), b.getUTCMonth(), b.getUTCDate(), h + 3, min, 0); // BRT h:min → UTC
+    const ini = new Date(iniMs);
+    return {
+        inicioISO: ini.toISOString(),
+        fimISO:    new Date(iniMs + duracaoMin * 60 * 1000).toISOString(),
+        label:     rotularSlotBRT(ini),
+    };
+}
+
 async function orquestrarAgendamento(lead, ultimaMsg, instanceData, userId, intencao) {
     // Carrega a config de booking SEMPRE (mesmo quando não vamos agendar): o worker precisa
-    // saber se o booking está ativo pra avisar o closer a NÃO fingir agendamento/mandar Calendly.
+    // saber se o booking está ativo (e se há agenda conectada) pra o closer NÃO mandar Calendly.
     const { data: cfg } = await supabase.from('calendar_connections')
-        .select('booking_ativo, booking_calendar_id, calendar_id, booking_hora_inicio, booking_hora_fim, booking_duracao_min')
+        .select('booking_ativo, booking_calendar_id, calendar_id, booking_hora_inicio, booking_hora_fim, booking_duracao_min, refresh_token')
         .eq('user_id', userId).maybeSingle();
     const bookingAtivo = cfg?.booking_ativo === true;
-    if (!bookingAtivo) return { tratado: false, bookingAtivo: false }; // feature desligada → fluxo normal
+    const agendaConectada = !!cfg?.refresh_token; // tem token → NUNCA mandar Calendly, use a agenda real
+    if (!bookingAtivo) return { tratado: false, bookingAtivo: false, agendaConectada };
 
     const temSlots = Array.isArray(lead.slots_propostos) && lead.slots_propostos.length > 0;
-    // Dispara: (a) na CONFIRMAÇÃO (já tem slots propostos), (b) em sinal de COMPRA, ou
-    // (c) quando o lead PEDE agendamento explicitamente — o roteador nem sempre marca COMPRA
-    // num "quero marcar uma reunião" (às vezes vira DÚVIDA), então checamos as palavras também.
     const querAgendar = /\b(agendar|agende|marcar|marca[r]?\s+uma|remarcar|reuni[aã]o|hor[aá]rio|hor[aá]rios|dispon[ií]vel|que\s+dia|que\s+horas)\b/i.test(ultimaMsg || '');
-    if (!temSlots && intencao !== 'COMPRA' && !querAgendar) return { tratado: false, bookingAtivo: true };
+    const jaAgendado = lead.status === 'booked' && !!lead.gcal_event_id;
+    if (!temSlots && intencao !== 'COMPRA' && !querAgendar && !(jaAgendado && querAgendar))
+        return { tratado: false, bookingAtivo: true, agendaConectada };
 
     const calId = cfg.booking_calendar_id || cfg.calendar_id || 'primary';
-    const listaLabels = (slots) => slots.map(s => s.label).join(' ou ');
+    const duracaoMin = cfg.booking_duracao_min ?? 30;
+    const horaInicio = cfg.booking_hora_inicio ?? 9;
+    const horaFim    = cfg.booking_hora_fim ?? 18;
+    const labels = (slots) => slots.map((s) => s.label).join(' ou ');
+    const ok = (resposta) => ({ tratado: true, bookingAtivo: true, agendaConectada, resposta });
 
-    // ── FASE CONFIRMAÇÃO: já propusemos horários, o lead está respondendo ──
+    // Efetiva o agendamento: se o lead JÁ tem evento, REMARCA (mantém o mesmo Meet);
+    // senão CRIA um novo. Evita reuniões duplicadas na agenda.
+    const efetivar = async (slot) => {
+        let ev = null;
+        if (lead.gcal_event_id) {
+            ev = await gcal.remarcarEvento(userId, lead.slot_calendar_id || calId, lead.gcal_event_id,
+                { inicioISO: slot.inicioISO, fimISO: slot.fimISO }).catch(() => null);
+        }
+        if (!ev?.eventId) {
+            ev = await gcal.criarEvento(userId, calId, {
+                inicioISO: slot.inicioISO, fimISO: slot.fimISO,
+                titulo:    `Reunião — ${lead.name || 'Lead'}`,
+                descricao: `Agendado pela SDR IA (Antix). Lead: ${lead.name || ''} · ${lead.phone || lead.whatsapp_id}`,
+            });
+        }
+        if (!ev?.eventId) throw new Error('Google não retornou eventId');
+        const remarcou = !!lead.gcal_event_id;
+        await supabase.from('leads').update({
+            status: 'booked', calendly_booked: true, current_stage: 5, is_paused: true,
+            gcal_event_id: ev.eventId, gcal_meet_link: ev.meetLink || null,
+            calendly_event_at: slot.inicioISO, slots_propostos: null, slot_calendar_id: null,
+            reminder_sent: null, lembrete_1h_enviado: false,
+            internal_notes: `Reunião ${remarcou ? 'remarcada' : 'criada'} na Google Agenda (${slot.label}) em ${new Date().toLocaleString('pt-BR')}.`,
+        }).eq('id', lead.id);
+        console.log(`✅ [AGENDAMENTO] ${lead.name}: evento ${remarcou ? 'remarcado' : 'criado'} (${slot.label}) ${ev.meetLink || ''}`);
+        const linkTxt = ev.meetLink ? `\n[QUEBRA]\nSegue o link da nossa reunião: ${ev.meetLink}` : '';
+        return ok(`${_variar(['Perfeito! Agendei', 'Fechado! Marquei', 'Prontinho, deixei agendado'])} nossa conversa pra ${slot.label}. ✅${linkTxt}`);
+    };
+
+    // Oferta 2 horários REAIS e ESPAÇADOS (manhã/tarde), com variação de frase ("ginga").
+    const ofertar = async (ocupadoAntes) => {
+        let slots;
+        try {
+            slots = await gcal.listarHorariosLivres(userId, calId, { horaInicio, horaFim, duracaoMin, maxSlots: 2 });
+        } catch (e) {
+            console.error(`❌ [AGENDAMENTO] Falha ao ler agenda de ${lead.name}:`, e.message);
+            enviarAlerta(`⚠️ Agenda não pôde ser lida — ${lead.name}`, `${e.message}. Provável escopo OAuth — RECONECTE a Google Agenda.`, 15158332).catch(() => {});
+            return ok('Deixa eu confirmar os horários certinho aqui e já te retorno com as opções, tá? 🙌');
+        }
+        if (!slots.length) {
+            enviarAlerta(`📅 Agenda cheia — ${lead.name}`, 'Sem horário livre nos próximos dias.', 15158332).catch(() => {});
+            return ok('Adorei seu interesse! Minha agenda tá bem concorrida nos próximos dias — um especialista vai te chamar pra achar o melhor horário. 🙌');
+        }
+        await supabase.from('leads').update({ slots_propostos: slots, slot_calendar_id: calId, current_stage: 4 }).eq('id', lead.id);
+        console.log(`📅 [AGENDAMENTO] ${lead.name}: propondo ${labels(slots)}`);
+        const abre = ocupadoAntes
+            ? _variar(['Esse já tá ocupado 😕 ', 'Puxa, nesse eu já tenho compromisso. ', 'Esse horário não tá livre. '])
+            : _variar(['Que bom! ', 'Show! ', 'Massa! ']);
+        return ok(`${abre}${_variar(['Consigo te encaixar', 'Tenho livre', 'Dá pra marcar'])} ${labels(slots)}. ${_variar(['Qual fica melhor?', 'Qual prefere?', 'Qual encaixa melhor aí?'])} 😊`);
+    };
+
+    // ── JÁ AGENDADO e o lead volta querendo mexer → modo REMARCAÇÃO (reoferece; efetivar faz patch) ──
+    if (jaAgendado && !temSlots) return await ofertar(false);
+
+    // ── FASE CONFIRMAÇÃO: já há slots propostos, o lead está respondendo ──
     if (temSlots) {
         const escolhido = detectarConfirmacaoSlot(ultimaMsg, lead.slots_propostos);
         if (escolhido) {
-            try {
-                const ev = await gcal.criarEvento(userId, calId, {
-                    inicioISO: escolhido.inicioISO,
-                    fimISO:    escolhido.fimISO,
-                    titulo:    `Reunião — ${lead.name || 'Lead'}`,
-                    descricao: `Agendado pela SDR IA (Antix). Lead: ${lead.name || ''} · ${lead.phone || lead.whatsapp_id}`,
-                });
-                if (!ev?.eventId) throw new Error('Google não retornou eventId');
-                await supabase.from('leads').update({
-                    status: 'booked', calendly_booked: true, current_stage: 5, is_paused: true,
-                    gcal_event_id: ev.eventId, gcal_meet_link: ev.meetLink || null,
-                    calendly_event_at: escolhido.inicioISO, slots_propostos: null, slot_calendar_id: null,
-                    reminder_sent: null, lembrete_1h_enviado: false, // libera o lembrete 24h (loop existente) + 1h (novo)
-                    internal_notes: `Reunião criada na Google Agenda (${escolhido.label}) em ${new Date().toLocaleString('pt-BR')}.`,
-                }).eq('id', lead.id);
-                console.log(`✅ [AGENDAMENTO] ${lead.name}: evento criado (${escolhido.label}) ${ev.meetLink || ''}`);
-                const linkTxt = ev.meetLink ? `\n[QUEBRA]\nSegue o link da nossa reunião: ${ev.meetLink}` : '';
-                return { tratado: true, resposta: `Perfeito! Agendei nossa conversa pra ${escolhido.label}. ✅${linkTxt}` };
-            } catch (e) {
-                console.error(`❌ [AGENDAMENTO] Falha ao criar evento pra ${lead.name}:`, e.message);
-                enviarAlerta(`⚠️ Falha ao criar evento — ${lead.name}`, e.message, 15158332).catch(() => {});
-                return { tratado: true, resposta: `Opa, tive um probleminha aqui pra travar o horário. Consegue confirmar de novo: ${listaLabels(lead.slots_propostos)}?` };
+            try { return await efetivar(escolhido); }
+            catch (e) {
+                console.error(`❌ [AGENDAMENTO] Falha ao efetivar pra ${lead.name}:`, e.message);
+                enviarAlerta(`⚠️ Falha ao criar/remarcar evento — ${lead.name}`, e.message, 15158332).catch(() => {});
+                return ok(`Opa, tive um probleminha aqui pra travar o horário. Consegue confirmar de novo: ${labels(lead.slots_propostos)}?`);
             }
         }
-        // Resposta ambígua → re-pergunta com os MESMOS horários (não inventa novos, não finge).
-        return { tratado: true, resposta: `Só pra confirmar certinho: qual fica melhor pra você, ${listaLabels(lead.slots_propostos)}?` };
+        // Não bateu com os 2 ofertados — o lead pediu OUTRO horário específico? (ex.: "as 14h")
+        const pedido = extrairHorarioPedido(ultimaMsg);
+        if (pedido) {
+            const foraExpediente = pedido.h < horaInicio || (pedido.h + duracaoMin / 60) > horaFim;
+            if (foraExpediente) {
+                return ok(`Nesse horário eu não atendo (funciono das ${horaInicio}h às ${horaFim}h). ${_variar(['Que tal', 'Prefere'])} ${labels(lead.slots_propostos)}?`);
+            }
+            const alvo = _montarSlotNoDia(lead.slots_propostos[0]?.inicioISO, pedido.h, pedido.m, duracaoMin);
+            let livre = false;
+            try { livre = await gcal.verificarLivre(userId, lead.slot_calendar_id || calId, alvo.inicioISO, alvo.fimISO); } catch { livre = false; }
+            if (livre) {
+                try { return await efetivar(alvo); } catch (e) { console.error(`❌ [AGENDAMENTO] efetivar horário pedido falhou: ${e.message}`); }
+            }
+            // Ocupado (ou falhou) → reoferece 2 horários livres reais, avisando.
+            return await ofertar(true);
+        }
+        // Resposta vaga → re-pergunta com GINGA (não repete a mesma frase fixa).
+        return ok(`${_variar(['Só confirmando:', 'Pra fechar:', 'Me diz então:'])} ${_variar(['qual fica melhor', 'qual prefere', 'qual encaixa'])}, ${labels(lead.slots_propostos)}?`);
     }
 
-    // ── FASE OFERTA: sinal de compra e ainda sem horários propostos ──
-    let slots;
-    try {
-        slots = await gcal.listarHorariosLivres(userId, calId, {
-            horaInicio: cfg.booking_hora_inicio ?? 9,
-            horaFim:    cfg.booking_hora_fim ?? 18,
-            duracaoMin: cfg.booking_duracao_min ?? 30,
-            maxSlots:   2,
-        });
-    } catch (e) {
-        // Erro de LEITURA da agenda (escopo OAuth insuficiente, token revogado, API fora).
-        // NÃO é "agenda cheia" — avisa o operador pra reconectar e dá resposta honesta (sem loop).
-        console.error(`❌ [AGENDAMENTO] Falha ao ler agenda de ${lead.name}:`, e.message);
-        enviarAlerta(`⚠️ Agenda não pôde ser lida — ${lead.name}`, `Erro ao consultar horários livres: ${e.message}. Provável escopo OAuth insuficiente — RECONECTE a Google Agenda no painel.`, 15158332).catch(() => {});
-        return { tratado: true, bookingAtivo: true, resposta: `Deixa eu confirmar os horários certinho aqui e já te retorno com as opções, tá? 🙌` };
-    }
-    if (!slots.length) {
-        // Agenda cheia → handoff humano, SEM fingir horário.
-        enviarAlerta(`📅 Agenda cheia — ${lead.name}`, `Lead quente sem horário livre nos próximos dias. Agende manualmente.`, 15158332).catch(() => {});
-        return { tratado: true, resposta: `Adorei seu interesse! Minha agenda tá bem concorrida nos próximos dias — um especialista vai te chamar pra achar o melhor horário. 🙌` };
-    }
-    await supabase.from('leads').update({
-        slots_propostos: slots, slot_calendar_id: calId, current_stage: 4,
-    }).eq('id', lead.id);
-    console.log(`📅 [AGENDAMENTO] ${lead.name}: propondo ${listaLabels(slots)}`);
-    return { tratado: true, resposta: `Que bom! Consigo te encaixar ${listaLabels(slots)}. Qual fica melhor pra você? 😊` };
+    // ── FASE OFERTA inicial ──
+    return await ofertar(false);
 }
 
 const workerIA = new Worker('FilaIA', async (job) => {
@@ -4542,12 +4592,14 @@ if (!userId) {
 // normal. Inerte (tratado=false) pra quem não usa. Roda ANTES do anti-loop pra uma
 // confirmação de horário sempre vencer.
 let bookingAtivo = false;
+let agendaConectada = false;
 {
     const agend = await orquestrarAgendamento(lead, ultimaMsg, instanceData, userId, intencao).catch((e) => {
         console.error(`❌ [AGENDAMENTO] Orquestração falhou para ${lead.name}:`, e.message);
         return { tratado: false };
     });
     bookingAtivo = agend?.bookingAtivo === true;
+    agendaConectada = agend?.agendaConectada === true;
     if (agend?.tratado) {
         if (agend.resposta) {
             await filtrarEEnviarResposta(instancia?.sock, remoteJid, agend.resposta, historico, lead, instanceId, instanceData?.tts_voice || null);
@@ -4672,7 +4724,7 @@ if (!promptResolvido) {
     resposta = await closerAgent.gerarRespostaCloser(historico, lead, promptResolvido, 'COMPRA', {
         calendlyLink: instanceData?.calendly_link,
         instanceType: instanceData?.product_type || 'solar',
-        bookingAtivo
+        bookingAtivo, agendaConectada
     });
     // [FOLLOW_UP] já é extraído e salvo em filtrarEEnviarResposta (etapa 0).
     // Fallback: se o closer esqueceu a tag, tenta extrair a data da última mensagem do lead.
@@ -4701,11 +4753,11 @@ if (!promptResolvido) {
 } else if (intencao === 'COMPRA') {
     // ... resto do código igual
     console.log(`💰 [WORKER-IA] Sinal de COMPRA! Acionando Closer em modo fechamento para ${lead.name}...`);
-    resposta = await closerAgent.gerarRespostaCloser(historico, lead, promptResolvido, 'COMPRA', { calendlyLink: instanceData?.calendly_link, instanceType: instanceData?.product_type || 'solar', bookingAtivo });
+    resposta = await closerAgent.gerarRespostaCloser(historico, lead, promptResolvido, 'COMPRA', { calendlyLink: instanceData?.calendly_link, instanceType: instanceData?.product_type || 'solar', bookingAtivo, agendaConectada });
 
 } else if (intencao === 'DUVIDA' || intencao === 'CONTINUAR') {
     console.log(`🔍 [WORKER-IA] Fluxo de CONTINUIDADE/DÚVIDA. Acionando Closer para ${lead.name}...`);
-    resposta = await closerAgent.gerarRespostaCloser(historico, lead, promptResolvido, 'DUVIDA', { calendlyLink: instanceData?.calendly_link, instanceType: instanceData?.product_type || 'solar', primeiroContato, bookingAtivo });
+    resposta = await closerAgent.gerarRespostaCloser(historico, lead, promptResolvido, 'DUVIDA', { calendlyLink: instanceData?.calendly_link, instanceType: instanceData?.product_type || 'solar', primeiroContato, bookingAtivo, agendaConectada });
 
 } else if (intencao === 'OBJECAO') {
     console.log(`🛡️ [WORKER-IA] OBJEÇÃO detectada! Acionando The Tank para ${lead.name}...`);
@@ -4742,7 +4794,7 @@ if (!promptResolvido) {
             console.log(`✅ [REPASSE] Email de repasse enviado para ${emailDetectado}`);
         } else {
             console.error(`❌ [REPASSE] Falha ao enviar email de repasse:`, resultadoEmailRepasse.error);
-            resposta = await closerAgent.gerarRespostaCloser(historico, lead, promptResolvido, 'REPASSE', { calendlyLink: instanceData?.calendly_link, instanceType: instanceData?.product_type || 'solar', bookingAtivo });
+            resposta = await closerAgent.gerarRespostaCloser(historico, lead, promptResolvido, 'REPASSE', { calendlyLink: instanceData?.calendly_link, instanceType: instanceData?.product_type || 'solar', bookingAtivo, agendaConectada });
         }
     } else {
         const { nomeDecisor, telefoneDecisor } = await handoffAgent.extrairDadosDecisor(ultimaMsg, historico);
@@ -4769,7 +4821,7 @@ if (!promptResolvido) {
             } catch (erroRepasse) {
                 console.error(`❌ [REPASSE] Falha ao atualizar lead ${lead.id}:`, erroRepasse.message);
                 // Fallback: closer tenta extrair o contato via conversa
-                resposta = await closerAgent.gerarRespostaCloser(historico, lead, promptResolvido, 'REPASSE', { calendlyLink: instanceData?.calendly_link, instanceType: instanceData?.product_type || 'solar', bookingAtivo });
+                resposta = await closerAgent.gerarRespostaCloser(historico, lead, promptResolvido, 'REPASSE', { calendlyLink: instanceData?.calendly_link, instanceType: instanceData?.product_type || 'solar', bookingAtivo, agendaConectada });
             }
         } else if (lead.backup_whatsapp_id) {
             // 🚪 GATEKEEPER SEM REPASSE: lead confirmou que não é quem decide mas não passou
@@ -4788,12 +4840,12 @@ if (!promptResolvido) {
                 console.log(`✅ [GATEKEEPER] Lead ${lead.id} migrado para backup_whatsapp_id automaticamente.`);
             } catch (erroBackup) {
                 console.error(`❌ [GATEKEEPER] Falha ao migrar para backup_whatsapp_id:`, erroBackup.message);
-                resposta = await closerAgent.gerarRespostaCloser(historico, lead, promptResolvido, 'REPASSE', { calendlyLink: instanceData?.calendly_link, instanceType: instanceData?.product_type || 'solar', bookingAtivo });
+                resposta = await closerAgent.gerarRespostaCloser(historico, lead, promptResolvido, 'REPASSE', { calendlyLink: instanceData?.calendly_link, instanceType: instanceData?.product_type || 'solar', bookingAtivo, agendaConectada });
             }
         } else {
             // Nenhum telefone na mensagem — closer pergunta pelo contato do decisor
             console.log(`⚠️ [REPASSE] Nenhum telefone extraído para ${lead.name}. Closer assumindo para solicitar o contato...`);
-            resposta = await closerAgent.gerarRespostaCloser(historico, lead, promptResolvido, 'REPASSE', { calendlyLink: instanceData?.calendly_link, instanceType: instanceData?.product_type || 'solar', bookingAtivo });
+            resposta = await closerAgent.gerarRespostaCloser(historico, lead, promptResolvido, 'REPASSE', { calendlyLink: instanceData?.calendly_link, instanceType: instanceData?.product_type || 'solar', bookingAtivo, agendaConectada });
             // Pausa o lead para evitar loop: mesmo email chegando de novo não dispara nova resposta
             await supabase.from('leads').update({
                 is_paused: true,
@@ -4806,7 +4858,7 @@ if (!promptResolvido) {
 
 } else {
     console.log(`🧹 [WORKER-IA] Mensagem LIXO. Closer seguirá estágio atual da Constituição...`);
-    resposta = await closerAgent.gerarRespostaCloser(historico, lead, promptResolvido, 'LIXO', { calendlyLink: instanceData?.calendly_link, instanceType: instanceData?.product_type || 'solar', primeiroContato, bookingAtivo });
+    resposta = await closerAgent.gerarRespostaCloser(historico, lead, promptResolvido, 'LIXO', { calendlyLink: instanceData?.calendly_link, instanceType: instanceData?.product_type || 'solar', primeiroContato, bookingAtivo, agendaConectada });
 }
 
 // 🛡️ Blindagem final: se todos os agentes falharam, avisa o log

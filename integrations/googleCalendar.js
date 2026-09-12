@@ -207,6 +207,41 @@ async function criarEvento(userId, calendarId, { inicioISO, fimISO, titulo, desc
     return { eventId: ev.id, htmlLink: ev.htmlLink || null, meetLink };
 }
 
+// true se a janela [inicioISO,fimISO) está LIVRE na agenda do tenant (freebusy).
+// Usado quando o lead pede um horário fora dos 2 propostos: em vez de loopar, a gente
+// checa aquele horário de verdade e, se estiver livre, agenda nele.
+async function verificarLivre(userId, calendarId, inicioISO, fimISO) {
+    const auth = await _authDoTenant(userId);
+    if (!auth) return false;
+    const cal = google.calendar({ version: 'v3', auth });
+    const fb = await cal.freebusy.query({
+        requestBody: { timeMin: inicioISO, timeMax: fimISO, items: [{ id: calendarId || 'primary' }] },
+    });
+    const busy = fb.data.calendars?.[calendarId || 'primary']?.busy || [];
+    return busy.length === 0;
+}
+
+// Remarca (patch) um evento existente pra um novo horário — MANTÉM o mesmo link do Meet.
+// Evita criar reuniões duplicadas quando o lead quer trocar o horário já agendado.
+async function remarcarEvento(userId, calendarId, eventId, { inicioISO, fimISO } = {}) {
+    const auth = await _authDoTenant(userId);
+    if (!auth) return null;
+    const cal = google.calendar({ version: 'v3', auth });
+    const res = await cal.events.patch({
+        calendarId: calendarId || 'primary',
+        eventId,
+        requestBody: {
+            start: { dateTime: inicioISO, timeZone: 'America/Sao_Paulo' },
+            end:   { dateTime: fimISO,   timeZone: 'America/Sao_Paulo' },
+        },
+    });
+    const ev = res.data;
+    const meetLink = ev.hangoutLink
+        || ev.conferenceData?.entryPoints?.find((p) => p.entryPointType === 'video')?.uri
+        || null;
+    return { eventId: ev.id, htmlLink: ev.htmlLink || null, meetLink };
+}
+
 // Reescreve o emoji de status no título do evento (✅/❌/❓). Idempotente.
 async function atualizarEmojiTitulo(userId, calendarId, eventId, emoji) {
     const auth = await _authDoTenant(userId);
@@ -227,6 +262,8 @@ module.exports = {
     listarEventosDeHoje,
     listarHorariosLivres,
     criarEvento,
+    verificarLivre,
+    remarcarEvento,
     atualizarEmojiTitulo,
     assinarState,
     verificarState,
