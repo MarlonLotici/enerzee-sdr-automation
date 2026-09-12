@@ -17,8 +17,12 @@ const { calcularSlotsLivres } = require('../lib/agendaSlots');
 
 const supabase = createClient(process.env.SUPABASE_URL, process.env.SUPABASE_KEY);
 
-// Escopo de eventos = leitura + escrita (precisamos reescrever o emoji do título).
-const SCOPES = ['https://www.googleapis.com/auth/calendar.events'];
+// Escopo COMPLETO de calendário: precisamos de freebusy.query (ler disponibilidade p/ propor
+// horários), events.insert/patch (criar reunião + reescrever emoji) e calendarList (escolher agenda).
+// O escopo `calendar.events` sozinho NÃO concede freebusy → dava "insufficient authentication
+// scopes" e o agendamento real caía no fallback "agenda cheia". Ampliar exige RECONECTAR a agenda
+// (o token antigo não ganha escopo novo sozinho).
+const SCOPES = ['https://www.googleapis.com/auth/calendar'];
 
 function _envOk() {
     return !!(process.env.GOOGLE_OAUTH_CLIENT_ID && process.env.GOOGLE_OAUTH_CLIENT_SECRET && process.env.GOOGLE_OAUTH_REDIRECT_URI);
@@ -163,8 +167,10 @@ async function listarHorariosLivres(userId, calendarId, opts = {}) {
         const busy = fb.data.calendars?.[calendarId || 'primary']?.busy || [];
         ocupados = busy.map((b) => ({ inicio: b.start, fim: b.end }));
     } catch (e) {
+        // NÃO engolir devolvendo [] — isso se disfarçava de "agenda cheia" e loopava a resposta
+        // de fallback. Lança pra o orquestrador tratar (erro de escopo/token ≠ agenda sem vaga).
         console.error('[GCAL] freebusy falhou:', e.message);
-        return [];
+        throw new Error(`freebusy: ${e.message}`);
     }
     return calcularSlotsLivres({ ...opts, diasAdiante, ocupados });
 }

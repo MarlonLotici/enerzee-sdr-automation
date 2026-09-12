@@ -4385,12 +4385,21 @@ async function orquestrarAgendamento(lead, ultimaMsg, instanceData, userId, inte
     }
 
     // ── FASE OFERTA: sinal de compra e ainda sem horários propostos ──
-    const slots = await gcal.listarHorariosLivres(userId, calId, {
-        horaInicio: cfg.booking_hora_inicio ?? 9,
-        horaFim:    cfg.booking_hora_fim ?? 18,
-        duracaoMin: cfg.booking_duracao_min ?? 30,
-        maxSlots:   2,
-    });
+    let slots;
+    try {
+        slots = await gcal.listarHorariosLivres(userId, calId, {
+            horaInicio: cfg.booking_hora_inicio ?? 9,
+            horaFim:    cfg.booking_hora_fim ?? 18,
+            duracaoMin: cfg.booking_duracao_min ?? 30,
+            maxSlots:   2,
+        });
+    } catch (e) {
+        // Erro de LEITURA da agenda (escopo OAuth insuficiente, token revogado, API fora).
+        // NÃO é "agenda cheia" — avisa o operador pra reconectar e dá resposta honesta (sem loop).
+        console.error(`❌ [AGENDAMENTO] Falha ao ler agenda de ${lead.name}:`, e.message);
+        enviarAlerta(`⚠️ Agenda não pôde ser lida — ${lead.name}`, `Erro ao consultar horários livres: ${e.message}. Provável escopo OAuth insuficiente — RECONECTE a Google Agenda no painel.`, 15158332).catch(() => {});
+        return { tratado: true, bookingAtivo: true, resposta: `Deixa eu confirmar os horários certinho aqui e já te retorno com as opções, tá? 🙌` };
+    }
     if (!slots.length) {
         // Agenda cheia → handoff humano, SEM fingir horário.
         enviarAlerta(`📅 Agenda cheia — ${lead.name}`, `Lead quente sem horário livre nos próximos dias. Agende manualmente.`, 15158332).catch(() => {});
