@@ -714,6 +714,22 @@ app.get('/api/google/oauth/callback', async (req, res) => {
     }
 });
 
+// Desconecta a Google Agenda do tenant: zera o refresh_token + email (o painel volta a mostrar
+// "conectar"). MANTÉM a config de booking (booking_ativo/horários) pra não perder ajuste feito via SQL —
+// ao reconectar, o novo token é gravado por cima e o booking segue ligado. Use antes de reconectar
+// quando precisar de um token com escopo novo (ex.: passou a exigir freebusy).
+app.post('/api/google/disconnect', autenticarMiddleware, async (req, res) => {
+    try {
+        const { error } = await supabase.from('calendar_connections')
+            .update({ refresh_token: null, google_email: null, confirmacao_ativa: false, updated_at: new Date().toISOString() })
+            .eq('user_id', req.user.id);
+        if (error) throw new Error(error.message);
+        res.json({ ok: true });
+    } catch (err) {
+        res.status(500).json({ error: err.message });
+    }
+});
+
 // Lista as agendas do tenant (pra ele escolher a de reuniões).
 app.get('/api/google/calendars', autenticarMiddleware, async (req, res) => {
     try {

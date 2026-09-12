@@ -703,6 +703,20 @@ if (session?.user?.id) checkBriefing()
             setGcalMsg({ ok: false, text: err.message }); setGcalBusy(false);
         }
     };
+    const desconectarGoogle = async () => {
+        if (!confirm('Desconectar a Google Agenda deste perfil? Você poderá reconectar depois. (A config de horários é mantida.)')) return;
+        setGcalBusy(true); setGcalMsg(null);
+        try {
+            const resp = await fetch('/api/google/disconnect', { method: 'POST', headers: await _authHeader() });
+            const json = await resp.json();
+            if (!resp.ok || !json.ok) throw new Error(json.error || 'Falha ao desconectar.');
+            setGcalConectado(false);
+            setGcalCalendars([]);
+            setGcalMsg({ ok: true, text: '✓ Agenda desconectada. Clique em "Conectar" pra reautorizar.' });
+        } catch (err) {
+            setGcalMsg({ ok: false, text: err.message });
+        } finally { setGcalBusy(false); }
+    };
     const salvarGcalConfig = async (patch) => {
         setGcalBusy(true); setGcalMsg(null);
         try {
@@ -1225,7 +1239,18 @@ return (
                             </button>
                         ) : (
                             <div className="space-y-2.5">
-                                <p className="text-[10px] text-emerald-400">✓ Conectado{gcalConfig?.google_email ? `: ${gcalConfig.google_email}` : ''}</p>
+                                <div className="flex items-center gap-2">
+                                    <p className="text-[10px] text-emerald-400 flex-1">✓ Conectado{gcalConfig?.google_email ? `: ${gcalConfig.google_email}` : ''}</p>
+                                    <button
+                                        type="button" onClick={conectarGoogle} disabled={gcalBusy}
+                                        title="Reautorizar (troca de conta ou renova permissões)"
+                                        className="h-7 px-2.5 rounded-md bg-white/5 border border-white/15 text-slate-300 hover:bg-white/10 text-[9px] font-black uppercase tracking-widest transition-colors disabled:opacity-50"
+                                    >Reconectar</button>
+                                    <button
+                                        type="button" onClick={desconectarGoogle} disabled={gcalBusy}
+                                        className="h-7 px-2.5 rounded-md bg-red-500/10 border border-red-500/25 text-red-300 hover:bg-red-500/20 text-[9px] font-black uppercase tracking-widest transition-colors disabled:opacity-50"
+                                    >Desconectar</button>
+                                </div>
                                 <div>
                                     <label className="text-[10px] font-black text-amber-300/80 uppercase tracking-widest block mb-1.5">Agenda das reuniões</label>
                                     <select
