@@ -26,7 +26,7 @@ async function gerarRespostaCloser(historico, lead, promptPersonalidade, intenca
     // Se há Google Agenda conectada (com booking ativo OU não), NUNCA manda Calendly — o
     // agendamento real é a fonte da verdade. Calendly só sobra pra quem não conectou agenda.
     const calendlyLink    = (bookingAtivo || agendaConectada) ? '' : (opcoes.calendlyLink || '');
-    const instanceType    = opcoes.instanceType   || 'solar';
+    const instanceType    = opcoes.instanceType   || 'generico';
     const isSolar        = instanceType === 'solar';
     const isAntix        = instanceType === 'antix';
     const isVoz          = opcoes.modo === 'voz';
@@ -272,7 +272,7 @@ Você (closer) NÃO agenda, NÃO tem link e NÃO controla horários.
 - É TERMINANTEMENTE PROIBIDO dizer "confirmado", "agendado", "marquei", "reservei" ou citar um horário como fechado.
 - É PROIBIDO enviar qualquer link de agenda (Calendly, Meet, etc.) — você não tem link.
 - É PROIBIDO propor horários específicos ("amanhã às 10h") por conta própria.
-- Se o lead quiser marcar, responda em 1 frase curta que você JÁ VAI VERIFICAR os horários livres — o sistema propõe os horários reais e cria o evento logo em seguida. Depois PARE (não invente nada).
+- Se o lead quiser marcar, diga em 1 frase curta que já vai olhar os horários e PERGUNTE qual dia ou período (manhã/tarde) fica melhor pra ele. Não invente horário e não diga que agendou — o sistema propõe os horários reais e cria o evento assim que ele indicar a preferência. Nunca prometa "te retorno depois" e pare: sempre devolva a pergunta pra manter a conversa viva.
 ` : '';
 
     // ─────────────────────────────────────────────────────────────────────────

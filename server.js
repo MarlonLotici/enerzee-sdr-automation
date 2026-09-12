@@ -263,7 +263,7 @@ io.on('connection', (socket) => {
             .select('default_product_type')
             .eq('id', socket.user.id)
             .maybeSingle();
-        const userProductType = profile?.default_product_type || 'solar';
+        const userProductType = profile?.default_product_type || 'generico';
 
         // 🧱 2. FILTRO BLINDADO: Só pega chips deste usuário E que vendam este produto
         const allChips = await db.getActiveInstances();
@@ -1026,7 +1026,7 @@ app.post('/api/admin/criar-conta', adminLimiter, express.json(), async (req, res
         const { error: profileError } = await supabase.from('profiles').upsert({
             id:                   userId,
             default_company_name: nome_empresa || null,
-            default_product_type: produto      || 'solar',
+            default_product_type: produto      || 'generico',
         }, { onConflict: 'id' });
 
         if (profileError) {
@@ -1048,7 +1048,7 @@ app.post('/api/admin/criar-conta', adminLimiter, express.json(), async (req, res
             });
         }
 
-        console.log(`✅ [ADMIN] Perfil criado para ${userId} (empresa: ${nome_empresa || '—'}, produto: ${produto || 'solar'})`);
+        console.log(`✅ [ADMIN] Perfil criado para ${userId} (empresa: ${nome_empresa || '—'}, produto: ${produto || 'generico'})`);
         return res.status(201).json({ ok: true, user_id: userId, email });
 
     } catch (err) {

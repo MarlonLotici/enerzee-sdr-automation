@@ -1136,7 +1136,9 @@ const concessionariaLocal = (MAPA_CONCESSIONARIAS[contextoLead.estado] || 'conce
             ? `https://wa.me/55${(instanceData.owner_phone || '').replace(/\D/g, '')}`
             : 'https://antix.com.br/agendar');
 
-    const isSolar = !instanceData?.product_type || instanceData.product_type === 'solar';
+    // Só é "solar" quando o tenant declara explicitamente product_type='solar'.
+    // product_type vazio/qualquer-outro → genérico (sem injeção de concessionária/desconto/economia).
+    const isSolar = instanceData?.product_type === 'solar';
     const isB2C   = instanceData?.b2c_mode === true; // leads são pessoas físicas/alunos, não empresas
 
     const secaoIdentidade = isSolar
@@ -3319,7 +3321,7 @@ if (lead.opening_template && lead.opening_template.length > 15 && lead.opening_t
         // Sem template padrao configurado: usa LLM com fallbacks hardcoded
         // isSolar: mesma expressão usada em resolverPromptCompleto (linha ~1071) — tenants
         // fora do nicho solar não podem herdar vocabulário de "conta de energia/luz" aqui.
-        const isSolarFallback = !instanceData?.product_type || instanceData.product_type === 'solar';
+        const isSolarFallback = instanceData?.product_type === 'solar';
         const spintaxFallback = isSolarFallback ? [
             `${saudacao}, vi algo sobre a conta de energia da ${nomeEmpresa} que achei que valia te passar. Vc cuida dessa parte de contas fixas aí?`,
             `${saudacao}, dei uma olhada no cadastro da ${nomeEmpresa} e tem uma coisa sobre a conta de luz da ${concessionariaLocal} que achei que valia te avisar. Tô falando com quem cuida disso?`,
@@ -4219,7 +4221,7 @@ async function loopAuditor() {
                 }
 
                 const historico = histRaw.map(m => ({ role: m.role, content: m.content }));
-                const relatorio = await auditorAgent.gerarAuditoria(historico, lead, productTypeMap[lead.instance_id] || 'solar');
+                const relatorio = await auditorAgent.gerarAuditoria(historico, lead, productTypeMap[lead.instance_id] || 'generico');
 
                 if (!relatorio) continue; // LLM falhou — tenta na próxima rodada
 
@@ -4361,9 +4363,18 @@ async function orquestrarAgendamento(lead, ultimaMsg, instanceData, userId, inte
     if (!bookingAtivo) return { tratado: false, bookingAtivo: false, agendaConectada };
 
     const temSlots = Array.isArray(lead.slots_propostos) && lead.slots_propostos.length > 0;
-    const querAgendar = /\b(agendar|agende|marcar|marca[r]?\s+uma|remarcar|reuni[aã]o|hor[aá]rio|hor[aá]rios|dispon[ií]vel|que\s+dia|que\s+horas)\b/i.test(ultimaMsg || '');
+    // Sinais de intenção de agendar — inclui dias da semana/relativos e "quando", senão o lead
+    // que pede "domingo"/"amanhã" caía fora do gatilho e o closer prometia horário sem nunca voltar.
+    const querAgendar = /\b(agendar|agende|marcar|marca[r]?\s+uma|remarcar|reuni[aã]o|hor[aá]rio|hor[aá]rios|dispon[ií]ve(l|is)|que\s+dia|que\s+horas|quando|amanh[aã]|hoje|depois\s+de\s+amanh[aã]|semana\s+que\s+vem|segunda|ter[cç]a|quarta|quinta|sexta|s[aá]bado|domingo|pode\s+ser|podemos\s+marcar|vamos\s+marcar)\b/i.test(ultimaMsg || '');
     const jaAgendado = lead.status === 'booked' && !!lead.gcal_event_id;
-    if (!temSlots && intencao !== 'COMPRA' && !querAgendar && !(jaAgendado && querAgendar))
+    // Rede de segurança: se o lead já foi movido pro estágio de agendamento (closer marcou
+    // [ESTAGIO:4]) e ainda não há slots propostos, PROPÕE horários reais agora — mata a
+    // promessa vazia "vou verificar e te retorno" que nunca se cumpria.
+    // Guard: NÃO vale pra saudação pura ("oi", "bom dia") — evita que um estágio antigo/herdado
+    // (ex.: lead compartilhado entre chips) faça a IA oferecer horário logo num cumprimento.
+    const ehSaudacaoPura = /^\s*(oi+|ol[áa]|opa|e?\s*a[íi]|bom\s+dia|boa\s+(tarde|noite)|hey|hi|ola|menu)[\s!.,?]*$/i.test((ultimaMsg || '').trim());
+    const prontoPraAgendar = (lead.current_stage || 0) >= 4 && !ehSaudacaoPura;
+    if (!temSlots && intencao !== 'COMPRA' && !querAgendar && !prontoPraAgendar)
         return { tratado: false, bookingAtivo: true, agendaConectada };
 
     const calId = cfg.booking_calendar_id || cfg.calendar_id || 'primary';
@@ -4410,7 +4421,9 @@ async function orquestrarAgendamento(lead, ultimaMsg, instanceData, userId, inte
         } catch (e) {
             console.error(`❌ [AGENDAMENTO] Falha ao ler agenda de ${lead.name}:`, e.message);
             enviarAlerta(`⚠️ Agenda não pôde ser lida — ${lead.name}`, `${e.message}. Provável escopo OAuth — RECONECTE a Google Agenda.`, 15158332).catch(() => {});
-            return ok('Deixa eu confirmar os horários certinho aqui e já te retorno com as opções, tá? 🙌');
+            // Não prometer que a IA volta sozinha (ela não volta — o fluxo é reativo). Direciona
+            // pra um humano, que também recebe o alerta acima, evitando a promessa vazia.
+            return ok('Deu uma travadinha aqui pra puxar os horários 😅 Já pedi pra um especialista te chamar com as opções, tá?');
         }
         if (!slots.length) {
             enviarAlerta(`📅 Agenda cheia — ${lead.name}`, 'Sem horário livre nos próximos dias.', 15158332).catch(() => {});
@@ -4723,7 +4736,7 @@ if (!promptResolvido) {
     console.log(`📅 [WORKER-IA] Lead ${lead.name} pediu retorno em horário específico. Gerando confirmação...`);
     resposta = await closerAgent.gerarRespostaCloser(historico, lead, promptResolvido, 'COMPRA', {
         calendlyLink: instanceData?.calendly_link,
-        instanceType: instanceData?.product_type || 'solar',
+        instanceType: instanceData?.product_type || 'generico',
         bookingAtivo, agendaConectada
     });
     // [FOLLOW_UP] já é extraído e salvo em filtrarEEnviarResposta (etapa 0).
@@ -4753,11 +4766,11 @@ if (!promptResolvido) {
 } else if (intencao === 'COMPRA') {
     // ... resto do código igual
     console.log(`💰 [WORKER-IA] Sinal de COMPRA! Acionando Closer em modo fechamento para ${lead.name}...`);
-    resposta = await closerAgent.gerarRespostaCloser(historico, lead, promptResolvido, 'COMPRA', { calendlyLink: instanceData?.calendly_link, instanceType: instanceData?.product_type || 'solar', bookingAtivo, agendaConectada });
+    resposta = await closerAgent.gerarRespostaCloser(historico, lead, promptResolvido, 'COMPRA', { calendlyLink: instanceData?.calendly_link, instanceType: instanceData?.product_type || 'generico', bookingAtivo, agendaConectada });
 
 } else if (intencao === 'DUVIDA' || intencao === 'CONTINUAR') {
     console.log(`🔍 [WORKER-IA] Fluxo de CONTINUIDADE/DÚVIDA. Acionando Closer para ${lead.name}...`);
-    resposta = await closerAgent.gerarRespostaCloser(historico, lead, promptResolvido, 'DUVIDA', { calendlyLink: instanceData?.calendly_link, instanceType: instanceData?.product_type || 'solar', primeiroContato, bookingAtivo, agendaConectada });
+    resposta = await closerAgent.gerarRespostaCloser(historico, lead, promptResolvido, 'DUVIDA', { calendlyLink: instanceData?.calendly_link, instanceType: instanceData?.product_type || 'generico', primeiroContato, bookingAtivo, agendaConectada });
 
 } else if (intencao === 'OBJECAO') {
     console.log(`🛡️ [WORKER-IA] OBJEÇÃO detectada! Acionando The Tank para ${lead.name}...`);
@@ -4794,7 +4807,7 @@ if (!promptResolvido) {
             console.log(`✅ [REPASSE] Email de repasse enviado para ${emailDetectado}`);
         } else {
             console.error(`❌ [REPASSE] Falha ao enviar email de repasse:`, resultadoEmailRepasse.error);
-            resposta = await closerAgent.gerarRespostaCloser(historico, lead, promptResolvido, 'REPASSE', { calendlyLink: instanceData?.calendly_link, instanceType: instanceData?.product_type || 'solar', bookingAtivo, agendaConectada });
+            resposta = await closerAgent.gerarRespostaCloser(historico, lead, promptResolvido, 'REPASSE', { calendlyLink: instanceData?.calendly_link, instanceType: instanceData?.product_type || 'generico', bookingAtivo, agendaConectada });
         }
     } else {
         const { nomeDecisor, telefoneDecisor } = await handoffAgent.extrairDadosDecisor(ultimaMsg, historico);
@@ -4821,7 +4834,7 @@ if (!promptResolvido) {
             } catch (erroRepasse) {
                 console.error(`❌ [REPASSE] Falha ao atualizar lead ${lead.id}:`, erroRepasse.message);
                 // Fallback: closer tenta extrair o contato via conversa
-                resposta = await closerAgent.gerarRespostaCloser(historico, lead, promptResolvido, 'REPASSE', { calendlyLink: instanceData?.calendly_link, instanceType: instanceData?.product_type || 'solar', bookingAtivo, agendaConectada });
+                resposta = await closerAgent.gerarRespostaCloser(historico, lead, promptResolvido, 'REPASSE', { calendlyLink: instanceData?.calendly_link, instanceType: instanceData?.product_type || 'generico', bookingAtivo, agendaConectada });
             }
         } else if (lead.backup_whatsapp_id) {
             // 🚪 GATEKEEPER SEM REPASSE: lead confirmou que não é quem decide mas não passou
@@ -4840,12 +4853,12 @@ if (!promptResolvido) {
                 console.log(`✅ [GATEKEEPER] Lead ${lead.id} migrado para backup_whatsapp_id automaticamente.`);
             } catch (erroBackup) {
                 console.error(`❌ [GATEKEEPER] Falha ao migrar para backup_whatsapp_id:`, erroBackup.message);
-                resposta = await closerAgent.gerarRespostaCloser(historico, lead, promptResolvido, 'REPASSE', { calendlyLink: instanceData?.calendly_link, instanceType: instanceData?.product_type || 'solar', bookingAtivo, agendaConectada });
+                resposta = await closerAgent.gerarRespostaCloser(historico, lead, promptResolvido, 'REPASSE', { calendlyLink: instanceData?.calendly_link, instanceType: instanceData?.product_type || 'generico', bookingAtivo, agendaConectada });
             }
         } else {
             // Nenhum telefone na mensagem — closer pergunta pelo contato do decisor
             console.log(`⚠️ [REPASSE] Nenhum telefone extraído para ${lead.name}. Closer assumindo para solicitar o contato...`);
-            resposta = await closerAgent.gerarRespostaCloser(historico, lead, promptResolvido, 'REPASSE', { calendlyLink: instanceData?.calendly_link, instanceType: instanceData?.product_type || 'solar', bookingAtivo, agendaConectada });
+            resposta = await closerAgent.gerarRespostaCloser(historico, lead, promptResolvido, 'REPASSE', { calendlyLink: instanceData?.calendly_link, instanceType: instanceData?.product_type || 'generico', bookingAtivo, agendaConectada });
             // Pausa o lead para evitar loop: mesmo email chegando de novo não dispara nova resposta
             await supabase.from('leads').update({
                 is_paused: true,
@@ -4858,7 +4871,7 @@ if (!promptResolvido) {
 
 } else {
     console.log(`🧹 [WORKER-IA] Mensagem LIXO. Closer seguirá estágio atual da Constituição...`);
-    resposta = await closerAgent.gerarRespostaCloser(historico, lead, promptResolvido, 'LIXO', { calendlyLink: instanceData?.calendly_link, instanceType: instanceData?.product_type || 'solar', primeiroContato, bookingAtivo, agendaConectada });
+    resposta = await closerAgent.gerarRespostaCloser(historico, lead, promptResolvido, 'LIXO', { calendlyLink: instanceData?.calendly_link, instanceType: instanceData?.product_type || 'generico', primeiroContato, bookingAtivo, agendaConectada });
 }
 
 // 🛡️ Blindagem final: se todos os agentes falharam, avisa o log
@@ -5389,7 +5402,7 @@ module.exports = {
             .eq('id', userId)
             .maybeSingle();
 
-        const productType = profile?.default_product_type || 'solar';
+        const productType = profile?.default_product_type || 'generico';
         console.log(`🏷️ [INSTÂNCIA] Criando chip "${n}" para user ${userId} com product_type="${productType}"`);
 
         const { data, error: errInsert } = await supabase

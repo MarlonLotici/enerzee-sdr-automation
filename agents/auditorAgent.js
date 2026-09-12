@@ -19,10 +19,10 @@ function _parseJsonRobusto(txt) {
  *
  * @returns {{ desfecho, nota_ia, erro_critico_ia, resumo_executivo }} | null
  */
-async function gerarAuditoria(historico, lead, productType = 'solar') {
+async function gerarAuditoria(historico, lead, productType = 'generico') {
     if (!historico || historico.length < 2) return null;
 
-    const isSolar = !productType || productType === 'solar';
+    const isSolar = productType === 'solar';
 
     const transcricao = historico
         .map(m => `[${m.role === 'assistant' ? 'IA' : 'LEAD'}]: ${m.content}`)

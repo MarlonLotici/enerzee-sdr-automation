@@ -228,14 +228,20 @@ if (!estadoFinal && phonePuro) {
     },
 
     getHistory: async (zapId, instanceId) => {
-        // Filtra apenas por zapId — não por instanceId — para que o histórico
-        // seja preservado quando o lead muda de chip (redistribuição).
-        const { data, error } = await supabase
+        // Isola o histórico por TENANT (user_id), não por chip: preserva o histórico quando o
+        // lead muda de chip DENTRO do mesmo cliente (redistribuição), mas impede o VAZAMENTO
+        // cross-tenant — o mesmo número atendido por chips de contas diferentes (ex.: testes do
+        // operador) não pode enxergar a conversa de outro tenant, senão a IA "continua" pro
+        // fechamento e oferece reunião logo num "oi".
+        const userId = await _resolverUserId(instanceId);
+        let query = supabase
             .from('messages')
             .select('role, content')
             .eq('whatsapp_id', zapId)
             .order('created_at', { ascending: false })
             .limit(20);
+        if (userId) query = query.eq('user_id', userId);
+        const { data, error } = await query;
 
         if (error) return [];
         return data.reverse();

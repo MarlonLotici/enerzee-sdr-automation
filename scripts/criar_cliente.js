@@ -27,7 +27,7 @@ async function main() {
     const email = arg('email');
     const password = arg('senha') || arg('password');
     const nome_empresa = arg('empresa') || arg('company');
-    const produto = arg('produto') || arg('product') || 'solar';
+    const produto = arg('produto') || arg('product') || 'generico';
 
     const faltando = [];
     if (!host) faltando.push('host (APP_URL/PUBLIC_BASE_URL ou --host)');

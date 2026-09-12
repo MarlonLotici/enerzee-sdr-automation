@@ -153,7 +153,7 @@ class CallSession {
                 intencaoCloser,
                 {
                     calendlyLink: this.ctx.rules?.calendly_link || '',
-                    instanceType: this.ctx.rules?.product_type || 'solar',
+                    instanceType: this.ctx.rules?.product_type || 'generico',
                     modo: 'voz',
                 }
             );
