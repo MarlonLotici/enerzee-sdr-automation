@@ -2249,7 +2249,10 @@ if (matchClima) updates.sentiment = matchClima[1].toLowerCase();
                               (estagioNaResposta >= 2 && estagioNaResposta <= 3);
     // Estágio 2/3 → sempre áudio (máx 2 por conversa). Outros: lead enviou áudio OU 25% aleatório.
     // !!sock: instâncias oficiais (Cloud API) não têm socket nem áudio nativo → sempre texto.
-    const usarTTS = !!sock && audiosJaEnviados < 2 && !temCalendly && (leadEnviouAudio || estagioEmocional || Math.random() < 0.25);
+    // Só tenta TTS se a chave do ElevenLabs existir — senão a IA tentava mandar áudio, falhava
+    // toda vez e caía no fallback de texto (erro no log + ~1s desperdiçado por mensagem).
+    const ttsDisponivel = !!process.env.ELEVENLABS_API_KEY;
+    const usarTTS = ttsDisponivel && !!sock && audiosJaEnviados < 2 && !temCalendly && (leadEnviouAudio || estagioEmocional || Math.random() < 0.25);
     console.log(`🎙️ [TTS-DECISAO] usarTTS=${usarTTS} | audiosJá=${audiosJaEnviados} | calendly=${temCalendly} | leadAudio=${leadEnviouAudio} | emocional=${estagioEmocional} | estágio=${estagioNaResposta}`);
 
     for (let i = 0; i < mensagensSplit.length; i++) {
