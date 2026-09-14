@@ -1718,9 +1718,13 @@ return (
         style={{ width: '100%', height: '100%' }}
         zoomControl={false}
     >
+        {/* Esri Dark Gray Canvas: keyless, confiável e escuro (combina com a UI). NÃO usar OSM
+            public nem CARTO keyless — OSM bloqueia apps (403) e a CARTO passou a exigir API key.
+            Atenção: a Esri usa a ordem {z}/{y}/{x} (row/col), diferente do padrão {z}/{x}/{y}. */}
         <TileLayer
-            url="https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png"
-            attribution='&copy; <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a>'
+            url="https://server.arcgisonline.com/ArcGIS/rest/services/Canvas/World_Dark_Gray_Base/MapServer/tile/{z}/{y}/{x}"
+            attribution='&copy; <a href="https://www.esri.com/">Esri</a>'
+            maxZoom={16}
         />
         <MapController center={mapCenter} />
         <MapClickHandler
