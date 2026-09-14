@@ -67,8 +67,10 @@ REGRAS ABSOLUTAS DE RETORNO:
     // MODO COMPRA
     // ─────────────────────────────────────────────────────────────────────────
     if (intencao === 'COMPRA') {
-        if (isAntix) {
-            // Para Antix: envia o link + REVEAL simultâneos para maximizar o efeito UAU
+        if (isAntix && calendlyLink) {
+            // Antix SEM booking (usa Calendly): envia o link + REVEAL simultâneos p/ efeito UAU.
+            // Com booking ativo, calendlyLink vem vazio → NÃO cai aqui: quem agenda é o
+            // orquestrador (propõe horários reais da Google Agenda) e o REVEAL vai na confirmação.
             overrideTatico = `
 =======================================================
 ⚡ MODO OPERACIONAL: SINAL DE COMPRA — PRODUTO ANTIX

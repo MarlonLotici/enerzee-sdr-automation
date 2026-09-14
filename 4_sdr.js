@@ -4419,7 +4419,12 @@ async function orquestrarAgendamento(lead, ultimaMsg, instanceData, userId, inte
         }).eq('id', lead.id);
         console.log(`✅ [AGENDAMENTO] ${lead.name}: evento ${remarcou ? 'remarcado' : 'criado'} (${slot.label}) ${ev.meetLink || ''}`);
         const linkTxt = ev.meetLink ? `\n[QUEBRA]\nSegue o link da nossa reunião: ${ev.meetLink}` : '';
-        return ok(`${_variar(['Perfeito! Agendei', 'Fechado! Marquei', 'Prontinho, deixei agendado'])} nossa conversa pra ${slot.label}. ✅${linkTxt}`);
+        // REVEAL do Antix no fluxo de agenda real: preserva o "efeito UAU" (antes só saía no
+        // fechamento via Calendly). Só pra product_type='antix' — outros clientes não revelam IA.
+        const revealTxt = instanceData?.product_type === 'antix'
+            ? `\n[QUEBRA]\nAh, e antes que eu esqueça: essa conversa toda foi conduzida por uma IA da Antix 🤖 imagina isso rodando no seu comercial 24h. Até lá! 🚀`
+            : '';
+        return ok(`${_variar(['Perfeito! Agendei', 'Fechado! Marquei', 'Prontinho, deixei agendado'])} nossa conversa pra ${slot.label}. ✅${linkTxt}${revealTxt}`);
     };
 
     // Oferta 2 horários REAIS e ESPAÇADOS (manhã/tarde), com variação de frase ("ginga").
