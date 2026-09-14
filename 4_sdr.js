@@ -2423,6 +2423,12 @@ if (!lead) {
         }
     } else {
         lead = leadCriado;
+        // 📡 PIPELINE EM TEMPO REAL: o inbound cria o lead direto no banco e NÃO passa pelo
+        // fluxo do scraper (único lugar que emitia 'new_lead'). Sem este emit, o lead novo só
+        // aparecia na pipeline depois de um refresh. Escopo por tenant (sala user:<id>).
+        if (ioSocket && userIdInbound) {
+            ioSocket.to(`user:${userIdInbound}`).emit('new_lead', leadCriado);
+        }
     }
 }
 
@@ -5613,6 +5619,10 @@ module.exports = {
             if (errNovo || !novo) return { ok: false, motivo: 'falha_criar_lead', erro: errNovo?.message };
             lead = novo;
             console.log(`🌐 [INBOUND OFICIAL] Lead novo criado para ${cleanJid} (chip ${instanceId.slice(0,8)}).`);
+            // 📡 Pipeline em tempo real — mesmo motivo do inbound orgânico (sem isso, só aparece no refresh).
+            if (ioSocket && instanceData.user_id) {
+                ioSocket.to(`user:${instanceData.user_id}`).emit('new_lead', novo);
+            }
         }
 
         await db.saveMessage(cleanJid, 'user', norm.texto, instanceId);
