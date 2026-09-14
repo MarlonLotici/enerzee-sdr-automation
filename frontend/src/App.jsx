@@ -2316,7 +2316,11 @@ return (
                         /* ── QR CODE ── */
                         <>
                             <div className="p-6 bg-white rounded-[2rem] shadow-2xl">
-                                {qrCodeData?.qr && <QRCodeSVG value={qrCodeData.qr} size={200} />}
+                                {/* iPhone: câmera/scanner do iOS é exigente com QR denso. QR do WhatsApp é
+                                    string longa → módulos pequenos. Aumentamos o tamanho e a quiet-zone
+                                    (marginSize, default 0 no qrcode.react v4). level="L" de propósito: a
+                                    string é longa, subir p/ H aumentaria a densidade e pioraria a leitura. */}
+                                {qrCodeData?.qr && <QRCodeSVG value={qrCodeData.qr} size={288} level="L" marginSize={4} />}
                             </div>
                             <p className="text-slate-500 text-[10px] font-bold uppercase mt-8 text-center leading-relaxed">
                                 Abra o WhatsApp no celular <br/>
