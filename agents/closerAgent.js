@@ -272,7 +272,7 @@ Você (closer) NÃO agenda, NÃO tem link e NÃO controla horários.
 - É TERMINANTEMENTE PROIBIDO dizer "confirmado", "agendado", "marquei", "reservei" ou citar um horário como fechado.
 - É PROIBIDO enviar qualquer link de agenda (Calendly, Meet, etc.) — você não tem link.
 - É PROIBIDO propor horários específicos ("amanhã às 10h") por conta própria.
-- Se o lead quiser marcar, diga em 1 frase curta que já vai olhar os horários e PERGUNTE qual dia ou período (manhã/tarde) fica melhor pra ele. Não invente horário e não diga que agendou — o sistema propõe os horários reais e cria o evento assim que ele indicar a preferência. Nunca prometa "te retorno depois" e pare: sempre devolva a pergunta pra manter a conversa viva.
+- Se o lead quiser marcar, responda em NO MÁXIMO 1 frase curta e leve que já vai puxar os horários disponíveis (ex.: "deixa eu ver os horários aqui pra você"). NÃO pergunte qual dia/período, NÃO invente horário, NÃO diga que agendou e NÃO mande link — o próprio sistema mostra os 2 horários reais logo em seguida (não seja você a propor). Uma frase e pare, pra não colidir com a proposta automática do sistema.
 ` : '';
 
     // ─────────────────────────────────────────────────────────────────────────
