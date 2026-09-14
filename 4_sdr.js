@@ -4473,8 +4473,12 @@ async function orquestrarAgendamento(lead, ultimaMsg, instanceData, userId, inte
             // Ocupado (ou falhou) → reoferece 2 horários livres reais, avisando.
             return await ofertar(true);
         }
-        // Resposta vaga → re-pergunta com GINGA (não repete a mesma frase fixa).
-        return ok(`${_variar(['Só confirmando:', 'Pra fechar:', 'Me diz então:'])} ${_variar(['qual fica melhor', 'qual prefere', 'qual encaixa'])}, ${labels(lead.slots_propostos)}?`);
+        // Mensagem que NÃO é escolha de slot nem horário (saudação, pergunta, mudou de assunto):
+        // NUNCA ficar repetindo a confirmação em loop — isso trava a conversa e soa robótico.
+        // Devolve o controle pro closer (LLM), que responde com molejo e reconduz ao agendamento
+        // do jeito dele. Os slots continuam gravados: se o lead responder um horário depois, o
+        // início deste bloco (detectarConfirmacaoSlot / extrairHorarioPedido) captura e agenda.
+        return { tratado: false, bookingAtivo: true, agendaConectada };
     }
 
     // ── FASE OFERTA inicial ──
