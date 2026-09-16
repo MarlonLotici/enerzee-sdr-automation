@@ -5744,7 +5744,7 @@ module.exports = {
         else promptBase = brain?.qualifier_prompt || brain?.system_prompt;
         if (!promptBase || promptBase.trim().length < 50) return { ok: false, motivo: 'prompt_ausente' };
 
-        const instanceData = { user_id: USER_ID, product_type: 'antix', name: 'Site Antix' };
+        const instanceData = { user_id: USER_ID, product_type: 'antix', agent_name: 'Kauana', company_name: 'Antix', name: 'Kauana (site)' };
         const historicoIA = [...historico, { role: 'user', content: texto }];
         const promptResolvido = await resolverPromptCompleto(promptBase, lead, instanceData, historicoIA, {});
         const promptWeb = `${promptResolvido}
