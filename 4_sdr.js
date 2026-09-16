@@ -2297,6 +2297,33 @@ if (matchClima) updates.sentiment = matchClima[1].toLowerCase();
 }
 
 
+// 🌉 PONTE SITE→WHATSAPP: transfere a sessão do chat do site (web_<sid>@web) pro número real
+// que acabou de chamar no WhatsApp com o código de continuidade. Reusa o MESMO lead + histórico
+// (a IA continua de onde parou). Se o número já tiver um lead, faz merge (move as mensagens do site).
+async function _promoverSessaoWeb(sid, realJid, instanceId, lid) {
+    const webWaId = `web_${String(sid).replace(/[^a-zA-Z0-9_-]/g, '')}@web`;
+    const { data: webLead } = await supabase.from('leads').select('*').eq('whatsapp_id', webWaId).maybeSingle();
+    if (!webLead) return null;
+
+    // Número real já tem lead? (evita violar o unique de whatsapp_id) → merge no existente.
+    const { data: jaExiste } = await supabase.from('leads').select('*').eq('whatsapp_id', realJid).maybeSingle();
+    if (jaExiste) {
+        await supabase.from('messages').update({ whatsapp_id: realJid, instance_id: instanceId }).eq('whatsapp_id', webWaId);
+        await supabase.from('leads').delete().eq('id', webLead.id);
+        return jaExiste;
+    }
+
+    // Promove a linha do site pro número real (reusa lead + histórico, sem duplicar).
+    await supabase.from('messages').update({ whatsapp_id: realJid, instance_id: instanceId }).eq('whatsapp_id', webWaId);
+    await supabase.from('leads').update({
+        whatsapp_id: realJid,
+        whatsapp_lid: lid || null,
+        instance_id: instanceId,
+        internal_notes: `${webLead.internal_notes ? webLead.internal_notes + '\n' : ''}[PONTE] Continuou do chat do site em ${new Date().toLocaleString('pt-BR')}.`,
+    }).eq('id', webLead.id);
+    return { ...webLead, whatsapp_id: realJid, whatsapp_lid: lid || null, instance_id: instanceId };
+}
+
 async function processarMensagem(sock, msg, instanceId, textoConsolidado = null) {
     const remoteJid = msg.key.remoteJid;
     if (remoteJid.includes('@g.us')) return;
@@ -2374,6 +2401,21 @@ if (!lead && cleanJid.includes('@lid')) {
 
 // 3. Ainda sem lead? Número novo (JID normal fora da base OU @lid não-amarrado acima).
 //    Chips inbound_only acolhem: cria o lead na hora e injeta na esteira (funil receptivo).
+if (!lead) {
+    // 🌉 PONTE SITE→WHATSAPP: a 1ª msg traz o código de continuidade do chat do site
+    // (ex.: "... (cód: ANTIX-<sid>)"). Promove a sessão web (lead + histórico) pra este número
+    // real → a Kauana continua de onde parou, sem recomeçar do zero. Vale mesmo se o chip NÃO for
+    // inbound_only (o código é o sinal de consentimento/origem legítima).
+    const _txtPonte = textoConsolidado || msg.message?.conversation || msg.message?.extendedTextMessage?.text || '';
+    const _codPonte = _txtPonte.match(/ANTIX-([A-Za-z0-9_-]{4,})/i);
+    if (_codPonte) {
+        lead = await _promoverSessaoWeb(_codPonte[1], jidParaSalvar, instanceId, lidAssociado).catch(e => {
+            console.error(`❌ [PONTE] Falha ao promover sessão web: ${e.message}`); return null;
+        });
+        if (lead) console.log(`🌉 [PONTE] Sessão web ANTIX-${_codPonte[1]} → ${jidParaSalvar} (histórico transferido).`);
+    }
+}
+
 if (!lead) {
     const instanceDataInbound = await getRegrasEmCache(instanceId);
     if (!instanceDataInbound?.inbound_only) {
@@ -2473,7 +2515,12 @@ if (!lead) {
                           textoContato || "";
 
     // O Segredo: Se a gaveta mandou o texto juntado, usa ele. Se não, usa o original (para mídias)
-    const texto = textoConsolidado || textoOriginal;
+    // 🌉 PONTE SITE→WHATSAPP: remove o código de continuidade da 1ª msg (ex.: "(cód: ANTIX-xxx)")
+    // pra IA não ver/repetir o token. A promoção da sessão já foi feita na resolução do lead acima.
+    const texto = (textoConsolidado || textoOriginal || '')
+        .replace(/\(?\s*c[óo]d[:.\s]*ANTIX-[A-Za-z0-9_-]+\s*\)?/gi, '')
+        .replace(/ANTIX-[A-Za-z0-9_-]+/gi, '')
+        .trim() || (textoConsolidado || textoOriginal);
 
     // 🗣️ CORREÇÃO DE NOME EM TEMPO REAL: se o lead DECLARA o próprio nome na conversa
     // ("meu nome é Carlos", "aqui é o João"), isso é alta confiança e SOBRESCREVE o dono atual
@@ -5643,6 +5690,86 @@ module.exports = {
             { leadId: lead.id, whatsappId: cleanJid, instanceId, remoteJid: cleanJid },
             { priority: 1, attempts: 3 });
         return { ok: true, leadId: lead.id };
+    },
+
+    // 🌐 WEB CHAT — o widget do site (antix-ia.com) conversa com a IA (persona Antix/Kauana).
+    // Canal SÍNCRONO (request/response HTTP), reusa router + closer + resolverPromptCompleto.
+    // Protegido no server.js (rate-limit + CORS). Cria um lead 'web' pra aparecer no pipeline e
+    // permitir handoff pro WhatsApp. NÃO usa Baileys/booking — o agendamento fecha no WhatsApp.
+    responderWebChat: async ({ sessionId, message, visitorName } = {}) => {
+        const USER_ID = process.env.WEB_CHAT_USER_ID || 'f437f090-5fa0-4a94-b4aa-8c22998c9cf6'; // Antix (Kauana)
+        const MAX_MSGS = parseInt(process.env.WEB_CHAT_MAX_MSGS || '40', 10);   // teto por sessão (anti-abuso/custo)
+
+        const texto = String(message || '').slice(0, 800).trim();
+        const sid = String(sessionId || '').replace(/[^a-zA-Z0-9_-]/g, '').slice(0, 60);
+        if (!sid || !texto) return { ok: false, motivo: 'entrada_invalida' };
+        const waId = `web_${sid}@web`;
+
+        definirTenantLLM(USER_ID);
+
+        // Histórico da sessão (mensagens por waId; único por sessão)
+        const historico = await db.getHistory(waId, null).catch(() => []);
+        const totalUser = historico.filter(m => m.role === 'user').length;
+        if (totalUser >= MAX_MSGS) {
+            return { ok: true, reply: 'Acho que a gente avança melhor no WhatsApp 😊 clica em "Continuar no WhatsApp" aqui embaixo que eu te chamo por lá!', handoff: true };
+        }
+
+        // Lead da sessão (find-or-create) — aparece no pipeline/aba WhatsApp p/ follow-up + handoff
+        let { data: lead } = await supabase.from('leads').select('*').eq('whatsapp_id', waId).maybeSingle();
+        let leadNovo = false;
+        if (!lead) {
+            const { data: novo } = await supabase.from('leads').insert({
+                whatsapp_id: waId, user_id: USER_ID,
+                name: (visitorName && String(visitorName).slice(0, 60)) || 'Visitante do site',
+                origin: 'web_chat', status: 'contact',
+                first_touch_channel: 'web', first_touch_at: new Date().toISOString(),
+            }).select('*').single().then(r => r, () => ({ data: null }));
+            lead = novo || { id: null, whatsapp_id: waId, user_id: USER_ID, name: visitorName || 'Visitante do site', current_stage: 0 };
+            leadNovo = !!novo;
+        } else if (visitorName && (!lead.name || lead.name === 'Visitante do site')) {
+            await supabase.from('leads').update({ name: String(visitorName).slice(0, 60) }).eq('id', lead.id).catch(() => {});
+            lead.name = String(visitorName).slice(0, 60);
+        }
+
+        await db.saveMessage(waId, 'user', texto, null, USER_ID, 'web').catch(() => {});
+
+        // Intenção + prompt da persona Antix (roteado por intenção, igual ao worker)
+        const intencao = await routerAgent.classificarMensagem(texto).catch(() => 'DUVIDA');
+        const { data: brain } = await supabase.from('tenant_prompts')
+            .select('system_prompt, qualifier_prompt, closer_prompt, objection_prompt')
+            .eq('user_id', USER_ID).maybeSingle();
+        let promptBase;
+        if (intencao === 'COMPRA') promptBase = brain?.closer_prompt || brain?.system_prompt;
+        else if (intencao === 'OBJECAO') promptBase = brain?.objection_prompt || brain?.system_prompt;
+        else promptBase = brain?.qualifier_prompt || brain?.system_prompt;
+        if (!promptBase || promptBase.trim().length < 50) return { ok: false, motivo: 'prompt_ausente' };
+
+        const instanceData = { user_id: USER_ID, product_type: 'antix', name: 'Site Antix' };
+        const historicoIA = [...historico, { role: 'user', content: texto }];
+        const promptResolvido = await resolverPromptCompleto(promptBase, lead, instanceData, historicoIA, {});
+        const promptWeb = `${promptResolvido}
+
+=======================================================
+🌐 CANAL ATUAL: CHAT DO SITE (antix-ia.com) — NÃO é WhatsApp
+=======================================================
+- Seja concisa: no máximo 2 balões curtos (o espaço do chat é pequeno).
+- Quando o visitante demonstrar interesse real em avançar/agendar, convide-o a CONTINUAR NO WHATSAPP — existe um botão "Continuar no WhatsApp" logo abaixo do chat. Ex.: "perfeito! clica em 'Continuar no WhatsApp' aqui embaixo que eu já fecho contigo por lá 😊".
+- NUNCA invente horário, NÃO diga que agendou e NÃO peça pra esperar retorno. O fechamento acontece no WhatsApp.`;
+
+        let reply = await closerAgent.gerarRespostaCloser(historicoIA, lead, promptWeb, intencao, {
+            instanceType: 'antix', bookingAtivo: false, agendaConectada: false, calendlyLink: '',
+            primeiroContato: !historico.some(m => m.role === 'assistant'),
+        }).catch(() => null);
+
+        const regexTags = /\[\s*(ESTAGIO|ESTÁGIO|CLIMA|RAIO-X|PERFIL|ROBO|CONTADOR|ENGANO|GATEKEEPER|AGENDAMENTO_MANUAL|PAUSA\s*PARA\s*RESPOSTA|REVERSAO_TENTADA|FOLLOW_UP|AGUARDANDO_RETORNO)[^\]]*\]/gi;
+        reply = String(reply || '').replace(regexTags, '').replace(/\[QUEBRA\]/gi, '\n').replace(/\n{3,}/g, '\n\n').trim()
+            || 'Opa, tive uma instabilidade aqui — consegue repetir?';
+
+        await db.saveMessage(waId, 'assistant', reply, null, USER_ID, 'web').catch(() => {});
+        if (ioSocket && leadNovo) ioSocket.to(`user:${USER_ID}`).emit('new_lead', lead);
+
+        const handoff = intencao === 'COMPRA' || (lead.current_stage || 0) >= 3;
+        return { ok: true, reply, handoff, leadId: lead.id };
     },
 
     acordarChips: () => {

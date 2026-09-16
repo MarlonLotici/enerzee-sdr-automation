@@ -57,6 +57,7 @@ const _corsRestrito = _envOrigins.length > 0;
 const ALLOWED_ORIGINS = [...new Set([
     process.env.PUBLIC_BASE_URL, process.env.APP_URL,
     'http://localhost:5173', 'http://localhost:3001',
+    'https://antix-ia.com', 'https://www.antix-ia.com', // site institucional (widget de chat)
     ..._envOrigins,
 ].filter(Boolean))];
 function corsOriginCheck(origin, callback) {
@@ -140,6 +141,12 @@ const webhookLimiter = rateLimit({
     windowMs: 60 * 1000, max: 60,
     standardHeaders: true, legacyHeaders: false,
     message: { error: 'Rate limit excedido.' },
+});
+// Chat público do site: endpoint que gasta LLM → limite por IP pra conter abuso/custo.
+const webChatLimiter = rateLimit({
+    windowMs: 60 * 1000, max: 15,
+    standardHeaders: true, legacyHeaders: false,
+    message: { error: 'Muitas mensagens em pouco tempo. Aguarde um instante.' },
 });
 
 app.use(express.static(path.join(__dirname, 'frontend', 'dist')));
@@ -1110,6 +1117,21 @@ app.post('/api/call-lead', autenticarMiddleware, async (req, res) => {
     } catch (error) {
         console.error("❌ [API] Falha crítica na rota de ligação:", error);
         return res.status(500).json({ success: false, error: "Falha interna no servidor." });
+    }
+});
+
+// 🌐 CHAT DO SITE (público): o widget do antix-ia.com conversa com a IA (persona Antix).
+// Sem login (é o público do site). Protegido por rate-limit por IP + tetos dentro do sdr.
+app.post('/api/web-chat', webChatLimiter, express.json(), async (req, res) => {
+    try {
+        if (!sdr?.responderWebChat) return res.status(503).json({ error: 'IA indisponível no momento.' });
+        const { sessionId, message, visitorName } = req.body || {};
+        const r = await sdr.responderWebChat({ sessionId, message, visitorName });
+        if (!r?.ok) return res.status(400).json({ error: r?.motivo || 'falha' });
+        return res.json({ reply: r.reply, handoff: !!r.handoff });
+    } catch (err) {
+        console.error('❌ [WEB-CHAT] Erro:', err.message);
+        return res.status(500).json({ error: 'erro interno' });
     }
 });
 
