@@ -2310,8 +2310,8 @@ async function _promoverSessaoWeb(sid, realJid, instanceId, lid) {
     const { data: webLead } = await supabase.from('leads').select('*').eq('whatsapp_id', webWaId).maybeSingle();
     if (!webLead) return null;
 
-    // Número real já tem lead? (evita violar o unique de whatsapp_id) → merge no existente.
-    const { data: jaExiste } = await supabase.from('leads').select('*').eq('whatsapp_id', realJid).maybeSingle();
+    // Número real já tem lead NESTE tenant? (unique composto whatsapp_id+user_id) → merge no existente.
+    const { data: jaExiste } = await supabase.from('leads').select('*').eq('whatsapp_id', realJid).eq('user_id', webLead.user_id).maybeSingle();
     if (jaExiste) {
         await supabase.from('messages').update({ whatsapp_id: realJid, instance_id: instanceId }).eq('whatsapp_id', webWaId);
         await supabase.from('leads').delete().eq('id', webLead.id);
@@ -2447,24 +2447,22 @@ if (!lead) {
         .single();
 
     if (erroLeadOrganico || !leadCriado) {
-        // O lead pode JÁ EXISTIR (mesmo whatsapp_id de uma conversa/chip antigo) → a constraint
-        // unique_whatsapp_id barra o INSERT. Antes isso descartava a mensagem (bug "mandei e não
-        // recebi nada"). Agora recupera o lead existente e re-vincula a este chip pra reprocessar.
+        // Com o unique COMPOSTO (whatsapp_id, user_id), o conflito 23505 só ocorre pro MESMO
+        // tenant (ex.: o número já existe sob OUTRO chip da mesma conta). Recupera SÓ o lead
+        // DESTE tenant (nunca de outro — isso é o que evita o lead "pular" de dono entre contas)
+        // e re-vincula ao chip atual, sem trocar o user_id.
         const ehDuplicado = erroLeadOrganico?.code === '23505'
-            || /unique_whatsapp_id|duplicate key/i.test(erroLeadOrganico?.message || '');
+            || /unique|duplicate key/i.test(erroLeadOrganico?.message || '');
         if (ehDuplicado) {
             const { data: leadExistente } = await supabase
-                .from('leads').select('*').eq('whatsapp_id', jidParaSalvar).maybeSingle();
+                .from('leads').select('*').eq('whatsapp_id', jidParaSalvar).eq('user_id', userIdInbound).maybeSingle();
             if (leadExistente) {
-                if (leadExistente.instance_id !== instanceId || leadExistente.user_id !== userIdInbound) {
-                    await supabase.from('leads')
-                        .update({ instance_id: instanceId, user_id: userIdInbound })
-                        .eq('id', leadExistente.id);
+                if (leadExistente.instance_id !== instanceId) {
+                    await supabase.from('leads').update({ instance_id: instanceId }).eq('id', leadExistente.id);
                     leadExistente.instance_id = instanceId;
-                    leadExistente.user_id = userIdInbound;
                 }
                 lead = leadExistente;
-                console.log(`🔗 [INBOUND ORGÂNICO] Lead ${jidParaSalvar} já existia — re-vinculado ao chip e reprocessado.`);
+                console.log(`🔗 [INBOUND ORGÂNICO] Lead ${jidParaSalvar} já existia neste tenant — re-vinculado ao chip.`);
             }
         }
         if (!lead) {

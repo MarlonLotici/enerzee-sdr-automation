@@ -173,7 +173,7 @@ if (!estadoFinal && phonePuro) {
         // Tenta o salvamento. Se houver conflito no whatsapp_id, ele apenas ATUALIZA (upsert)
         let { error } = await supabase
             .from('leads')
-            .upsert(leadData, { onConflict: 'whatsapp_id' });
+            .upsert(leadData, { onConflict: 'whatsapp_id,user_id' });
 
         if (error) {
             console.error(`❌ [DB ERROR]: ${error.message}`);
@@ -185,7 +185,7 @@ if (!estadoFinal && phonePuro) {
                 instance_id: instanceId,
                 status: 'error',
                 updated_at: new Date()
-            }, { onConflict: 'whatsapp_id' });
+            }, { onConflict: 'whatsapp_id,user_id' });
         } else {
             console.log(`✅ [DB] Lead persistido com sucesso: ${lead.name}`);
             return { error: null };
