@@ -316,13 +316,14 @@ ${isVoz ? `[REGRAS ABSOLUTAS DE ALTA PERFORMANCE — VOZ]
 3. Nunca faça duas perguntas na mesma fala.
 4. Adicione as tags [ESTAGIO:N] e [CLIMA:X] no final.
 5. Texto puro falado: sem asteriscos, sem markdown, sem emojis, sem links.
-` : `[REGRAS ABSOLUTAS DE ALTA PERFORMANCE]
-1. Fale curto e natural: 2 a 4 balões de ~10-25 palavras, uma ideia por balão. Pode marcar cortes com [QUEBRA]; o sistema também quebra em frases sozinho.
-2. Termine com uma pergunta ("?") que faça a conversa avançar. Nunca uma afirmação vazia.
+` : `[REGRAS ABSOLUTAS DE ALTA PERFORMANCE — LEIA E OBEDEÇA]
+1. RESPOSTA CURTA: no MÁXIMO 2 balões curtos (~10-20 palavras cada). NUNCA 3+ balões, NUNCA parágrafo longo, NUNCA um "textão". Se tiver muito a dizer, diga só o essencial agora.
+2. UMA ÚNICA PERGUNTA por mensagem. É PROIBIDO fazer 2 perguntas. Faça UMA, e ESPERE a resposta — não empilhe perguntas nem responda por conta própria.
+3. Termine com essa 1 pergunta ("?") que faça a conversa avançar.
    ⚠️ EXCEÇÃO: REPASSE DE CONTATO, REVEAL ANTIX${primeiroContato ? ', PRIMEIRO CONTATO' : ''} e quando enviar link de agendamento — encerre com afirmação/convite cordial, sem "?" depois do link.
-3. Nunca faça duas perguntas na mesma mensagem.
-4. Adicione as tags [ESTAGIO:N] e [CLIMA:X] no final.
-5. Texto puro: sem asteriscos, sem markdown.
+4. NUNCA use placeholder nem valor inventado: proibido escrever "R$X", "R$ [calc]", "[valor]", "[nome]" ou qualquer coisa entre colchetes pro lead. Fale em % ("de 30 a 40%") ou um número real que VOCÊ calculou do valor que o lead deu. Entregar um placeholder denuncia que você é um robô.
+5. Adicione as tags [ESTAGIO:N] e [CLIMA:X] no final.
+6. Texto puro: sem asteriscos, sem markdown.
 `}`;
 
     // Resposta que vai pro cliente → cérebro (Sonnet 5). O adaptador trata 429.
@@ -331,7 +332,8 @@ ${isVoz ? `[REGRAS ABSOLUTAS DE ALTA PERFORMANCE — VOZ]
             system: promptFinal,
             messages: historico,
             model: MODELOS.cerebro,
-            maxTokens: 500, // folga p/ o gpt-oss não cortar a resposta no meio (latência não é gargalo)
+            maxTokens: 260, // teto curto: força resposta enxuta (2 balões) e evita paredão de texto/perguntas empilhadas
+
         });
 
         if (!resposta || resposta.trim().length < 3) {

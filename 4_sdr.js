@@ -2233,7 +2233,12 @@ if (matchClima) updates.sentiment = matchClima[1].toLowerCase();
     // Split humano no CÓDIGO (não depende do LLM emitir [QUEBRA]): respeita o [QUEBRA] se veio,
     // depois quebra frases longas em balões curtos sem NUNCA cortar frase no meio, protege URLs,
     // tira "?" colado após link e joga o link de agendamento pro último balão.
-    const mensagensSplit = dividirEmBaloes(textoLimpo);
+    let mensagensSplit = dividirEmBaloes(textoLimpo);
+    // 🛡️ TRAVA ANTI-PAREDÃO: nunca manda mais de 2 balões (mata o "3+ balões seguidos" robótico).
+    // Mantém o 1º balão (contexto) + o último (a pergunta/CTA), pra não perder o gancho da conversa.
+    if (mensagensSplit.length > 2) {
+        mensagensSplit = [mensagensSplit[0], mensagensSplit[mensagensSplit.length - 1]];
+    }
     console.log(`📤 [FILTRO] Enviando ${mensagensSplit.length} balão(ões) para ${lead.name}...`);
 
     // 🎙️ LÓGICA TTS: Decide se o último balão vai como áudio
