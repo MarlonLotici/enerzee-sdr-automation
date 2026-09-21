@@ -5736,6 +5736,16 @@ module.exports = {
 
         await db.saveMessage(waId, 'user', texto, null, USER_ID, 'web').catch(() => {});
 
+        // 🏷️ IDENTIFICAÇÃO (tracking): se ainda é "Visitante do site" e a pessoa se apresentou
+        // ("meu nome é X", "sou o X"), grava o nome no lead → você identifica quem falou no site.
+        if (!lead.name || lead.name === 'Visitante do site') {
+            const nomeDeclarado = extrairNomeDeclarado(texto);
+            if (nomeDeclarado) {
+                await supabase.from('leads').update({ name: nomeDeclarado, dono: nomeDeclarado }).eq('id', lead.id).catch(() => {});
+                lead.name = nomeDeclarado;
+            }
+        }
+
         // Intenção + prompt da persona Antix (roteado por intenção, igual ao worker)
         const intencao = await routerAgent.classificarMensagem(texto).catch(() => 'DUVIDA');
         const { data: brain } = await supabase.from('tenant_prompts')
@@ -5747,7 +5757,7 @@ module.exports = {
         else promptBase = brain?.qualifier_prompt || brain?.system_prompt;
         if (!promptBase || promptBase.trim().length < 50) return { ok: false, motivo: 'prompt_ausente' };
 
-        const instanceData = { user_id: USER_ID, product_type: 'antix', agent_name: 'Kauana', company_name: 'Antix', name: 'Kauana (site)' };
+        const instanceData = { user_id: USER_ID, product_type: 'antix', agent_name: 'Sofia', company_name: 'Antix', name: 'Sofia (site)' };
         const historicoIA = [...historico, { role: 'user', content: texto }];
         const promptResolvido = await resolverPromptCompleto(promptBase, lead, instanceData, historicoIA, {});
         const promptWeb = `${promptResolvido}
@@ -5756,6 +5766,7 @@ module.exports = {
 🌐 CANAL ATUAL: CHAT DO SITE (antix-ia.com) — NÃO é WhatsApp
 =======================================================
 - Seja concisa: no máximo 2 balões curtos (o espaço do chat é pequeno).
+- LOGO no começo (se ainda não souber), pergunte com naturalidade o NOME da pessoa pra personalizar o papo ("como posso te chamar?"). Uma pergunta só.
 - Quando o visitante demonstrar interesse real em avançar/agendar, convide-o a CONTINUAR NO WHATSAPP — existe um botão "Continuar no WhatsApp" logo abaixo do chat. Ex.: "perfeito! clica em 'Continuar no WhatsApp' aqui embaixo que eu já fecho contigo por lá 😊".
 - NUNCA invente horário, NÃO diga que agendou e NÃO peça pra esperar retorno. O fechamento acontece no WhatsApp.`;
 
