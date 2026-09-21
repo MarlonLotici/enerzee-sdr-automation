@@ -5746,8 +5746,28 @@ module.exports = {
             }
         }
 
-        // Intenção + prompt da persona Antix (roteado por intenção, igual ao worker)
         const intencao = await routerAgent.classificarMensagem(texto).catch(() => 'DUVIDA');
+        const instanceData = { user_id: USER_ID, product_type: 'antix', agent_name: 'Sofia', company_name: 'Antix', name: 'Sofia (site)' };
+
+        // Limpa tags internas + mata o link-fallback falso (antix.com.br/agendar) e Calendly.
+        const stripWeb = (t) => String(t || '')
+            .replace(/\[\s*(ESTAGIO|ESTÁGIO|CLIMA|RAIO-X|PERFIL|ROBO|CONTADOR|ENGANO|GATEKEEPER|AGENDAMENTO_MANUAL|PAUSA\s*PARA\s*RESPOSTA|REVERSAO_TENTADA|FOLLOW_UP|AGUARDANDO_RETORNO)[^\]]*\]/gi, '')
+            .replace(/\[QUEBRA\]/gi, '\n')
+            .replace(/https?:\/\/antix\.com\.br\/agendar\S*/gi, '')
+            .replace(/https?:\/\/calendly\.com\/\S*/gi, '')
+            .replace(/\n{3,}/g, '\n\n').trim();
+
+        // 📅 AGENDAMENTO REAL: a Sofia consulta a Google Agenda da Antix e propõe/cria horários
+        // REAIS — igual ao WhatsApp (nada de link falso). Só dispara quando há intenção de marcar.
+        const agend = await orquestrarAgendamento(lead, texto, instanceData, USER_ID, intencao).catch(() => ({ tratado: false }));
+        if (agend?.tratado && agend.resposta) {
+            const rA = stripWeb(agend.resposta) || 'Deixa eu ver os horários certinho aqui e já te falo 🙌';
+            await db.saveMessage(waId, 'assistant', rA, null, USER_ID, 'web').catch(() => {});
+            if (ioSocket && leadNovo) ioSocket.to(`user:${USER_ID}`).emit('new_lead', lead);
+            return { ok: true, reply: rA, handoff: false, leadId: lead.id };
+        }
+
+        // Qualificação (closer) — persona Antix roteada por intenção
         const { data: brain } = await supabase.from('tenant_prompts')
             .select('system_prompt, qualifier_prompt, closer_prompt, objection_prompt')
             .eq('user_id', USER_ID).maybeSingle();
@@ -5757,32 +5777,33 @@ module.exports = {
         else promptBase = brain?.qualifier_prompt || brain?.system_prompt;
         if (!promptBase || promptBase.trim().length < 50) return { ok: false, motivo: 'prompt_ausente' };
 
-        const instanceData = { user_id: USER_ID, product_type: 'antix', agent_name: 'Sofia', company_name: 'Antix', name: 'Sofia (site)' };
         const historicoIA = [...historico, { role: 'user', content: texto }];
         const promptResolvido = await resolverPromptCompleto(promptBase, lead, instanceData, historicoIA, {});
         const promptWeb = `${promptResolvido}
 
 =======================================================
-🌐 CANAL ATUAL: CHAT DO SITE (antix-ia.com) — NÃO é WhatsApp
+🌐 CANAL ATUAL: CHAT DO SITE (antix-ia.com) — teste ao vivo da IA
 =======================================================
-- Seja concisa: no máximo 2 balões curtos (o espaço do chat é pequeno).
-- LOGO no começo (se ainda não souber), pergunte com naturalidade o NOME da pessoa pra personalizar o papo ("como posso te chamar?"). Uma pergunta só.
-- Quando o visitante demonstrar interesse real em avançar/agendar, convide-o a CONTINUAR NO WHATSAPP — existe um botão "Continuar no WhatsApp" logo abaixo do chat. Ex.: "perfeito! clica em 'Continuar no WhatsApp' aqui embaixo que eu já fecho contigo por lá 😊".
-- NUNCA invente horário, NÃO diga que agendou e NÃO peça pra esperar retorno. O fechamento acontece no WhatsApp.`;
+- Seja concisa: no máximo 2 balões curtos, UMA pergunta por vez.
+- LOGO no começo (se ainda não souber), pergunte o NOME da pessoa ("como posso te chamar?").
+- QUALIFIQUE DE VERDADE ANTES de falar em agendar: descubra (uma de cada vez) o segmento/empresa dela, como ela capta e qualifica os leads hoje, e onde perde oportunidade (a DOR). Só avance pro agendamento quando houver dor + interesse CLAROS — não pule pra reunião nas primeiras mensagens.
+- PROIBIDO enviar QUALQUER link (você NÃO tem link) e PROIBIDO inventar horário. Quando a pessoa topar marcar, apenas diga que já vai ver os horários — o próprio sistema propõe os horários REAIS da agenda em seguida.`;
 
-        let reply = await closerAgent.gerarRespostaCloser(historicoIA, lead, promptWeb, intencao, {
-            instanceType: 'antix', bookingAtivo: false, agendaConectada: false, calendlyLink: '',
+        const respostaRaw = await closerAgent.gerarRespostaCloser(historicoIA, lead, promptWeb, intencao, {
+            instanceType: 'antix', bookingAtivo: true, agendaConectada: true, calendlyLink: '',
             primeiroContato: !historico.some(m => m.role === 'assistant'),
         }).catch(() => null);
 
-        const regexTags = /\[\s*(ESTAGIO|ESTÁGIO|CLIMA|RAIO-X|PERFIL|ROBO|CONTADOR|ENGANO|GATEKEEPER|AGENDAMENTO_MANUAL|PAUSA\s*PARA\s*RESPOSTA|REVERSAO_TENTADA|FOLLOW_UP|AGUARDANDO_RETORNO)[^\]]*\]/gi;
-        reply = String(reply || '').replace(regexTags, '').replace(/\[QUEBRA\]/gi, '\n').replace(/\n{3,}/g, '\n\n').trim()
-            || 'Opa, tive uma instabilidade aqui — consegue repetir?';
+        // Persiste o estágio declarado (qualificação progride + orquestrador propõe no momento certo)
+        const mEst = String(respostaRaw || '').match(/\[ESTAGIO:\s*(\d)\s*\]/i);
+        if (mEst) { const s = parseInt(mEst[1], 10); if (s >= 0 && s <= 5 && s !== (lead.current_stage || 0)) await supabase.from('leads').update({ current_stage: s }).eq('id', lead.id).catch(() => {}); }
 
+        const reply = stripWeb(respostaRaw) || 'Opa, tive uma instabilidade aqui — consegue repetir?';
         await db.saveMessage(waId, 'assistant', reply, null, USER_ID, 'web').catch(() => {});
         if (ioSocket && leadNovo) ioSocket.to(`user:${USER_ID}`).emit('new_lead', lead);
 
-        const handoff = intencao === 'COMPRA' || (lead.current_stage || 0) >= 3;
+        // Botão "Continuar no WhatsApp" só como opção secundária quando já está no estágio de agenda.
+        const handoff = (lead.current_stage || 0) >= 4;
         return { ok: true, reply, handoff, leadId: lead.id };
     },
 
