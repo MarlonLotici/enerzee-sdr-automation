@@ -5820,7 +5820,18 @@ module.exports = {
         const mEst = String(respostaRaw || '').match(/\[ESTAGIO:\s*(\d)\s*\]/i);
         if (mEst) { const s = parseInt(mEst[1], 10); if (s >= 0 && s <= 5 && s !== (lead.current_stage || 0)) await supabase.from('leads').update({ current_stage: s }).eq('id', lead.id).then(() => {}, () => {}); }
 
-        const reply = stripWeb(respostaRaw) || 'Opa, tive uma instabilidade aqui — consegue repetir?';
+        // 🚫 ANTI-PAREDÃO (web): a IA às vezes despeja 3-4 perguntas grudadas. No WhatsApp o
+        // filtrarEEnviarResposta corta; aqui o texto vai inteiro. Trava: 1 pergunta por vez
+        // (corta no 1º "?") e, sem pergunta, no máx 2 frases pra não virar muro de texto.
+        const enxugarWeb = (t) => {
+            let s = String(t || '').trim();
+            if (!s) return s;
+            const q = s.indexOf('?');
+            if (q !== -1) return s.slice(0, q + 1).trim();
+            const frases = s.split(/(?<=[.!…])\s+/).filter(Boolean);
+            return (frases.length > 2 ? frases.slice(0, 2).join(' ') : s).trim();
+        };
+        const reply = enxugarWeb(stripWeb(respostaRaw)) || 'Opa, tive uma instabilidade aqui — consegue repetir?';
         await db.saveMessage(waId, 'assistant', reply, null, USER_ID, 'web').catch(() => {});
         if (ioSocket && leadNovo) ioSocket.to(`user:${USER_ID}`).emit('new_lead', lead);
 
