@@ -5700,7 +5700,10 @@ module.exports = {
     // Protegido no server.js (rate-limit + CORS). Cria um lead 'web' pra aparecer no pipeline e
     // permitir handoff pro WhatsApp. NÃO usa Baileys/booking — o agendamento fecha no WhatsApp.
     responderWebChat: async ({ sessionId, message, visitorName } = {}) => {
-        const USER_ID = process.env.WEB_CHAT_USER_ID || 'f437f090-5fa0-4a94-b4aa-8c22998c9cf6'; // Antix (Kauana)
+        const USER_ID = process.env.WEB_CHAT_USER_ID || 'f437f090-5fa0-4a94-b4aa-8c22998c9cf6'; // Antix
+        // Chip do Antix — os leads web ganham esse instance_id pra APARECEREM na aba Conversas
+        // (a lista filtra pelo chip; lead sem chip some quando um chip está selecionado).
+        const WEB_INSTANCE_ID = process.env.WEB_CHAT_INSTANCE_ID || '290a03b9-85aa-4afb-9527-1c2453588e66';
         const MAX_MSGS = parseInt(process.env.WEB_CHAT_MAX_MSGS || '40', 10);   // teto por sessão (anti-abuso/custo)
 
         const texto = String(message || '').slice(0, 800).trim();
@@ -5709,6 +5712,7 @@ module.exports = {
         const waId = `web_${sid}@web`;
 
         definirTenantLLM(USER_ID);
+      try {
 
         // Histórico da sessão (mensagens por waId; único por sessão)
         const historico = await db.getHistory(waId, null).catch(() => []);
@@ -5722,27 +5726,37 @@ module.exports = {
         let leadNovo = false;
         if (!lead) {
             const { data: novo } = await supabase.from('leads').insert({
-                whatsapp_id: waId, user_id: USER_ID,
+                whatsapp_id: waId, user_id: USER_ID, instance_id: WEB_INSTANCE_ID,
                 name: (visitorName && String(visitorName).slice(0, 60)) || 'Visitante do site',
                 origin: 'web_chat', status: 'contact',
                 first_touch_channel: 'web', first_touch_at: new Date().toISOString(),
             }).select('*').single().then(r => r, () => ({ data: null }));
-            lead = novo || { id: null, whatsapp_id: waId, user_id: USER_ID, name: visitorName || 'Visitante do site', current_stage: 0 };
+            lead = novo || { id: null, whatsapp_id: waId, user_id: USER_ID, instance_id: WEB_INSTANCE_ID, name: visitorName || 'Visitante do site', current_stage: 0 };
             leadNovo = !!novo;
         } else if (visitorName && (!lead.name || lead.name === 'Visitante do site')) {
             await supabase.from('leads').update({ name: String(visitorName).slice(0, 60) }).eq('id', lead.id).catch(() => {});
             lead.name = String(visitorName).slice(0, 60);
         }
+        // Garante o chip no lead (leads web antigos ficaram com instance_id null → sumiam de Conversas).
+        if (lead.id && !lead.instance_id) {
+            await supabase.from('leads').update({ instance_id: WEB_INSTANCE_ID }).eq('id', lead.id).catch(() => {});
+            lead.instance_id = WEB_INSTANCE_ID;
+        }
 
         await db.saveMessage(waId, 'user', texto, null, USER_ID, 'web').catch(() => {});
 
-        // 🏷️ IDENTIFICAÇÃO (tracking): se ainda é "Visitante do site" e a pessoa se apresentou
-        // ("meu nome é X", "sou o X"), grava o nome no lead → você identifica quem falou no site.
+        // 🏷️ IDENTIFICAÇÃO (tracking): captura o nome pra o lead não ficar "Visitante do site".
         if (!lead.name || lead.name === 'Visitante do site') {
-            const nomeDeclarado = extrairNomeDeclarado(texto);
-            if (nomeDeclarado) {
-                await supabase.from('leads').update({ name: nomeDeclarado, dono: nomeDeclarado }).eq('id', lead.id).catch(() => {});
-                lead.name = nomeDeclarado;
+            let nome = extrairNomeDeclarado(texto);           // "meu nome é X" / "sou o X"
+            if (!nome) {
+                // Sofia acabou de perguntar o nome e a pessoa respondeu curto ("João") → valida como nome.
+                const ultimaIA = [...historico].reverse().find(m => m.role === 'assistant')?.content || '';
+                const perguntouNome = /\b(nome|te chamar|como.*(chamo|chama)|com quem|quem fala)\b/i.test(ultimaIA);
+                if (perguntouNome && texto.trim().split(/\s+/).length <= 3) nome = extrairNomeHumano(texto);
+            }
+            if (nome) {
+                await supabase.from('leads').update({ name: nome, dono: nome }).eq('id', lead.id).catch(() => {});
+                lead.name = nome;
             }
         }
 
@@ -5778,7 +5792,15 @@ module.exports = {
         if (!promptBase || promptBase.trim().length < 50) return { ok: false, motivo: 'prompt_ausente' };
 
         const historicoIA = [...historico, { role: 'user', content: texto }];
-        const promptResolvido = await resolverPromptCompleto(promptBase, lead, instanceData, historicoIA, {});
+        let promptResolvido;
+        try {
+            promptResolvido = await resolverPromptCompleto(promptBase, lead, instanceData, historicoIA, {});
+        } catch (ePrompt) {
+            console.error('[WEB-CHAT] resolverPromptCompleto falhou:', ePrompt.message);
+            promptResolvido = String(promptBase)
+                .replaceAll('${agentName}', 'Sofia').replaceAll('${companyName}', 'Antix')
+                .replaceAll('${nomeLead}', lead.name || '').replace(/\$\{[^}]+\}/g, '');
+        }
         const promptWeb = `${promptResolvido}
 
 =======================================================
@@ -5805,6 +5827,10 @@ module.exports = {
         // Botão "Continuar no WhatsApp" só como opção secundária quando já está no estágio de agenda.
         const handoff = (lead.current_stage || 0) >= 4;
         return { ok: true, reply, handoff, leadId: lead.id };
+      } catch (e) {
+        console.error('[WEB-CHAT] erro nao tratado:', e.message, '|', (e.stack || '').split('\n').slice(1, 3).join(' | '));
+        return { ok: true, reply: 'Opa, me perdi aqui 😅 pode repetir?', handoff: false, _err: e.message };
+      }
     },
 
     acordarChips: () => {
