@@ -5734,12 +5734,12 @@ module.exports = {
             lead = novo || { id: null, whatsapp_id: waId, user_id: USER_ID, instance_id: WEB_INSTANCE_ID, name: visitorName || 'Visitante do site', current_stage: 0 };
             leadNovo = !!novo;
         } else if (visitorName && (!lead.name || lead.name === 'Visitante do site')) {
-            await supabase.from('leads').update({ name: String(visitorName).slice(0, 60) }).eq('id', lead.id).catch(() => {});
+            await supabase.from('leads').update({ name: String(visitorName).slice(0, 60) }).eq('id', lead.id).then(() => {}, () => {});
             lead.name = String(visitorName).slice(0, 60);
         }
         // Garante o chip no lead (leads web antigos ficaram com instance_id null → sumiam de Conversas).
         if (lead.id && !lead.instance_id) {
-            await supabase.from('leads').update({ instance_id: WEB_INSTANCE_ID }).eq('id', lead.id).catch(() => {});
+            await supabase.from('leads').update({ instance_id: WEB_INSTANCE_ID }).eq('id', lead.id).then(() => {}, () => {});
             lead.instance_id = WEB_INSTANCE_ID;
         }
 
@@ -5755,7 +5755,7 @@ module.exports = {
                 if (perguntouNome && texto.trim().split(/\s+/).length <= 3) nome = extrairNomeHumano(texto);
             }
             if (nome) {
-                await supabase.from('leads').update({ name: nome, dono: nome }).eq('id', lead.id).catch(() => {});
+                await supabase.from('leads').update({ name: nome, dono: nome }).eq('id', lead.id).then(() => {}, () => {});
                 lead.name = nome;
             }
         }
@@ -5818,7 +5818,7 @@ module.exports = {
 
         // Persiste o estágio declarado (qualificação progride + orquestrador propõe no momento certo)
         const mEst = String(respostaRaw || '').match(/\[ESTAGIO:\s*(\d)\s*\]/i);
-        if (mEst) { const s = parseInt(mEst[1], 10); if (s >= 0 && s <= 5 && s !== (lead.current_stage || 0)) await supabase.from('leads').update({ current_stage: s }).eq('id', lead.id).catch(() => {}); }
+        if (mEst) { const s = parseInt(mEst[1], 10); if (s >= 0 && s <= 5 && s !== (lead.current_stage || 0)) await supabase.from('leads').update({ current_stage: s }).eq('id', lead.id).then(() => {}, () => {}); }
 
         const reply = stripWeb(respostaRaw) || 'Opa, tive uma instabilidade aqui — consegue repetir?';
         await db.saveMessage(waId, 'assistant', reply, null, USER_ID, 'web').catch(() => {});
