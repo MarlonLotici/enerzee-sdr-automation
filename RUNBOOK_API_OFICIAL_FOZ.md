@@ -9,10 +9,35 @@ isto é só a burocracia + configuração.
 
 ---
 
+## Modelo de contas — 1 Business Manager da Antix → N clientes (decidido)
+
+O que é **compartilhado** e o que é **por cliente**:
+
+| Camada | Como fica |
+|---|---|
+| **Business Manager (verificação)** | **1 só, o da Antix** — verifica com o CNPJ da Antix **uma única vez** |
+| **WABA + número + display name** | **1 por cliente** (o número mostra o nome da empresa DELE aos leads) |
+| **Access Token** | por cliente/WABA (o sistema guarda `cloud_api_key` **por chip**) |
+
+- Você **não** re-verifica negócio a cada cliente. Do **2º cliente em diante** é só: adicionar
+  **+1 número** dentro do mesmo BM da Antix, criar a WABA/display name dele, gerar/reusar token,
+  e rodar o `db/foz_api_oficial.sql` (uma cópia por cliente, trocando os placeholders).
+- **Billing:** a Meta cobra a Antix (seu cartão no BM) por conversa — centavos pra inbound.
+  Você **embute isso na mensalidade** do cliente (vira margem). O cliente não vê a Meta.
+- Quando escalar (~10-15 clientes), reavaliar mover pra BM do próprio cliente ou virar Tech
+  Provider oficial — hoje seria over-engineering.
+
+---
+
 ## Parte 1 — Burocracia na Meta (você faz; ~1 a 5 dias)
 
-1. **Meta Business Manager** (business.facebook.com): crie/entre na conta da empresa e faça a
-   **verificação de negócio** (envia CNPJ/documento). É o que mais demora — comece por aqui.
+1. **Verificar o negócio da Antix (só 1x na vida)** — [business.facebook.com](https://business.facebook.com):
+   - Crie/entre no Business Manager da Antix.
+   - Menu **Configurações do Negócio** (engrenagem) → **Central de Segurança** (ou **Verificação
+     do Negócio**) → **Iniciar verificação**.
+   - Envie os dados/documentos da Antix (CNPJ, comprovante de endereço, etc.). **Comece por aqui —
+     é o que mais demora (1-5 dias).** Enquanto não verifica, dá pra ir montando o resto, mas os
+     limites de envio ficam baixos até aprovar.
 2. **Número dedicado**: consiga um **número de telefone novo** (chip pré-pago serve) que
    **não esteja registrado no app do WhatsApp**. ⚠️ Uma vez na Cloud API, esse número **sai do
    app normal** — não use o celular do Carlos nem o chip atual.
@@ -20,10 +45,14 @@ isto é só a burocracia + configuração.
    Confirme o código de verificação que a Meta manda por SMS/ligação.
 4. **Nome de exibição**: cadastre o nome que aparece pro cliente (ex.: "Foz Energia"). A Meta aprova.
 5. Anote os 2 valores:
-   - **PHONE_NUMBER_ID** (aparece no painel do número).
-   - **Access Token permanente**: crie um **System User** (Business Settings → Usuários do sistema),
-     dê acesso à WABA, e gere um token **sem expiração** com permissões `whatsapp_business_messaging`
-     e `whatsapp_business_management`. (O token de teste de 24h NÃO serve pra produção.)
+   - **PHONE_NUMBER_ID**: em **WhatsApp Manager** (ou Configurações do Negócio → Contas → WhatsApp)
+     → seu número → **Configuração da API / API Setup**. É um número longo ao lado do telefone.
+     (⚠️ NÃO é o número de telefone em si — é o "Phone number ID".)
+   - **Access Token permanente**: Configurações do Negócio → **Usuários do sistema** → criar um
+     System User (papel Admin) → **Adicionar ativos** → dê acesso à **WABA** do cliente →
+     **Gerar novo token** → app do WhatsApp → **sem expiração** → marque `whatsapp_business_messaging`
+     e `whatsapp_business_management`. Copie o token na hora (só aparece 1 vez). O token de teste de
+     24h NÃO serve pra produção.
 
 ---
 
