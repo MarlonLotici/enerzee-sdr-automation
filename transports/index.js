@@ -2,8 +2,9 @@
  * SELETOR DE TRANSPORTE por instância.
  *
  * O motor pergunta a este módulo qual transporte usar com base no campo
- * `whatsapp_provider` da instância (default 'baileys'). Hoje só Baileys está
- * implementado; 'official' (Cloud API) é um stub que lança erro se selecionado.
+ * `whatsapp_provider` da instância (default 'baileys'). Ambos implementados:
+ * 'baileys' (WhatsApp Web) e 'official'/'cloud'/'cloud_api' (Meta Cloud API,
+ * via cloudApiTransport — envio por Bearer token + inbound por webhook).
  *
  * Uso:
  *   const { getTransport } = require('./transports');
