@@ -2532,8 +2532,8 @@ className="glass-panel border-white/20 text-white max-w-5xl w-[95vw] max-h-[95vh
 
             {/* BOTÕES DE AÇÃO - Altura reduzida de h-24 para h-14 */}
             <div className="flex gap-4 pt-2">
-                   <Button className="flex-1 h-14 bg-amber-600 hover:bg-amber-500 text-black text-lg font-black rounded-2xl shadow-lg border border-amber-500/30 uppercase italic flex items-center justify-center gap-2 transition-all active:scale-95 group">
-                    ABRIR CANAL DE FECHAMENTO <ArrowRight className="h-5 w-5 group-hover:translate-x-1 transition-transform" />
+                   <Button onClick={() => { setActiveChat(viewingLeadDetail); setActiveTab('connections'); setViewingLeadDetail(null); }} className="flex-1 h-14 bg-amber-600 hover:bg-amber-500 text-black text-lg font-black rounded-2xl shadow-lg border border-amber-500/30 uppercase italic flex items-center justify-center gap-2 transition-all active:scale-95 group">
+                    IR PARA A CONVERSA <ArrowRight className="h-5 w-5 group-hover:translate-x-1 transition-transform" />
                 </Button>
                 <Button variant="outline" className="h-14 px-8 border border-white/10 glass-card text-xs font-black rounded-2xl uppercase tracking-widest hover:bg-white/5" onClick={() => setViewingLeadDetail(null)}>FECHAR</Button>
             </div>
