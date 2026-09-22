@@ -1128,7 +1128,7 @@ app.post('/api/web-chat', webChatLimiter, express.json(), async (req, res) => {
         const { sessionId, message, visitorName } = req.body || {};
         const r = await sdr.responderWebChat({ sessionId, message, visitorName });
         if (!r?.ok) return res.status(400).json({ error: r?.motivo || 'falha' });
-        return res.json({ reply: r.reply, handoff: !!r.handoff });
+        return res.json({ reply: r.reply, handoff: !!r.handoff, ...(r._err ? { _err: r._err } : {}) });
     } catch (err) {
         console.error('❌ [WEB-CHAT] Erro:', err.message);
         return res.status(500).json({ error: 'erro interno' });
