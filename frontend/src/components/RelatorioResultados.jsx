@@ -91,9 +91,6 @@ export default function RelatorioResultados() {
 
     const m = useMemo(() => {
         const { leads, mensagens } = raw
-        const dateFrom = getDateFrom(periodo)
-        const desde = dateFrom ? new Date(dateFrom) : null
-        const noPeriodo = (iso) => !desde || (iso && new Date(iso) >= desde)
 
         const assistant = mensagens.filter(x => x.role === 'assistant')
         const userMsgs = mensagens.filter(x => x.role === 'user' && !x.content?.startsWith('[AUTORESPOSTA]'))
@@ -102,14 +99,17 @@ export default function RelatorioResultados() {
         const leadsResponderam = new Set(userMsgs.map(x => x.whatsapp_id)).size
         const mensagensRespondidas = assistant.length
 
-        // Reuniões: sinal de agendamento + ativas no período (proxy honesto de "geradas no período")
-        const reunioes = leads.filter(l => {
-            const agendou = l.status === 'booked' || l.status === 'closed' || l.calendly_booked === true || (l.current_stage || 0) >= 4
-            return agendou && noPeriodo(l.last_contact_at)
-        }).length
+        // Reunião é conversão PERMANENTE (não expira por período) — consistente com o resto
+        // do Analytics (VisualAnalytics conta agendados all-time). Evita mostrar 1 aqui e 6 lá.
+        const reunioes = leads.filter(l =>
+            l.status === 'booked' || l.status === 'closed' || l.calendly_booked === true || (l.current_stage || 0) >= 4
+        ).length
 
-        // Fora do horário comercial (noite/fim de semana) — atendimento 24/7
-        const foraDoHorario = assistant.filter(x => ehForaDoHorario(x.created_at)).length
+        // Fora do horário comercial (noite/fim de semana) — atendimento 24/7.
+        // foraDoHorario = MENSAGENS (volume); conversasForaDoHorario = conversas distintas (contexto).
+        const assistantFora = assistant.filter(x => ehForaDoHorario(x.created_at))
+        const foraDoHorario = assistantFora.length
+        const conversasForaDoHorario = new Set(assistantFora.map(x => x.whatsapp_id)).size
 
         // Tempo médio até a 1ª resposta do lead após o disparo (min), capado em 24h
         const primeiraUserPorJid = {}
@@ -128,7 +128,7 @@ export default function RelatorioResultados() {
         }
         const tempoMedio = cont > 0 ? Math.round(soma / cont) : null
 
-        return { conversasAtendidas, leadsResponderam, mensagensRespondidas, reunioes, foraDoHorario, tempoMedio }
+        return { conversasAtendidas, leadsResponderam, mensagensRespondidas, reunioes, foraDoHorario, conversasForaDoHorario, tempoMedio }
     }, [raw, periodo])
 
     const rotuloPeriodo = { '1d': 'hoje', '7d': 'nos últimos 7 dias', '30d': 'nos últimos 30 dias', '90d': 'nos últimos 90 dias', '365d': 'no último ano', 'all': 'até agora' }[periodo] || 'no período'
@@ -179,7 +179,7 @@ export default function RelatorioResultados() {
                         <HeroCard icon={Users} value={m.leadsResponderam.toLocaleString('pt-BR')} label="Leads engajados" sub="responderam e avançaram na conversa" color={CIANO} />
                         <HeroCard icon={CalendarCheck} value={m.reunioes.toLocaleString('pt-BR')} label="Reuniões agendadas" sub="sem ninguém precisar responder na mão" color={VERDE} />
                         <HeroCard icon={Clock} value={m.tempoMedio != null ? `${m.tempoMedio} min` : '—'} label="Tempo de 1ª resposta" sub="do contato à resposta da IA" color={ROXO} />
-                        <HeroCard icon={Moon} value={m.foraDoHorario.toLocaleString('pt-BR')} label="Atendimentos fora do horário" sub="noite e fim de semana — 24/7" color="#F43F5E" />
+                        <HeroCard icon={Moon} value={m.foraDoHorario.toLocaleString('pt-BR')} label="Mensagens fora do horário" sub={`respondidas à noite/fim de semana em ${m.conversasForaDoHorario} ${m.conversasForaDoHorario === 1 ? 'conversa' : 'conversas'} — 24/7`} color="#F43F5E" />
                     </div>
 
                     {/* Narrativa de impacto */}
@@ -201,7 +201,7 @@ export default function RelatorioResultados() {
                             )}
                             {m.foraDoHorario > 0 && (
                                 <li style={{ fontSize: 15, lineHeight: 1.5, color: 'rgba(255,255,255,0.85)' }}>
-                                    <b style={{ color: '#F43F5E' }}>{m.foraDoHorario} atendimentos</b> aconteceram à noite ou no fim de semana — leads que provavelmente esfriariam esperando o próximo dia útil.
+                                    Respondeu <b style={{ color: '#F43F5E' }}>{m.foraDoHorario.toLocaleString('pt-BR')} mensagens</b> à noite ou no fim de semana (em {m.conversasForaDoHorario} {m.conversasForaDoHorario === 1 ? 'conversa' : 'conversas'}) — leads que provavelmente esfriariam esperando o próximo dia útil.
                                 </li>
                             )}
                         </ul>
