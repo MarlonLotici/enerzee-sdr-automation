@@ -8,6 +8,7 @@ import { Badge } from "@/components/ui/badge"
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogDescription, DialogFooter, DialogTrigger } from "@/components/ui/dialog"
 import NicheSelect from './components/NicheSelect'
 import VisualAnalytics from "@/components/VisualAnalytics"
+import RelatorioResultados from "@/components/RelatorioResultados"
 import ChipStatus from "./components/Chipstatus"
 import HealthPanel from "./components/HealthPanel"
 import ConversaList from './components/ConversaList'
@@ -180,7 +181,7 @@ function AppSidebar({ activeTab, setActiveTab, leadsCount, onLogout }) {
 
     // --- ESTADOS DE NAVEGAÇÃO E DADOS ---
     const [activeTab, setActiveTab] = useState("search");
-    const [analyticsView, setAnalyticsView] = useState('overview')
+    const [analyticsView, setAnalyticsView] = useState('relatorio')
     const [leads, setLeads] = useState([]);
     const [chats, setChats] = useState([]);
     const [activeChat, setActiveChat] = useState(null);
@@ -2184,9 +2185,10 @@ return (
 </TabsContent>
                                  <TabsContent value="dashboard" className="flex-1 overflow-hidden m-0 flex flex-col">
     {/* Sub-navegação do Analytics */}
-    <div className="shrink-0 flex items-center gap-2 px-6 py-2.5 border-b border-white/5 bg-[#0d0d0d]/60">
+    <div className="antix-noprint shrink-0 flex items-center gap-2 px-6 py-2.5 border-b border-white/5 bg-[#0d0d0d]/60">
         <span className="text-[9px] text-slate-600 font-black uppercase tracking-widest mr-2">Visão:</span>
         {[
+           { key: 'relatorio', label: '★ Relatório' },
            { key: 'overview', label: 'Resultados' },
            { key: 'operations', label: 'Operação' },
            { key: 'auditor', label: 'QA · Auditor' },
@@ -2207,7 +2209,7 @@ return (
 
     {/* Conteúdo */}
     <div className="flex-1 overflow-auto">
-        {analyticsView === 'overview' ? <VisualAnalytics /> : analyticsView === 'operations' ? <Dashboard /> : <AuditorDashboard socket={socket} />}
+        {analyticsView === 'relatorio' ? <RelatorioResultados /> : analyticsView === 'overview' ? <VisualAnalytics /> : analyticsView === 'operations' ? <Dashboard /> : <AuditorDashboard socket={socket} />}
     </div>
 </TabsContent>
 
