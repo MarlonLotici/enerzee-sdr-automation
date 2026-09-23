@@ -66,3 +66,6 @@ temp_audio_*
 *.ogg
 *.mp3
 !assets/*.ogg
+# backups locais (nunca versionar)
+*.bak
+*.bak2
