@@ -273,6 +273,10 @@ const JANELA_MAX_CATCHUP_MS = 10 * 60 * 1000; // não resgata sync mais velho qu
 
 // 🔄 Backoff de reconexão (pura, testável) — movida para lib/reconexao.js.
 const { calcularBackoffReconexao } = require('./lib/reconexao');
+// 🚫 Travas de qualidade da resposta no chat do site (puras, testáveis) — lib/webGuardrails.js.
+const { stripWeb, enxugarWeb } = require('./lib/webGuardrails');
+// 📅 Decisão pura de agendamento (não agenda com "oi") — lib/agendaDecisao.js.
+const { deveProporAgendamento } = require('./lib/agendaDecisao');
 
 // ============================================================================
 // 🗄️ PERSISTÊNCIA DA GAVETA (nunca perder inbound num restart/deploy)
@@ -4422,18 +4426,11 @@ async function orquestrarAgendamento(lead, ultimaMsg, instanceData, userId, inte
     if (!bookingAtivo) return { tratado: false, bookingAtivo: false, agendaConectada };
 
     const temSlots = Array.isArray(lead.slots_propostos) && lead.slots_propostos.length > 0;
-    // Sinais de intenção de agendar — inclui dias da semana/relativos e "quando", senão o lead
-    // que pede "domingo"/"amanhã" caía fora do gatilho e o closer prometia horário sem nunca voltar.
-    const querAgendar = /\b(agendar|agende|marcar|marca[r]?\s+uma|remarcar|reuni[aã]o|hor[aá]rio|hor[aá]rios|dispon[ií]ve(l|is)|que\s+dia|que\s+horas|quando|amanh[aã]|hoje|depois\s+de\s+amanh[aã]|semana\s+que\s+vem|segunda|ter[cç]a|quarta|quinta|sexta|s[aá]bado|domingo|pode\s+ser|podemos\s+marcar|vamos\s+marcar)\b/i.test(ultimaMsg || '');
     const jaAgendado = lead.status === 'booked' && !!lead.gcal_event_id;
-    // Rede de segurança: se o lead já foi movido pro estágio de agendamento (closer marcou
-    // [ESTAGIO:4]) e ainda não há slots propostos, PROPÕE horários reais agora — mata a
-    // promessa vazia "vou verificar e te retorno" que nunca se cumpria.
-    // Guard: NÃO vale pra saudação pura ("oi", "bom dia") — evita que um estágio antigo/herdado
-    // (ex.: lead compartilhado entre chips) faça a IA oferecer horário logo num cumprimento.
-    const ehSaudacaoPura = /^\s*(oi+|ol[áa]|opa|e?\s*a[íi]|bom\s+dia|boa\s+(tarde|noite)|hey|hi|ola|menu)[\s!.,?]*$/i.test((ultimaMsg || '').trim());
-    const prontoPraAgendar = (lead.current_stage || 0) >= 4 && !ehSaudacaoPura;
-    if (!temSlots && intencao !== 'COMPRA' && !querAgendar && !prontoPraAgendar)
+    // Decisão pura (lib/agendaDecisao.js): só segue com UM sinal real de agendamento.
+    // Inclui o guard de saudação pura — "oi" com estágio herdado NÃO oferece horário.
+    // Mata também a promessa vazia "vou verificar e te retorno" (estágio>=4 sem slots → propõe agora).
+    if (!deveProporAgendamento({ texto: ultimaMsg, intencao, currentStage: lead.current_stage, temSlots }))
         return { tratado: false, bookingAtivo: true, agendaConectada };
 
     const calId = cfg.booking_calendar_id || cfg.calendar_id || 'primary';
@@ -5763,13 +5760,7 @@ module.exports = {
         const intencao = await routerAgent.classificarMensagem(texto).catch(() => 'DUVIDA');
         const instanceData = { user_id: USER_ID, product_type: 'antix', agent_name: 'Sofia', company_name: 'Antix', name: 'Sofia (site)' };
 
-        // Limpa tags internas + mata o link-fallback falso (antix.com.br/agendar) e Calendly.
-        const stripWeb = (t) => String(t || '')
-            .replace(/\[\s*(ESTAGIO|ESTÁGIO|CLIMA|RAIO-X|PERFIL|ROBO|CONTADOR|ENGANO|GATEKEEPER|AGENDAMENTO_MANUAL|PAUSA\s*PARA\s*RESPOSTA|REVERSAO_TENTADA|FOLLOW_UP|AGUARDANDO_RETORNO)[^\]]*\]/gi, '')
-            .replace(/\[QUEBRA\]/gi, '\n')
-            .replace(/https?:\/\/antix\.com\.br\/agendar\S*/gi, '')
-            .replace(/https?:\/\/calendly\.com\/\S*/gi, '')
-            .replace(/\n{3,}/g, '\n\n').trim();
+        // Limpa tags internas + mata link falso/Calendly. Trava pura em lib/webGuardrails.js (stripWeb).
 
         // 📅 AGENDAMENTO REAL: a Sofia consulta a Google Agenda da Antix e propõe/cria horários
         // REAIS — igual ao WhatsApp (nada de link falso). Só dispara quando há intenção de marcar.
@@ -5820,17 +5811,8 @@ module.exports = {
         const mEst = String(respostaRaw || '').match(/\[ESTAGIO:\s*(\d)\s*\]/i);
         if (mEst) { const s = parseInt(mEst[1], 10); if (s >= 0 && s <= 5 && s !== (lead.current_stage || 0)) await supabase.from('leads').update({ current_stage: s }).eq('id', lead.id).then(() => {}, () => {}); }
 
-        // 🚫 ANTI-PAREDÃO (web): a IA às vezes despeja 3-4 perguntas grudadas. No WhatsApp o
-        // filtrarEEnviarResposta corta; aqui o texto vai inteiro. Trava: 1 pergunta por vez
-        // (corta no 1º "?") e, sem pergunta, no máx 2 frases pra não virar muro de texto.
-        const enxugarWeb = (t) => {
-            let s = String(t || '').trim();
-            if (!s) return s;
-            const q = s.indexOf('?');
-            if (q !== -1) return s.slice(0, q + 1).trim();
-            const frases = s.split(/(?<=[.!…])\s+/).filter(Boolean);
-            return (frases.length > 2 ? frases.slice(0, 2).join(' ') : s).trim();
-        };
+        // 🚫 ANTI-PAREDÃO (web): 1 pergunta por vez + no máx 2 frases. Trava pura em
+        // lib/webGuardrails.js (enxugarWeb) — testada isoladamente.
         const reply = enxugarWeb(stripWeb(respostaRaw)) || 'Opa, tive uma instabilidade aqui — consegue repetir?';
         await db.saveMessage(waId, 'assistant', reply, null, USER_ID, 'web').catch(() => {});
         if (ioSocket && leadNovo) ioSocket.to(`user:${USER_ID}`).emit('new_lead', lead);

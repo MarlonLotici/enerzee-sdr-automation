@@ -56,6 +56,52 @@ test('enviarTexto: sem access token → erro claro (não tenta a rede)', async (
     );
 });
 
+test('enviarTemplate: monta type=template com nome e idioma (abertura fora da janela 24h)', async () => {
+    const calls = mockFetch();
+    await transport.enviarTemplate(CFG, '5511999998888@s.whatsapp.net', 'confirmacao_reuniao', 'pt_BR');
+    const body = JSON.parse(calls[0].opts.body);
+    assert.equal(body.type, 'template');
+    assert.equal(body.to, '5511999998888');
+    assert.equal(body.template.name, 'confirmacao_reuniao');
+    assert.equal(body.template.language.code, 'pt_BR');
+    assert.ok(!('components' in body.template), 'sem componentes quando não passados');
+});
+
+test('enviarTemplate: inclui components quando fornecidos', async () => {
+    const calls = mockFetch();
+    const comps = [{ type: 'body', parameters: [{ type: 'text', text: 'Carlos' }] }];
+    await transport.enviarTemplate(CFG, '5511999998888', 'lembrete', 'pt_BR', comps);
+    const body = JSON.parse(calls[0].opts.body);
+    assert.deepEqual(body.template.components, comps);
+});
+
+test('normalizarInbound: resposta de BOTÃO usa o título do botão como texto', () => {
+    const body = { entry: [{ changes: [{ value: {
+        contacts: [{ profile: { name: 'Cliente' } }],
+        messages: [{ from: '5511988887777', id: 'wamid.B', type: 'button', button: { text: 'Confirmar' } }],
+    } }] }] };
+    const norm = transport.normalizarInbound(body);
+    assert.equal(norm.texto, 'Confirmar');
+    assert.equal(norm.remoteJid, '5511988887777@s.whatsapp.net');
+});
+
+test('normalizarInbound: resposta INTERATIVA (botão da lista) vira texto', () => {
+    const body = { entry: [{ changes: [{ value: {
+        messages: [{ from: '5511988887777', id: 'wamid.I', type: 'interactive',
+            interactive: { button_reply: { id: 'b1', title: 'Manhã' } } }],
+    } }] }] };
+    assert.equal(transport.normalizarInbound(body).texto, 'Manhã');
+});
+
+test('normalizarInbound: tipo não-texto (ex.: image) passa o tipo adiante', () => {
+    const body = { entry: [{ changes: [{ value: {
+        messages: [{ from: '5511988887777', id: 'wamid.IMG', type: 'image', image: { id: 'media123' } }],
+    } }] }] };
+    const norm = transport.normalizarInbound(body);
+    assert.equal(norm.tipo, 'image');    // só 'text' vira 'conversation'; resto passa igual
+    assert.equal(norm.texto, '');
+});
+
 test('normalizarInbound: webhook de mensagem de texto vira objeto padrão do motor', () => {
     const body = {
         entry: [{
