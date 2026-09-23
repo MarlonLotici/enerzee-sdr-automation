@@ -18,8 +18,11 @@ const { processarLimpeza } = require('./2_clean');
 const { enriquecerLeadIndividual } = require('./3_enrich');
 const db = require('./database');
 const emailService = require('./emailService'); // usado no preview de email (gerarCopyOutbound)
-const { alertaCalendly } = require('./notifier');
+const { alertaCalendly, enviarAlerta } = require('./notifier');
 const budgetGuard = require('./budgetGuard'); // teto de custo / uso do dia por tenant (Redis)
+// 👁️ Observabilidade: buffer de erros recentes (pra enxergar a prod sem depender do cliente avisar).
+const obs = require('./lib/observabilidade');
+const OWNER_USER_ID = process.env.OWNER_USER_ID || 'f437f090-5fa0-4a94-b4aa-8c22998c9cf6'; // Antix (vê erros no /api/health)
 
 // 📞 MOTOR DE LIGAÇÕES DE VOZ (Twilio Media Streams + Deepgram + ElevenLabs)
 // CARREGAMENTO DEFENSIVO: a pasta voice/ e o SQL de voz (add_voice_calling.sql) ainda não
@@ -840,7 +843,11 @@ app.get('/api/health', autenticarMiddleware, async (req, res) => {
                 ultimoInboundHaMin: r.ultimoInboundHaMin ?? null,
             };
         });
-        res.json({ ok: true, geradoEm: Date.now(), chips });
+        // 👁️ Saúde do servidor: contagem de erros sempre; a LISTA só pro dono da plataforma
+        // (erros são globais e podem conter dados de qualquer tenant — não vazar cross-tenant).
+        const ehDono = req.user.id === OWNER_USER_ID;
+        const saudeServidor = { erros: obs.contarUltimaHora(), ...(ehDono ? { recentes: obs.errosRecentes(15) } : {}) };
+        res.json({ ok: true, geradoEm: Date.now(), chips, saudeServidor });
     } catch (err) {
         res.status(500).json({ error: err.message });
     }
@@ -1174,6 +1181,32 @@ app.post('/api/send-message', autenticarMiddleware, async (req, res) => {
         return res.status(500).json({ success: false, error: "Falha interna no servidor." });
     }
 });
+
+// 👁️ ERROR-HANDLER GLOBAL do Express (4 args) — última linha de defesa: qualquer erro não
+// tratado numa rota cai aqui, é REGISTRADO (visível no /api/health) e responde JSON seguro
+// (nunca deixa a resposta pendurada). Deve vir DEPOIS de todas as rotas.
+app.use((err, req, res, next) => {
+    obs.registrarErro(`rota ${req.method} ${req.path}`, err);
+    console.error(`❌ [ERRO-ROTA] ${req.method} ${req.path}:`, err.message);
+    if (res.headersSent) return next(err);
+    res.status(500).json({ error: 'erro interno' });
+});
+
+// 👁️ Crashes do processo: sem estes handlers, uma exceção/rejeição solta derruba o servidor
+// INTEIRO (todos os tenants) em silêncio. Aqui registramos + alertamos (Discord, com debounce
+// de 5min pra não floodar) e mantemos o processo vivo — visibilidade sem downtime surpresa.
+let _ultimoAlertaCrash = 0;
+function _alertarCrash(origem, err) {
+    obs.registrarErro(origem, err);
+    console.error(`💥 [${origem}]`, err?.stack || err);
+    const agora = Date.now();
+    if (agora - _ultimoAlertaCrash > 300000) { // no máx 1 alerta a cada 5min
+        _ultimoAlertaCrash = agora;
+        enviarAlerta(`💥 *${origem}*`, String(err?.message || err).slice(0, 400), 16711680).catch(() => {});
+    }
+}
+process.on('unhandledRejection', (reason) => _alertarCrash('unhandledRejection', reason));
+process.on('uncaughtException', (err) => _alertarCrash('uncaughtException', err));
 
 // LIGA O MOTOR (A última linha do sistema)
 server.listen(PORT, () => {
