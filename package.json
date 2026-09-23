@@ -8,6 +8,7 @@
     "build": "cd frontend && npm install && npm run build",
     "dev": "node server.js",
     "test": "node --test",
+    "eval": "node --test test/aiQualidade.eval.test.js test/webGuardrails.test.js test/agendaDecisao.test.js",
     "backup": "node scripts/backup_supabase.js",
     "sdr": "node 4_SDR_IA_ULTIMATE_V4.js"
   },
