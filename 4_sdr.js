@@ -5033,12 +5033,47 @@ let loopIniciado = false;
 // para chips conectados estritamente da mesma conta (user_id).
 // ============================================================================
 let ultimaRedistribuicao = 0;
+// Gera uma retomada 100% natural (via LLM, mesmo cérebro/prompt do tenant) pra um lead que ficou
+// sem resposta — NUNCA menciona instabilidade/sistema/erro técnico. O cliente não pode saber que
+// a conexão oscilou; do lado dele, é só a IA continuando a conversa como um vendedor faria.
+async function gerarCutucaoNatural(lead, instanceId) {
+    const historico = await db.getHistory(lead.whatsapp_id, instanceId);
+    if (!historico?.length) return null;
+    if (historico[historico.length - 1].role !== 'assistant') return null; // só faz sentido se fomos NÓS que falamos por último
+
+    const instanceData = await getRegrasEmCache(instanceId);
+    const userId = instanceData?.user_id;
+    if (!userId) return null;
+    definirTenantLLM(userId);
+
+    const { data: brain } = await supabase.from('tenant_prompts').select('system_prompt').eq('user_id', userId).maybeSingle();
+    const overrideChip = instanceData?.system_prompt?.trim();
+    const promptBase = (overrideChip && overrideChip.length >= 100) ? overrideChip : brain?.system_prompt;
+    if (!promptBase || promptBase.trim().length < 100) return null;
+
+    const promptResolvido = await resolverPromptCompleto(promptBase, lead, instanceData, historico);
+    if (!promptResolvido) return null;
+
+    const promptRetomada = `${promptResolvido}
+
+[RETOMADA SILENCIOSA — INSTRUÇÃO OBRIGATÓRIA]
+O lead ainda não respondeu sua última mensagem. PROIBIDO mencionar ou insinuar qualquer instabilidade, sistema, erro técnico, conexão ou "não recebi sua resposta" — o cliente NUNCA pode saber disso. Apenas retome a conversa com naturalidade, como um vendedor faria ao continuar: reforce brevemente o ponto anterior de outro jeito, ou avance. Curto (1-2 frases).`;
+
+    try {
+        const resp = await chamarLLM({ system: promptRetomada, messages: podarHistorico(historico), model: MODELOS.cerebro, maxTokens: 300 });
+        return resp ? resp.replace(/[\*_~`]/g, '') : null;
+    } catch (e) {
+        console.error('❌ [CUTUCÃO-IA] Falha ao gerar retomada:', e.message);
+        return null;
+    }
+}
+
 // 🩹 CUTUCÃO PÓS-RECONEXÃO: syncFullHistory=false é proposital (anti-detecção — bots
 // sincronizam histórico completo, humanos não), mas tem um custo: uma mensagem que o lead manda
 // bem na janela de uma queda curta de conexão (poucos segundos) NÃO é resgatada pelo Baileys —
 // some pro sistema sem deixar rastro (nem log). Ao reconectar, verifica quem ficou "no vácuo"
-// (IA mandou a última mensagem perto da queda, sem resposta ainda) e manda um pedido humano de
-// repetir — evita a conversa morrer calada por uma instabilidade de rede.
+// (IA mandou a última mensagem perto da queda, sem resposta ainda) e retoma a conversa de forma
+// NATURAL (via IA, mesma esteira de produção — balões/digitação/tags) — nunca revela o motivo.
 async function cutucarLeadsAfetadosPelaQueda(instanceId, sock) {
     const ultimaQueda = ultimaQuedaPorChip.get(instanceId);
     if (!ultimaQueda || (Date.now() - ultimaQueda) > JANELA_MAX_CATCHUP_MS) return;
@@ -5061,10 +5096,12 @@ async function cutucarLeadsAfetadosPelaQueda(instanceId, sock) {
             if (respostaDepois?.length) continue;
 
             leadsCutucadosPorQueda.add(chave);
-            const msg = 'Opa, tive uma instabilidade rapidinho aqui — você tinha me respondido algo? Pode mandar de novo que eu já te retorno 🙏';
-            await baileysTransport.enviar(sock, lead.whatsapp_id, { text: msg }).catch(() => {});
-            await db.saveMessage(lead.whatsapp_id, 'assistant', msg, instanceId).catch(() => {});
-            console.log(`🩹 [CUTUCÃO-RECONEXÃO] ${lead.name}: possível msg perdida na queda — pedido pra repetir enviado.`);
+            const historico = await db.getHistory(lead.whatsapp_id, instanceId).catch(() => []);
+            const resposta = await gerarCutucaoNatural(lead, instanceId);
+            if (!resposta) { console.log(`🩹 [CUTUCÃO-RECONEXÃO] ${lead.name}: sem retomada gerada — pulando (silencioso).`); continue; }
+            const instanceData = await getRegrasEmCache(instanceId);
+            await filtrarEEnviarResposta(sock, lead.whatsapp_id, resposta, historico, lead, instanceId, instanceData?.tts_voice || null);
+            console.log(`🩹 [CUTUCÃO-RECONEXÃO] ${lead.name}: retomada natural enviada (possível msg perdida na queda).`);
         }
     } catch (e) {
         console.error('❌ [CUTUCÃO-RECONEXÃO] erro:', e.message);
