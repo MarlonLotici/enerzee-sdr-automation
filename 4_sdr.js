@@ -1180,6 +1180,17 @@ Ele te procurou por conta própria — você nunca abriu essa conversa antes. N�
 Em vez disso: apresente-se em 1 frase curta (quem você é e o que a ${companyName} faz), demonstre curiosidade genuína pelo motivo do contato dele, e responda com clareza qualquer pergunta ou dúvida direta que ele tenha feito. Seja calorosa e humana — acolhimento antes de roteiro.
 Só avance para a qualificação (Passo 1 em diante) na mensagem seguinte, depois que ele engajar ou responder.`;
 
+    // 📅 ESTADO REAL DE AGENDAMENTO (dado do lead, não regra de negócio) — evita a IA repetir
+    // "vou ver os horários" por conta própria quando já ofereceu e o lead só voltou com um "oi"
+    // ou algo não relacionado. Sem isso, o modelo tende a "continuar de onde parou" e repetir a
+    // promessa sem o sistema ter disparado nada de novo (promessa vazia observada em teste real).
+    const slotsJaOfertados = Array.isArray(contextoLead.slots_propostos) ? contextoLead.slots_propostos : [];
+    const secaoEstadoAgenda = slotsJaOfertados.length > 0 ? `
+
+[ESTADO ATUAL DO AGENDAMENTO — DADO REAL DESTA CONVERSA]
+Você JÁ ofereceu estes horários e o lead ainda não escolheu: ${slotsJaOfertados.map(s => s.label).join(' ou ')}.
+PROIBIDO dizer de novo "vou ver os horários" / "deixa eu ver os horários" — isso já foi feito. Se a mensagem dele não é uma escolha clara de horário, apenas responda normalmente (tire dúvida, retome o assunto) e, se fizer sentido, pergunte qual dos horários já oferecidos funciona melhor pra ele.` : '';
+
     // 🚫 REGRA INEGOCIÁVEL — vale pra TODOS os tenants (Antix, Foz, etc.), inclusive quando o
     // tenant desliga as seções modulares. Mata a alucinação (a IA inventando preço/política/
     // certificação/desconto/link) que derruba a credibilidade. Sempre incluída no final.
@@ -1189,7 +1200,7 @@ Só avance para a qualificação (Passo 1 em diante) na mensagem seguinte, depoi
 - Se uma informação (preço, desconto, política de reembolso/garantia, certificação, prazo, integração, condição comercial) NÃO estiver EXPLÍCITA nas suas instruções acima, você NÃO sabe. Diga com naturalidade que o time confirma isso na conversa/reunião (ex.: "essa parte quem fecha certinho é o time na call"). É melhor dizer "confirmo pra você" do que inventar.
 - LINK de reunião: NUNCA invente um. Use APENAS um link que esteja escrito nas suas instruções. Se não houver, só conduza o lead pro agendamento — o sistema cria o horário e o link REAIS. Nunca afirme que uma reunião está confirmada por conta própria.
 - NUNCA ofereça prospecção ativa / disparo em massa. Nosso foco é atender e qualificar quem chega.
-- Responda SEMPRE no MESMO idioma em que o lead escreveu.`;
+- Responda SEMPRE no MESMO idioma em que o lead escreveu.${secaoEstadoAgenda}`;
 
     // use_modular_sections=false no banco → apenas o system_prompt do tenant, sem injeção hardcoded
     // Sem seções hardcoded: só o prompt do próprio tenant (com variáveis resolvidas) + o guard
