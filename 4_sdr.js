@@ -1243,10 +1243,21 @@ Ele te procurou por conta própria — você nunca abriu essa conversa antes. N�
 Em vez disso: apresente-se em 1 frase curta (quem você é e o que a ${companyName} faz), demonstre curiosidade genuína pelo motivo do contato dele, e responda com clareza qualquer pergunta ou dúvida direta que ele tenha feito. Seja calorosa e humana — acolhimento antes de roteiro.
 Só avance para a qualificação (Passo 1 em diante) na mensagem seguinte, depois que ele engajar ou responder.`;
 
+    // 🚫 REGRA INEGOCIÁVEL — vale pra TODOS os tenants (Antix, Foz, etc.), inclusive quando o
+    // tenant desliga as seções modulares. Mata a alucinação (a IA inventando preço/política/
+    // certificação/desconto/link) que derruba a credibilidade. Sempre incluída no final.
+    const REGRA_ANTI_INVENCAO = `
+
+[REGRA INEGOCIÁVEL — NUNCA INVENTE]
+- Se uma informação (preço, desconto, política de reembolso/garantia, certificação, prazo, integração, condição comercial) NÃO estiver EXPLÍCITA nas suas instruções acima, você NÃO sabe. Diga com naturalidade que o time confirma isso na conversa/reunião (ex.: "essa parte quem fecha certinho é o time na call"). É melhor dizer "confirmo pra você" do que inventar.
+- LINK de reunião: NUNCA invente um. Use APENAS um link que esteja escrito nas suas instruções. Se não houver, só conduza o lead pro agendamento — o sistema cria o horário e o link REAIS. Nunca afirme que uma reunião está confirmada por conta própria.
+- NUNCA ofereça prospecção ativa / disparo em massa. Nosso foco é atender e qualificar quem chega.
+- Responda SEMPRE no MESMO idioma em que o lead escreveu.`;
+
     // use_modular_sections=false no banco → apenas o system_prompt do tenant, sem injeção hardcoded
-    if (instanceData?.use_modular_sections === false) return constituicaoResolvida + secaoAcolhidaInbound;
+    if (instanceData?.use_modular_sections === false) return constituicaoResolvida + secaoAcolhidaInbound + REGRA_ANTI_INVENCAO;
     // Hardcoded vem DEPOIS do system_prompt — tenant tem precedência, seções modulares são complemento
-    return `${constituicaoResolvida}${secaoAcolhidaInbound}\n\n${secaoModular}`;
+    return `${constituicaoResolvida}${secaoAcolhidaInbound}\n\n${secaoModular}${REGRA_ANTI_INVENCAO}`;
 }
 // ============================================================================
 // 🧠 NÚCLEO IA: "THE ARCHITECT" - STATE OF THE ART SDR V3.0 (MULTI-TENANT REAL)
