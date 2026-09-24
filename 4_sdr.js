@@ -2863,9 +2863,13 @@ if (fromMe) {
     if (!mensagemParaIA) return;
 
 
-    // 👇 INÍCIO DA TRAVA DE HORÁRIO DE RESPOSTA 👇
-    if (!dentroDoExpediente()) {
-        console.log(`🌙 [HORÁRIO] Lead ${lead.name} mandou mensagem às ${new Date().getHours()}h. A IA está dormindo e responderá amanhã às 06h.`);
+    // 👇 TRAVA DE HORÁRIO DE RESPOSTA (inbound) 👇
+    // PADRÃO = 24/7: responder na hora é o valor do produto (o Relatório mostra "atendimentos fora
+    // do horário" como diferencial) e responder a quem CHEGOU não gera risco de ban. A IA só "dorme"
+    // se o tenant OPTAR por horário comercial: instances.atende_24h === false. Coluna ausente = 24/7.
+    const _regrasHr = await getRegrasEmCache(instanceId).catch(() => null);
+    if (_regrasHr?.atende_24h === false && !dentroDoExpediente()) {
+        console.log(`🌙 [HORÁRIO] Lead ${lead.name} às ${new Date().getHours()}h — tenant em modo horário comercial. Responderá às 06h.`);
         
         // Salva a mensagem no banco para não perder o contexto
         if (messageType !== 'audioMessage') {
