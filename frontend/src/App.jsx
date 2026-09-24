@@ -408,7 +408,10 @@ if (session?.user?.id) checkBriefing()
         socket.on('qr_code', (data) => {
             if (chipConnectTimerRef.current) { clearTimeout(chipConnectTimerRef.current); chipConnectTimerRef.current = null; }
             setIsConnectingChip(false);
-            setQrCodeData(data);
+            // 🛡️ Trava anti-QR-errado: se o modal já mostra o QR de um chip, não deixa o QR de
+            // OUTRO chip (ex.: um chip antigo reconectando) sobrescrever. Mesmo instanceId (refresh
+            // do QR do próprio chip) passa normalmente. Fecha o modal → prev volta a null e destrava.
+            setQrCodeData(prev => (prev?.instanceId && data?.instanceId && prev.instanceId !== data.instanceId) ? prev : data);
         });
 
         socket.on('whatsapp_status', (statusData) => {

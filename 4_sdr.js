@@ -1530,7 +1530,13 @@ async function startInstance(instanceId, instanceName, preloadedUserId = null) {
     sock.ev.on('connection.update', async (update) => {
         const { connection, lastDisconnect, qr } = update;
         if (qr) {
-            if (!ioSocket)       console.warn(`⚠️ [QR] ioSocket null — QR de ${instanceName} não enviado ao front`);
+            // 🛡️ QR ZUMBI: um socket que está sendo excluído/encerrado ainda pode disparar um
+            // último 'qr'. Se emitirmos, ele aparece (com atraso) no modal de um chip NOVO —
+            // exatamente o bug do "QR do chip antigo". Não emite QR de chip em remoção.
+            if (instanciasDeletadas.has(instanceId) || instanciasEncerrandoManualmente.has(instanceId)) {
+                console.warn(`🧟 [QR-ZUMBI] Ignorado QR de ${instanceName} (${instanceId.slice(0,8)}) — chip em remoção/encerramento.`);
+            }
+            else if (!ioSocket)       console.warn(`⚠️ [QR] ioSocket null — QR de ${instanceName} não enviado ao front`);
             else if (!instanceUserId) console.warn(`⚠️ [QR] instanceUserId null — instância ${instanceId} sem user_id no banco`);
             else ioSocket.to(`user:${instanceUserId}`).emit('qr_code', { qr, instanceId, name: instanceName });
         }
