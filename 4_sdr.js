@@ -4469,7 +4469,7 @@ async function orquestrarAgendamento(lead, ultimaMsg, instanceData, userId, inte
             ev = await gcal.criarEvento(userId, calId, {
                 inicioISO: slot.inicioISO, fimISO: slot.fimISO,
                 titulo:    `Reunião — ${lead.name || 'Lead'}`,
-                descricao: `Agendado pela SDR IA (Antix). Lead: ${lead.name || ''} · ${lead.phone || lead.whatsapp_id}`,
+                descricao: `Agendado pela SDR IA (Antix). Lead: ${lead.name || ''} · ${lead.phone || lead.whatsapp_id}${lead.email ? ' · ' + lead.email : ''}`,
             });
         }
         if (!ev?.eventId) throw new Error('Google não retornou eventId');
@@ -4520,14 +4520,45 @@ async function orquestrarAgendamento(lead, ultimaMsg, instanceData, userId, inte
 
     // ── FASE CONFIRMAÇÃO: já há slots propostos, o lead está respondendo ──
     if (temSlots) {
+        // 🔒 TRAVA DE AGENDAMENTO: só cria reunião REAL com horário explícito + NOME + E-MAIL.
+        // Mata o "confirmou reunião sem dado nenhum". Captura nome/e-mail que o lead mandar agora.
+        const emailValido = (e) => /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(String(e || '').trim());
+        const nomeValido  = (n) => { const s = String(n || '').trim().toLowerCase(); return s.length > 1 && !['lead', 'vc', 'você', 'voce', 'visitante do site', 'contato orgânico', 'contato organico', 'cliente'].includes(s); };
+        // Canal: no site (@web, sem telefone) o e-mail é o ÚNICO contato → obrigatório. No WhatsApp
+        // o telefone já é o contato e o Meet vai no chat → e-mail dispensável (não regride conversão).
+        const ehWeb = String(lead.whatsapp_id || '').includes('@web');
+        const precisaEmail = ehWeb;
+        const emailNaMsg = (String(ultimaMsg || '').match(/[^\s@]+@[^\s@]+\.[^\s@]+/) || [])[0];
+        if (emailNaMsg && !emailValido(lead.email)) { await supabase.from('leads').update({ email: emailNaMsg }).eq('id', lead.id).then(() => {}, () => {}); lead.email = emailNaMsg; }
+        let nomePreenchidoAgora = false;
+        if (!nomeValido(lead.name)) { const nm = extrairNomeDeclarado(ultimaMsg) || extrairNomeHumano(ultimaMsg); if (nm && nomeValido(nm)) { await supabase.from('leads').update({ name: nm, dono: nm }).eq('id', lead.id).then(() => {}, () => {}); lead.name = nm; nomePreenchidoAgora = true; } }
+
+        const contatoOk = () => nomeValido(lead.name) && (!precisaEmail || emailValido(lead.email));
+        // Pede o que faltar (nome/e-mail) ANTES de efetivar — e guarda o horário escolhido (reduz a 1).
+        const travarSePreciso = (slot) => {
+            if (contatoOk()) return null;
+            const faltaNome = !nomeValido(lead.name);
+            const faltaEmail = precisaEmail && !emailValido(lead.email);
+            const falta = (faltaNome && faltaEmail) ? 'seu nome e seu melhor e-mail' : faltaNome ? 'como posso te chamar' : 'seu melhor e-mail';
+            supabase.from('leads').update({ slots_propostos: [slot] }).eq('id', lead.id).then(() => {}, () => {});
+            return ok(`Fechado, ${slot.label}! ✅ Só me confirma ${falta} pra eu te enviar o convite da reunião 🙌`);
+        };
+
         const escolhido = detectarConfirmacaoSlot(ultimaMsg, lead.slots_propostos);
         if (escolhido) {
+            const bloqueio = travarSePreciso(escolhido);
+            if (bloqueio) return bloqueio;
             try { return await efetivar(escolhido); }
             catch (e) {
                 console.error(`❌ [AGENDAMENTO] Falha ao efetivar pra ${lead.name}:`, e.message);
                 enviarAlerta(`⚠️ Falha ao criar/remarcar evento — ${lead.name}`, e.message, 15158332).catch(() => {});
                 return ok(`Opa, tive um probleminha aqui pra travar o horário. Consegue confirmar de novo: ${labels(lead.slots_propostos)}?`);
             }
+        }
+        // RETOMADA: o lead acabou de mandar o nome/e-mail que faltava e só resta 1 horário guardado → efetiva.
+        if (lead.slots_propostos.length === 1 && (emailNaMsg || nomePreenchidoAgora) && contatoOk()) {
+            try { return await efetivar(lead.slots_propostos[0]); }
+            catch (e) { console.error(`❌ [AGENDAMENTO] efetivar retomada falhou: ${e.message}`); }
         }
         // Não bateu com os 2 ofertados — o lead pediu OUTRO horário específico? (ex.: "as 14h")
         const pedido = extrairHorarioPedido(ultimaMsg);
@@ -4540,6 +4571,8 @@ async function orquestrarAgendamento(lead, ultimaMsg, instanceData, userId, inte
             let livre = false;
             try { livre = await gcal.verificarLivre(userId, lead.slot_calendar_id || calId, alvo.inicioISO, alvo.fimISO); } catch { livre = false; }
             if (livre) {
+                const bloqueio = travarSePreciso(alvo);
+                if (bloqueio) return bloqueio;
                 try { return await efetivar(alvo); } catch (e) { console.error(`❌ [AGENDAMENTO] efetivar horário pedido falhou: ${e.message}`); }
             }
             // Ocupado (ou falhou) → reoferece 2 horários livres reais, avisando.
