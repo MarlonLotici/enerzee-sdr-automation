@@ -4543,6 +4543,13 @@ async function orquestrarAgendamento(lead, ultimaMsg, instanceData, userId, inte
             // Ocupado (ou falhou) → reoferece 2 horários livres reais, avisando.
             return await ofertar(true);
         }
+        // Pede OUTRO horário sem especificar qual (ex.: "tem outro horário?", "não tem mais cedo?"):
+        // ainda está tentando agendar — reoferece 2 horários REAIS agora, na hora. Sem isso, o
+        // closer promete "vou ver os horários" e ninguém entrega nada (promessa vazia observada
+        // em teste real: lead pediu "tem outro horário?" e a conversa travou).
+        if (/\b(outro|outra|mais\s+cedo|mais\s+tarde|nenhum\s+desses|diferente)\s*(hor[aá]rio|op[cç][aã]o)?/i.test(ultimaMsg || '')) {
+            return await ofertar(true);
+        }
         // Mensagem que NÃO é escolha de slot nem horário (saudação, pergunta, mudou de assunto):
         // NUNCA ficar repetindo a confirmação em loop — isso trava a conversa e soa robótico.
         // Devolve o controle pro closer (LLM), que responde com molejo e reconduz ao agendamento

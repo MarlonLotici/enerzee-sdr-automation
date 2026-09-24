@@ -148,6 +148,7 @@ A sua ÚNICA função é ler a mensagem do cliente e devolver ESTRITAMENTE UMA d
 - O lead quer ser contactado num dia ou hora específica futura, sem aceitar a conversa agora.
 - Exemplos: "me chama segunda", "me liga amanhã", "só na terça às 14h", "depois do feriado", "semana que vem tô disponível", "não posso agora, me manda mensagem amanhã cedo".
 - ⚠️ DIFERENÇA DE COMPRA: COMPRA = lead aceita agendar AGORA (confirma horário, pede o link). AGENDA_RETORNO = lead empurra para um momento futuro sem se comprometer agora.
+- ⚠️ NÃO é AGENDA_RETORNO: o lead REJEITAR os horários oferecidos e pedir OUTRA opção AGORA, na mesma conversa (ex.: "tem outro horário?", "não tem mais cedo?", "esses não dão, tem outro?"). Isso é COMPRA — ele ainda está tentando agendar, só não gostou das opções. AGENDA_RETORNO é especificamente sobre ADIAR a CONVERSA pra outro dia/momento, não sobre trocar o horário da reunião.
 
 MENSAGEM DO CLIENTE: "${ultimaMensagemLead}"
 
