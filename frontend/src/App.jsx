@@ -391,7 +391,19 @@ if (session?.user?.id) checkBriefing()
             }
         });
 
-        // PEDIR LISTA AO CONECTAR
+        // 🔑 Conexão recusada (token expirado/inválido) → renova a sessão e reconecta sozinho.
+        // Sem isso, no navegador do cliente com token velho o socket era recusado EM SILÊNCIO:
+        // sem lista de chips, criar chip "não fazia nada", sem QR. Agora se recupera automaticamente.
+        socket.off('connect_error');
+        socket.on('connect_error', async (err) => {
+            console.warn('[SOCKET] connect_error:', err?.message);
+            let tk = null;
+            try { tk = (await supabase.auth.refreshSession())?.data?.session?.access_token; } catch {}
+            if (!tk) { try { tk = (await supabase.auth.getSession())?.data?.session?.access_token; } catch {} }
+            if (tk) { socket.auth = { token: tk }; setTimeout(() => { if (!socket.connected) socket.connect(); }, 2000); }
+        });
+
+        // PEDIR LISTA AO CONECTAR
     socket.on('connect', () => {
             socket.emit('get_instances'); 
             socket.emit('check_scraper_status');
