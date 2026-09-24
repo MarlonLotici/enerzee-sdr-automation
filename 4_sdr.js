@@ -1078,9 +1078,6 @@ const concessionariaLocal = (MAPA_CONCESSIONARIAS[contextoLead.estado] || 'conce
     const nicheContext = gerarContextoNicho(contextoLead.niche); // mantido para compat com ${nicheContext} no promptBase
     const estagioAtual = String(contextoLead.current_stage || 0);
 
-    // Inteligência de nicho dinâmica — Redis → Supabase → LLM (aprende on-the-fly)
-    const dadosNicho = await getNicheData(contextoLead.niche).catch(() => null);
-
     // --- 4. Reversão de objeção ---
     const reversaoJaTentada = contextoLead.objection_reversed
         ? '\n\nAVISO CRÍTICO: Este lead já recebeu UMA tentativa de reversão de objeção. Se recusar novamente, encerre. PROIBIDO tentar reverter de novo.'
@@ -1132,7 +1129,12 @@ const concessionariaLocal = (MAPA_CONCESSIONARIAS[contextoLead.estado] || 'conce
     }
 
     // ─────────────────────────────────────────────────────────────────────
-    // --- 9. ARQUITETURA MODULAR — 4 seções estruturadas + Constituição ---
+    // --- 9. Nenhuma seção hardcoded/genérica é injetada. As informações reais
+    // (identidade, diretrizes de fechamento, regional, nicho etc.) devem estar
+    // DIRETO no prompt de cada tenant (system/qualifier/closer/objection) — nunca
+    // hardcoded no código, pra não confundir a IA com conteúdo de outro negócio
+    // (ex.: solar/Enerzee vazando pro Foz). O tenant usa os placeholders ${...}
+    // abaixo no PRÓPRIO texto quando quiser dados computados/reais.
     // ─────────────────────────────────────────────────────────────────────
 
     const calendlyResolvido =
@@ -1140,72 +1142,6 @@ const concessionariaLocal = (MAPA_CONCESSIONARIAS[contextoLead.estado] || 'conce
         (instanceData?.owner_phone
             ? `https://wa.me/55${(instanceData.owner_phone || '').replace(/\D/g, '')}`
             : 'https://antix.com.br/agendar');
-
-    // Só é "solar" quando o tenant declara explicitamente product_type='solar'.
-    // product_type vazio/qualquer-outro → genérico (sem injeção de concessionária/desconto/economia).
-    const isSolar = instanceData?.product_type === 'solar';
-    const isB2C   = instanceData?.b2c_mode === true; // leads são pessoas físicas/alunos, não empresas
-
-    const secaoIdentidade = isSolar
-        ? `[IDENTIDADE]
-Você é ${agentName}, especialista em eficiência energética da ${companyName}.
-Seu objetivo é qualificar o interesse do lead e levá-lo a agendar uma consultoria gratuita.
-Você se comunica como um ser humano no WhatsApp — direto, sem formalidade excessiva, sem robótica.`
-        : `[IDENTIDADE]
-Você é ${agentName}, representante da ${companyName}.
-Seu objetivo é qualificar o interesse do lead e levá-lo a agendar uma conversa com o time.
-Você se comunica como um ser humano no WhatsApp — direto, sem formalidade excessiva, sem robótica.`;
-
-    const diretrizGatekeeper = isB2C
-        ? `- B2C OBRIGATÓRIO: Quem responde É o próprio aluno/decisor. NUNCA pergunte por "responsável" ou "quem cuida". Se perguntarem de onde somos: explique que é o acompanhamento pós-venda do produto adquirido.`
-        : `- EMPATIA COM GATEKEEPER (REGRA DE OURO): Quando alguém disser que não é o decisor, NUNCA pule direto para "vai passar o contato?". Primeiro: agradeça a atenção da pessoa com genuinidade ("que legal que me atendeu", "obrigado pelo tempo"). Só então, de forma leve e natural, pergunte se consegue uma ponte com o responsável. A venda começa com a pessoa que te atendeu — ela pode abrir ou fechar a porta.`;
-
-    const secaoDiretrizes = `[DIRETRIZES DE FECHAMENTO]
-- Fale curto e natural: 2 a 4 balões curtos por resposta, ~10-25 palavras cada, uma ideia por balão. Você pode marcar cortes com [QUEBRA]; se não marcar, o sistema quebra sozinho em frases (nunca corta frase no meio).
-- Simule digitação humana: uma ideia por vez, sem listas numeradas ou marcadores.
-- Faça APENAS UMA pergunta por mensagem. Nunca duas.
-- Foco absoluto em converter para agendamento: ${calendlyResolvido}
-- Nunca revele que é uma IA antes do REVEAL programado — EXCEÇÃO: se o lead perguntar DIRETAMENTE se você é robô/IA/pessoa, seja transparente na hora (nunca minta nem desvie).
-- Texto puro: sem asteriscos, sem markdown.
-- Termine com uma pergunta ("?") que faça a conversa avançar, EXCETO em REPASSE, REVEAL, no PRIMEIRO CONTATO e quando enviar o link de agendamento (o link é um convite, não uma pergunta — nunca coloque "?" depois dele).
-- Tags obrigatórias no final de toda resposta: [ESTAGIO:N] e [CLIMA:X].
-${diretrizGatekeeper}`;
-
-    const secaoRegional = isSolar
-        ? `[INTELIGÊNCIA REGIONAL]
-- Concessionária local do lead: ${concessionariaLocal}
-- Redução esperada na fatura: ${percentualTexto}%
-- Economia anual estimada: ${economiaAnualFormatada}/ano (use APENAS este valor — nunca mencione o valor mensal)
-- Contexto regional: ${contextoBairro}
-- ${perfilComportamental}`
-        : isB2C
-            ? `[CONTEXTO DO LEAD]
-- Produto adquirido: ${nomeEmpresa}
-- CONTEXTO B2C: O lead é uma pessoa física que já comprou o produto. NÃO há empresa envolvida. Ele é o aluno e o decisor. Modo: acompanhamento pós-venda, não prospecção B2B.`
-            : `[CONTEXTO DO LEAD]
-- Localização: ${bairroLead}
-${empresaConfiavel
-    ? `- Empresa: ${nomeEmpresa}`
-    : `- Empresa/segmento do lead: DESCONHECIDO. Você ainda não sabe onde ele trabalha nem o que ele faz. NÃO invente, NÃO presuma e NUNCA use o nome do WhatsApp dele como se fosse o nome de uma empresa. Descubra com naturalidade o que ele faz antes de qualquer coisa.`}
-- ${perfilComportamental}`;
-
-    const secaoNicho = isSolar
-        ? (dadosNicho
-            ? `[ESTRATEGIA DO NICHO]
-- Nicho identificado: ${contextoLead.niche || 'empresa comercial'}
-- Equipamentos de alto consumo: ${dadosNicho.equipamentos}
-- Dor principal do negócio: ${dadosNicho.dor_principal}
-- Ângulo de abordagem comercial: ${dadosNicho.angulo_venda}`
-            : `[ESTRATEGIA DO NICHO]
-- Nicho identificado: ${contextoLead.niche || 'empresa comercial'}
-- Equipamentos de alto consumo: ar condicionado, iluminação, equipamentos industriais.
-- Dor principal do negócio: conta de energia elevada reduzindo margem do negócio.
-- Ângulo de abordagem comercial: redução imediata da maior despesa fixa da empresa.`)
-        : `[ESTRATEGIA DO NICHO]
-- Nicho identificado: ${contextoLead.niche || 'empresa comercial'}
-- Siga estritamente a constituição do agente para adaptar o ângulo de abordagem ao nicho.`;
-
-    const secaoModular = [secaoIdentidade, secaoDiretrizes, secaoRegional, secaoNicho].join('\n\n');
 
     // --- Constituição do agente (regras customizadas do cliente, com variáveis resolvidas) ---
     const constituicaoResolvida = promptBase
@@ -1256,9 +1192,10 @@ Só avance para a qualificação (Passo 1 em diante) na mensagem seguinte, depoi
 - Responda SEMPRE no MESMO idioma em que o lead escreveu.`;
 
     // use_modular_sections=false no banco → apenas o system_prompt do tenant, sem injeção hardcoded
-    if (instanceData?.use_modular_sections === false) return constituicaoResolvida + secaoAcolhidaInbound + REGRA_ANTI_INVENCAO;
-    // Hardcoded vem DEPOIS do system_prompt — tenant tem precedência, seções modulares são complemento
-    return `${constituicaoResolvida}${secaoAcolhidaInbound}\n\n${secaoModular}${REGRA_ANTI_INVENCAO}`;
+    // Sem seções hardcoded: só o prompt do próprio tenant (com variáveis resolvidas) + o guard
+    // universal de acolhida no 1º contato + a regra anti-invenção (essas duas não são "regra de
+    // negócio" de nenhum tenant — são comportamento de qualidade que vale pra qualquer um).
+    return constituicaoResolvida + secaoAcolhidaInbound + REGRA_ANTI_INVENCAO;
 }
 // ============================================================================
 // 🧠 NÚCLEO IA: "THE ARCHITECT" - STATE OF THE ART SDR V3.0 (MULTI-TENANT REAL)
