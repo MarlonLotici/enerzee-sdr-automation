@@ -270,6 +270,7 @@ const chipsEmConflito      = new Set(); // chips que receberam connectionReplace
 // antigo (o Map é em memória — reseta a cada deploy, então nunca "recupera" após um restart).
 const ultimaQuedaPorChip  = new Map();
 const JANELA_MAX_CATCHUP_MS = 10 * 60 * 1000; // não resgata sync mais velho que 10min de queda
+const leadsCutucadosPorQueda = new Set(); // dedupe do cutucão pós-reconexão (não manda 2x pra mesma queda)
 
 // 🔄 Backoff de reconexão (pura, testável) — movida para lib/reconexao.js.
 const { calcularBackoffReconexao } = require('./lib/reconexao');
@@ -1605,6 +1606,8 @@ async function startInstance(instanceId, instanceName, preloadedUserId = null) {
             redisConnection.set(redisVersionKey, BAILEYS_VERSION).catch(() => {});
             // Realoca leads órfãos do mesmo tenant para este chip
             setTimeout(() => redistribuirLeadsOrfaos(), 3000);
+            // Cutuca leads que podem ter respondido durante a queda (mensagem perdida — ver função)
+            setTimeout(() => cutucarLeadsAfetadosPelaQueda(instanceId, sock), 5000);
             // Liga o motor de ataque deste chip se ainda não estiver rodando.
             // Cold-start delay: chip novo espera 25 min antes do primeiro disparo —
             // evita o padrão "recém autenticado → imediato outreach" que o WA detecta.
@@ -5030,6 +5033,44 @@ let loopIniciado = false;
 // para chips conectados estritamente da mesma conta (user_id).
 // ============================================================================
 let ultimaRedistribuicao = 0;
+// 🩹 CUTUCÃO PÓS-RECONEXÃO: syncFullHistory=false é proposital (anti-detecção — bots
+// sincronizam histórico completo, humanos não), mas tem um custo: uma mensagem que o lead manda
+// bem na janela de uma queda curta de conexão (poucos segundos) NÃO é resgatada pelo Baileys —
+// some pro sistema sem deixar rastro (nem log). Ao reconectar, verifica quem ficou "no vácuo"
+// (IA mandou a última mensagem perto da queda, sem resposta ainda) e manda um pedido humano de
+// repetir — evita a conversa morrer calada por uma instabilidade de rede.
+async function cutucarLeadsAfetadosPelaQueda(instanceId, sock) {
+    const ultimaQueda = ultimaQuedaPorChip.get(instanceId);
+    if (!ultimaQueda || (Date.now() - ultimaQueda) > JANELA_MAX_CATCHUP_MS) return;
+    try {
+        const desde = new Date(ultimaQueda - 3 * 60000).toISOString(); // folga: msg mandada até 3min antes da queda
+        const { data: leads } = await supabase.from('leads')
+            .select('id, whatsapp_id, name, last_contact_at')
+            .eq('instance_id', instanceId).eq('status', 'contact').eq('is_paused', false)
+            .gte('last_contact_at', desde);
+        if (!leads?.length) return;
+
+        for (const lead of leads) {
+            const chave = `${instanceId}:${lead.id}:${ultimaQueda}`;
+            if (leadsCutucadosPorQueda.has(chave)) continue; // já cutucado por esta queda específica
+
+            // Se já veio resposta do lead depois da última msg da IA, ela chegou normal — não cutuca.
+            const { data: respostaDepois } = await supabase.from('messages')
+                .select('id').eq('whatsapp_id', lead.whatsapp_id).eq('role', 'user')
+                .gt('created_at', lead.last_contact_at).limit(1);
+            if (respostaDepois?.length) continue;
+
+            leadsCutucadosPorQueda.add(chave);
+            const msg = 'Opa, tive uma instabilidade rapidinho aqui — você tinha me respondido algo? Pode mandar de novo que eu já te retorno 🙏';
+            await baileysTransport.enviar(sock, lead.whatsapp_id, { text: msg }).catch(() => {});
+            await db.saveMessage(lead.whatsapp_id, 'assistant', msg, instanceId).catch(() => {});
+            console.log(`🩹 [CUTUCÃO-RECONEXÃO] ${lead.name}: possível msg perdida na queda — pedido pra repetir enviado.`);
+        }
+    } catch (e) {
+        console.error('❌ [CUTUCÃO-RECONEXÃO] erro:', e.message);
+    }
+}
+
 async function redistribuirLeadsOrfaos() {
     if (Date.now() - ultimaRedistribuicao < 30000) return; // debounce: no máximo 1 execução a cada 30s
     ultimaRedistribuicao = Date.now();
