@@ -2572,13 +2572,34 @@ if (!lead) {
     // --- 👤 1. DETECÇÃO DE INTERVENÇÃO MANUAL ---
     // --- 👤 1. DETECÇÃO DE INTERVENÇÃO MANUAL ---
 if (fromMe) {
-    await new Promise(resolve => setTimeout(resolve, 3000)); 
-    
+    await new Promise(resolve => setTimeout(resolve, 3000));
+
     if (msg.key.id && mensagensEnviadasPelaIA.has(msg.key.id)) {
         return;
     }
 
     if (!texto) return;
+
+    // 🛡️ ANTI-ECO POR CONTEÚDO: sob instabilidade de conexão (reconexão/retry), o Baileys pode
+    // reenviar/reatribuir um ID diferente do que foi rastreado em mensagensEnviadasPelaIA — o eco
+    // da PRÓPRIA resposta da IA chega com ID "desconhecido" e cai aqui como se fosse um humano
+    // digitando manualmente, pausando a IA (is_paused=true) logo depois dela ter acabado de
+    // responder — e a próxima mensagem real do lead é ignorada (TRAVA HUMANA) em silêncio.
+    // Bug real observado em teste (2026-09-24): saudação da IA virou "humano" durante uma
+    // instabilidade (reason 428), e a resposta seguinte do lead nunca foi processada.
+    // Blindagem: compara o CONTEÚDO com as últimas mensagens que a própria IA mandou pra este
+    // lead (últimos 5min) — se bater, é eco, nunca intervenção humana.
+    try {
+        const _norm = (s) => String(s || '').replace(/\s+/g, ' ').trim().toLowerCase();
+        const _desde = new Date(Date.now() - 5 * 60000).toISOString();
+        const { data: _recentesIA } = await supabase.from('messages')
+            .select('content').eq('whatsapp_id', lead.whatsapp_id).eq('role', 'assistant')
+            .gte('created_at', _desde).order('created_at', { ascending: false }).limit(5);
+        if ((_recentesIA || []).some(m => _norm(m.content) === _norm(texto))) {
+            console.log(`🔁 [ANTI-ECO] "${lead.name}": mensagem fromMe bate com resposta recente da IA (ID reatribuído por instabilidade) — tratando como eco, NÃO como humano.`);
+            return;
+        }
+    } catch (_) { /* blindagem best-effort — se a query falhar, segue o fluxo normal abaixo */ }
 
     // ========================================================================
     // 🎮 COMANDOS DE CONTROLE MANUAL (Digite direto no WhatsApp)
