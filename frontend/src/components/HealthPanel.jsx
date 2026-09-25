@@ -26,6 +26,8 @@ export default function HealthPanel() {
     const [erro, setErro]     = useState(null)
     const [carregando, setCarregando] = useState(true)
     const [atualizadoEm, setAtualizadoEm] = useState(null)
+    const [saudeServidor, setSaudeServidor] = useState(null)
+    const [mostrarErros, setMostrarErros] = useState(false)
     const timerRef = useRef(null)
 
     const buscar = useCallback(async () => {
@@ -37,6 +39,7 @@ export default function HealthPanel() {
             const json = await resp.json()
             if (!json.ok) throw new Error(json.error || 'Falha ao carregar saúde')
             setChips(json.chips || [])
+            setSaudeServidor(json.saudeServidor || null)
             setErro(null)
             setAtualizadoEm(Date.now())
         } catch (e) {
@@ -78,6 +81,36 @@ export default function HealthPanel() {
             {erro && (
                 <div style={{ display: 'flex', alignItems: 'center', gap: 6, fontSize: 10, color: C.warn }}>
                     <AlertTriangle size={11} /> {erro}
+                </div>
+            )}
+
+            {saudeServidor?.erros > 0 && (
+                <div style={{ marginBottom: 10 }}>
+                    <button
+                        onClick={() => setMostrarErros(v => !v)}
+                        style={{ display: 'flex', alignItems: 'center', gap: 6, width: '100%', background: 'none', border: 'none', cursor: saudeServidor.recentes ? 'pointer' : 'default', padding: 0 }}
+                    >
+                        <AlertTriangle size={11} color={C.warn} />
+                        <span style={{ fontSize: 10, fontWeight: 800, color: C.warn }}>
+                            {saudeServidor.erros} erro{saudeServidor.erros > 1 ? 's' : ''} na última hora
+                        </span>
+                        {saudeServidor.recentes && (
+                            <span style={{ fontSize: 9, color: C.muted, marginLeft: 'auto' }}>{mostrarErros ? 'ocultar ▲' : 'ver ▼'}</span>
+                        )}
+                    </button>
+                    {mostrarErros && saudeServidor.recentes && (
+                        <div style={{ marginTop: 6, display: 'flex', flexDirection: 'column', gap: 4, maxHeight: 180, overflowY: 'auto' }}>
+                            {saudeServidor.recentes.map((e, i) => (
+                                <div key={i} style={{ fontSize: 9, color: C.muted, background: 'rgba(244,63,94,0.06)', border: `1px solid ${C.down}33`, borderRadius: 6, padding: '5px 8px' }}>
+                                    <div style={{ display: 'flex', justifyContent: 'space-between', marginBottom: 2 }}>
+                                        <span style={{ fontWeight: 800, color: '#fff' }}>{e.origem}</span>
+                                        <span>{new Date(e.ts).toLocaleTimeString('pt-BR', { hour: '2-digit', minute: '2-digit' })}</span>
+                                    </div>
+                                    <div>{e.msg}</div>
+                                </div>
+                            ))}
+                        </div>
+                    )}
                 </div>
             )}
 
