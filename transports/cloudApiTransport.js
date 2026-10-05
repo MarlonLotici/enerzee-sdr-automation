@@ -30,7 +30,10 @@ function _base(config) {
     return String(config?.baseUrl || process.env.CLOUD_BASE_URL || DEFAULT_BASE_URL).replace(/\/+$/, '');
 }
 function _apiKey(config) {
-    return config?.apiKey || process.env.CLOUD_API_KEY || '';
+    // Precedência: credencial da instância (multi-tenant, por WABA) → env global.
+    // WA_TOKEN e CLOUD_API_KEY são sinônimos de env (WA_TOKEN é o nome usado no setup da Antix).
+    // Deixar cloud_api_key NULL na instância faz o token vir SÓ do env — nunca persistido no banco.
+    return config?.apiKey || process.env.WA_TOKEN || process.env.CLOUD_API_KEY || '';
 }
 // Cloud API quer só os dígitos com DDI (ex.: 5511999999999), sem @s.whatsapp.net.
 function _soDigitos(jid) {

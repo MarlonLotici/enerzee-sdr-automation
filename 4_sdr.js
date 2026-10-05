@@ -1379,7 +1379,7 @@ async function startInstance(instanceId, instanceName, preloadedUserId = null) {
     // Nível 3: Supabase (fallback — busca user_id + created_at + daily_limit para cold-start delay)
     const { data: instData } = await supabase
         .from('instances')
-        .select('user_id, created_at, daily_limit')
+        .select('user_id, created_at, daily_limit, whatsapp_provider')
         .eq('id', instanceId)
         .maybeSingle();
 
@@ -1392,6 +1392,18 @@ async function startInstance(instanceId, instanceName, preloadedUserId = null) {
     // Sem user_id após as 3 tentativas → aborta para não vazar dados entre tenants
     if (!instanceUserId) {
         console.error(`🚨 [CRÍTICO] Instância ${instanceId} (${instanceName}) sem user_id após Parâmetro→Redis→Supabase. Abortando.`);
+        instanciasLigando.delete(instanceId);
+        return;
+    }
+    // ────────────────────────────────────────────────────────────────────────
+
+    // ─── CHIP OFICIAL (Cloud API) — NÃO sobe socket Baileys ─────────────────
+    // Instâncias com whatsapp_provider='official' recebem por webhook (receberInboundOficial)
+    // e enviam por HTTP (cloudApiTransport). Subir Baileys aqui causaria QR falso, guerra de
+    // sessão e reconexões em loop. Cacheia o dono (worker/fila precisam) e encerra o startup.
+    if (instData?.whatsapp_provider === 'official') {
+        await saveOwnerToRedis(redisConnection, instanceId, instanceUserId);
+        console.log(`📲 [OFICIAL] ${instanceName} é Cloud API — Baileys ignorado (inbound via webhook, envio via HTTP).`);
         instanciasLigando.delete(instanceId);
         return;
     }
