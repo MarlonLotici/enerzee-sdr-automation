@@ -111,19 +111,22 @@ export default function RelatorioResultados() {
         const foraDoHorario = assistantFora.length
         const conversasForaDoHorario = new Set(assistantFora.map(x => x.whatsapp_id)).size
 
-        // Tempo médio até a 1ª resposta do lead após o disparo (min), capado em 24h
-        const primeiraUserPorJid = {}
-        for (const u of userMsgs) {
-            if (!primeiraUserPorJid[u.whatsapp_id]) primeiraUserPorJid[u.whatsapp_id] = new Date(u.created_at)
+        // Tempo médio da 1ª resposta DA IA: gap entre a mensagem do lead e a resposta
+        // seguinte do assistant, por conversa (capado em 24h). Mede o que o card promete
+        // ("do contato à resposta da IA") — não a demora do lead em responder.
+        const msgsPorJid = {}
+        for (const mm of mensagens) {   // 'mensagens' já vem ordenado por created_at asc
+            (msgsPorJid[mm.whatsapp_id] = msgsPorJid[mm.whatsapp_id] || []).push(mm)
         }
         let soma = 0, cont = 0
-        for (const l of leads) {
-            if (!l.last_contact_at || !l.whatsapp_id) continue
-            const envio = new Date(l.last_contact_at)
-            const resp = primeiraUserPorJid[l.whatsapp_id]
-            if (resp && resp > envio) {
-                const diff = (resp - envio) / 60000
-                if (diff > 0 && diff < 1440) { soma += diff; cont++ }
+        for (const jid in msgsPorJid) {
+            const arr = msgsPorJid[jid]
+            for (let i = 0; i < arr.length - 1; i++) {
+                if (arr[i].role === 'user' && arr[i + 1].role === 'assistant') {
+                    const diff = (new Date(arr[i + 1].created_at) - new Date(arr[i].created_at)) / 60000
+                    if (diff >= 0 && diff < 1440) { soma += diff; cont++ }
+                    break   // só o 1º par lead→IA de cada conversa
+                }
             }
         }
         const tempoMedio = cont > 0 ? Math.round(soma / cont) : null
