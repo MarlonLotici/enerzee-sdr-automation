@@ -48,6 +48,9 @@ try {
 let sdr = null;
 
 const app = express();
+// Railway/Proxy: confia no 1º proxy pra o express-rate-limit ler o IP real do X-Forwarded-For
+// (sem isso, erro recorrente ERR_ERL_UNEXPECTED_X_FORWARDED_FOR e rate-limit identificando errado).
+app.set('trust proxy', 1);
 const server = http.createServer(app);
 
 // ── CORS por allowlist (FAIL-SAFE) ──────────────────────────────────────────

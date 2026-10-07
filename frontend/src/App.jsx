@@ -1546,18 +1546,26 @@ return (
             <span className="text-[8px] text-amber-400/60 font-black uppercase">leads</span>
         </div>
 
-        {/* Botão principal */}
-        <Button
-            onClick={startScraping}
-            className={`h-9 px-5 rounded-lg font-black text-[10px] uppercase tracking-wider border transition-all ${
-                isBotRunning
-                    ? "bg-red-600/20 border-red-500/30 text-red-400 hover:bg-red-600/40"
-                    : "bg-amber-600 border-amber-500 text-black hover:bg-amber-500"
-            }`}
-            style={!isBotRunning ? { boxShadow: '0 0 12px rgba(245,158,11,0.2)' } : {}}
-        >
-            {isBotRunning ? "Parar Motor" : "Iniciar Varredura"}
-        </Button>
+        {/* Botão principal — ESCONDIDO em chip oficial/receptivo: disparo frio num número oficial
+            = risco de ban. Esses chips só recebem (inbound). */}
+        {(() => {
+            const _inst = instances.find(i => i.id === selectedInstanceId);
+            const _inbound = _inst && (_inst.whatsapp_provider === 'official' || _inst.inbound_only === true || _inst.somente_receptivo === true);
+            if (_inbound) return null;
+            return (
+                <Button
+                    onClick={startScraping}
+                    className={`h-9 px-5 rounded-lg font-black text-[10px] uppercase tracking-wider border transition-all ${
+                        isBotRunning
+                            ? "bg-red-600/20 border-red-500/30 text-red-400 hover:bg-red-600/40"
+                            : "bg-amber-600 border-amber-500 text-black hover:bg-amber-500"
+                    }`}
+                    style={!isBotRunning ? { boxShadow: '0 0 12px rgba(245,158,11,0.2)' } : {}}
+                >
+                    {isBotRunning ? "Parar Motor" : "Iniciar Varredura"}
+                </Button>
+            );
+        })()}
     </div>
 </div>
         {/* ÁREA DE CONTEÚDO */}
