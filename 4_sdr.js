@@ -5091,6 +5091,24 @@ if (!resposta) {
     return;
 }
 
+// 🩹 STALL DE AGENDA SEM PROPOSTA: o closer pode dizer "deixa eu ver os horários" (quer agendar),
+// mas o orquestrador rodou ANTES dele e não propôs → beco sem saída ("vou ver" que nunca volta).
+// Quando isso acontece, força a proposta REAL agora, no mesmo turno, trocando o stall pelos
+// horários de verdade. (orquestrar só propõe/grava slots; não cria evento — seguro.)
+if (bookingAtivo && typeof resposta === 'string') {
+    const deuStallDeAgenda = /\b(deixa|vou|deixe)\b[^.!?]*\b(ver|puxar|olhar|checar|conferir|verificar)\b[^.!?]*\b(hor[áa]rio|hor[áa]rios|agenda)\b/i.test(resposta);
+    const semSlots  = !(Array.isArray(lead.slots_propostos) && lead.slots_propostos.length);
+    const naoBooked = lead.status !== 'booked';
+    if (deuStallDeAgenda && semSlots && naoBooked) {
+        const _ag = await orquestrarAgendamento(lead, ultimaMsg, instanceData, userId, 'COMPRA')
+            .catch(e => { console.error(`❌ [AGENDA-STALL-FIX] ${e.message}`); return null; });
+        if (_ag?.tratado && _ag.resposta) {
+            console.log(`🩹 [AGENDA-STALL-FIX] Closer deu stall sem proposta — substituindo pelos horários reais.`);
+            resposta = _ag.resposta;
+        }
+    }
+}
+
         // 4.3. Filtra, Carimba no WPP e Envia (instancia?.sock: oficial não tem socket → null, envio vai por HTTP)
         await filtrarEEnviarResposta(instancia?.sock, remoteJid, resposta, historico, lead, instanceId, instanceData?.tts_voice || null);
 
