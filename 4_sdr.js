@@ -5774,10 +5774,32 @@ module.exports = {
     // injeta na MESMA fila FilaIA que o Baileys usa — daí a esteira de agentes é idêntica.
     receberInboundOficial: async (instanceId, webhookBody) => {
         const norm = cloudApiTransport.normalizarInbound(webhookBody);
-        if (!norm || !norm.texto) return { ok: false, motivo: 'sem_mensagem_texto' };
+        if (!norm) return { ok: false, motivo: 'sem_mensagem' };
 
         const instanceData = await getRegrasEmCache(instanceId);
         if (!instanceData) return { ok: false, motivo: 'instancia_desconhecida' };
+
+        // 🎙️ ÁUDIO (voice note): a Cloud API só manda o ID da mídia. Baixa da Meta e transcreve
+        // com o Whisper (o Baileys já fazia isso com o buffer do socket). Sem isso, o áudio chega
+        // vazio e a IA ignora — foi exatamente o bug observado no 1º teste oficial.
+        if (!norm.texto && norm.mediaId && ['audio', 'voice', 'ptt'].includes(norm.tipo)) {
+            try {
+                const { buffer } = await cloudApiTransport.baixarMidia(
+                    { apiKey: instanceData.cloud_api_key, baseUrl: instanceData.cloud_base_url }, norm.mediaId);
+                const txt = await transcreverAudioIA(buffer);
+                if (txt) {
+                    norm.texto = `(Áudio) ${txt}`;   // mesma convenção do caminho Baileys
+                    console.log(`🎙️ [OFICIAL] Áudio transcrito: "${txt}"`);
+                }
+            } catch (e) {
+                console.error('❌ [OFICIAL] Falha ao baixar/transcrever áudio:', e.message);
+            }
+        }
+
+        if (!norm.texto) {
+            console.log(`⚠️ [OFICIAL] Mensagem tipo '${norm.tipo}' sem texto aproveitável — ignorada.`);
+            return { ok: false, motivo: 'sem_mensagem_texto' };
+        }
 
         const cleanJid = norm.remoteJid;
         let { data: lead } = await supabase.from('leads')

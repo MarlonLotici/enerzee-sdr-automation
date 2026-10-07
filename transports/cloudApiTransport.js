@@ -93,7 +93,9 @@ function normalizarInbound(webhookBody) {
             || msg.button?.text
             || msg.interactive?.button_reply?.title
             || msg.interactive?.list_reply?.title
-            || '';
+            || msg.audio?.caption || msg.image?.caption || msg.video?.caption || '';
+        // Mídia: a Cloud API entrega só um ID; o conteúdo é baixado à parte (ver baixarMidia).
+        const midia = msg.audio || msg.voice || msg.video || msg.image || msg.document || null;
         return {
             // normaliza pro formato que o resto do motor espera (chaveia leads por whatsapp_id assim)
             remoteJid: `${_soDigitos(msg.from)}@s.whatsapp.net`,
@@ -102,6 +104,8 @@ function normalizarInbound(webhookBody) {
             pushName: contato?.profile?.name || null,
             tipo: tipoMeta === 'text' ? 'conversation' : tipoMeta, // alinha 'text'→'conversation' (Baileys)
             texto,
+            mediaId: midia?.id || null,
+            mimeType: midia?.mime_type || null,
             raw: webhookBody,
         };
     } catch {
@@ -109,9 +113,27 @@ function normalizarInbound(webhookBody) {
     }
 }
 
+// Baixa uma mídia recebida (áudio/imagem/doc) da Cloud API.
+// Passo 1: GET {graphRoot}/{mediaId} -> { url, mime_type }  (raiz SEM o phone_number_id)
+// Passo 2: GET {url} com Bearer -> binário.
+async function baixarMidia(config, mediaId) {
+    const apiKey = _apiKey(config);
+    // cloud_base_url inclui o phone_number_id; a mídia usa só https://host/vXX.0
+    const m = String(_base(config)).match(/^(https?:\/\/[^/]+\/v\d+\.\d+)/);
+    const root = m ? m[1] : DEFAULT_BASE_URL;
+    const r1 = await fetch(`${root}/${mediaId}`, { headers: { Authorization: `Bearer ${apiKey}` } });
+    const meta = await r1.json();
+    if (!meta?.url) throw new Error('mídia sem url: ' + JSON.stringify(meta?.error || meta));
+    const r2 = await fetch(meta.url, { headers: { Authorization: `Bearer ${apiKey}` } });
+    if (!r2.ok) throw new Error('download da mídia falhou: HTTP ' + r2.status);
+    const buf = Buffer.from(await r2.arrayBuffer());
+    return { buffer: buf, mimeType: meta.mime_type || null };
+}
+
 module.exports = {
     enviarTexto,
     enviarTemplate,
+    baixarMidia,
     normalizarInbound,
     nome: 'official',
     implementado: true,
