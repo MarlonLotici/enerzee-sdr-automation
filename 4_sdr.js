@@ -2159,17 +2159,24 @@ async function filtrarEEnviarResposta(sock, remoteJid, resposta, historico, lead
         .trim();
 
     // ── BLINDAGEM ANTI-PENSAMENTO: remove parágrafos iniciais de raciocínio interno ──
-    // Detecta quando a LLM "pensa em voz alta" antes de responder ao cliente
-    const regexPensamento = /^(parece que|percebo que|vou tentar|detectei que|vejo que|vi que estamos|estou vendo que|não consigo|isso parece|o lead parece|a mensagem parece|caímos em|caimos em)[^\n]*/gi;
+    // Detecta quando a LLM "pensa em voz alta" (CoT vazado) antes de responder ao cliente.
+    // ⚠️ Os gatilhos EXIGEM referência meta (ao lead/mensagem/conversa/sistema). Antes a lista era
+    // genérica demais ("parece que", "não consigo", "vou tentar", "vejo que", "isso parece") e comia
+    // aberturas 100% legítimas pro cliente — ex.: "Parece que já estão bem ágeis. Se quiser testar..."
+    // era apagada inteira (um parágrafo só → [^\n]* levava tudo) e o lead ficava sem resposta.
+    const textoAntesPensamento = textoLimpo;
+    const regexPensamento = /^(?:detectei que|caímos em|caimos em|o lead parece|a lead parece|o cliente parece|a mensagem parece|a conversa parece|(?:parece|percebo|vejo|estou vendo|vi|notei)\s+que\s+(?:o lead|a lead|o cliente|a mensagem|a conversa|estamos|ele est[áa]|ela est[áa]|o usu[áa]rio))[^\n]*/gi;
     textoLimpo = textoLimpo
         .replace(regexPensamento, '')  // remove a linha de pensamento
         .replace(/^\s*\n+/, '')        // remove linhas em branco que sobram no início
         .trim();
 
-    if (textoLimpo.length === 0 && resposta.length > 0) {
-        // A resposta era só pensamento — loga e aborta silenciosamente
-        console.warn(`⚠️ [FILTRO] Resposta era só pensamento interno. Abortando envio para ${lead.name}.`);
-        return;
+    if (textoLimpo.length === 0 && textoAntesPensamento.length > 0) {
+        // SALVAGUARDA: a limpeza de pensamento esvaziou a resposta. Em vez de abortar (lead fica no
+        // vácuo — bug observado em prod), manda o texto original: é quase sempre falso-positivo (uma
+        // frase normal que começou com "parece que..."), não CoT puro.
+        console.warn(`⚠️ [FILTRO] Limpeza anti-pensamento esvaziou a resposta de ${lead.name} — enviando original (provável falso-positivo).`);
+        textoLimpo = textoAntesPensamento;
     }
 
     if (textoLimpo.length === 0) {
@@ -5746,32 +5753,39 @@ module.exports = {
     },
     enviarMensagemSDR: async (instanceId, whatsappId, texto) => {
         try {
-            // 1. Pega o canal de comunicação correto do chip
-            const instancia = sessions.get(instanceId);
+            // 🌐 ROTEAMENTO POR PROVIDER: chip oficial (Cloud API) NÃO tem socket Baileys — envia por
+            // HTTP. Antes esta função era 100% Baileys (exigia sessions.get().ready + .sock), então o
+            // envio manual do painel SEMPRE falhava em chip oficial ("ready=false ou ausente"). Agora
+            // branca por provider: Baileys mantém as travas de socket; oficial vai direto pro transporte.
+            const _regras = await getRegrasEmCache(instanceId);
+            const ehOficial = _regras?.whatsapp_provider === 'official';
 
-            if (!instancia || !instancia.ready) {
-                console.error(`❌ [FRONTEND] Chip ${instanceId} não está pronto (ready=false ou ausente).`);
-                return { success: false, error: 'Chip offline ou não conectado.' };
-            }
-
-            // Verificação extra: WebSocket precisa estar aberto no nível TCP
-            // (ready=true no Map não garante que o socket não está fantasma)
-            if (!instancia.sock.ws?.isOpen) {
-                console.error(`❌ [FRONTEND] Chip ${instanceId} tem ready=true mas WebSocket fechado — socket fantasma detectado.`);
-                // Marca como não-pronto para evitar tentativas futuras até reconexão
-                instancia.ready = false;
-                return { success: false, error: 'Conexão WhatsApp inativa. Aguarde a reconexão automática ou reconecte o chip.' };
+            let instancia = null;
+            if (!ehOficial) {
+                // Baileys: precisa do socket pronto e vivo.
+                instancia = sessions.get(instanceId);
+                if (!instancia || !instancia.ready) {
+                    console.error(`❌ [FRONTEND] Chip ${instanceId} não está pronto (ready=false ou ausente).`);
+                    return { success: false, error: 'Chip offline ou não conectado.' };
+                }
+                // WebSocket precisa estar aberto no nível TCP (ready=true no Map não garante socket vivo).
+                if (!instancia.sock.ws?.isOpen) {
+                    console.error(`❌ [FRONTEND] Chip ${instanceId} tem ready=true mas WebSocket fechado — socket fantasma detectado.`);
+                    instancia.ready = false;
+                    return { success: false, error: 'Conexão WhatsApp inativa. Aguarde a reconexão automática ou reconecte o chip.' };
+                }
+                // "Digitando..." só existe no Baileys (a Cloud API não expõe presença).
+                await instancia.sock.sendPresenceUpdate('composing', whatsappId).catch(() => {});
+                await delay(1500);
+                await instancia.sock.sendPresenceUpdate('paused', whatsappId).catch(() => {});
+            } else {
+                console.log(`🌐 [FRONTEND] Envio manual via chip OFICIAL ${instanceId} (Cloud API, sem socket).`);
             }
 
             console.log(`👤 [FRONTEND] Enviando mensagem manual para ${whatsappId} via chip ${instanceId}...`);
 
-            // 2. Simula o "Digitando..." para o lead
-            await instancia.sock.sendPresenceUpdate('composing', whatsappId).catch(() => {});
-            await delay(1500);
-            await instancia.sock.sendPresenceUpdate('paused', whatsappId).catch(() => {});
-
-            // 3. Envia a mensagem usando a função interna para registrar na memória viva (evita eco do bot)
-            const sentMsg = await enviarMensagemIA(instancia.sock, whatsappId, { text: texto }, instanceId);
+            // enviarMensagemIA roteia por provider: oficial → cloudApiTransport (sock ignorado); Baileys → socket.
+            const sentMsg = await enviarMensagemIA(ehOficial ? null : instancia.sock, whatsappId, { text: texto }, instanceId);
 
             if (sentMsg) {
                 // 4. Salva a mensagem no banco de dados para o histórico do front-end
@@ -5788,7 +5802,7 @@ module.exports = {
                 console.log(`✅ [FRONTEND] Mensagem manual entregue. IA pausada para o lead.`);
                 return { success: true, messageId: sentMsg.key.id };
             } else {
-                throw new Error("Falha no disparo pelo Baileys.");
+                throw new Error(ehOficial ? "Falha no disparo pela Cloud API." : "Falha no disparo pelo Baileys.");
             }
             
         } catch (error) {
