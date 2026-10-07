@@ -1137,11 +1137,25 @@ const concessionariaLocal = (MAPA_CONCESSIONARIAS[contextoLead.estado] || 'conce
     // abaixo no PRÓPRIO texto quando quiser dados computados/reais.
     // ─────────────────────────────────────────────────────────────────────
 
-    const calendlyResolvido =
-        instanceData?.calendly_link ||
-        (instanceData?.owner_phone
-            ? `https://wa.me/55${(instanceData.owner_phone || '').replace(/\D/g, '')}`
-            : 'https://antix.com.br/agendar');
+    // 📅 Agenda real conectada (Google + booking_ativo)? Então NÃO injeta link no corpo do
+    // prompt — quem agenda é o orquestrador (propõe horários reais). Mandar Calendly aqui
+    // engana o lead e colide com a proposta automática. Cobre TODO prompt com ${calendlyLink}.
+    let agendaRealAtiva = false;
+    try {
+        const _uid = contextoLead?.user_id || instanceData?.user_id;
+        if (_uid) {
+            const { data: _cc } = await supabase.from('calendar_connections')
+                .select('booking_ativo, refresh_token').eq('user_id', _uid).maybeSingle();
+            agendaRealAtiva = _cc?.booking_ativo === true && !!_cc?.refresh_token;
+        }
+    } catch (_) { /* na dúvida, mantém o fallback de link abaixo */ }
+
+    const calendlyResolvido = agendaRealAtiva
+        ? 'NÃO envie nenhum link — diga que já vai verificar os horários e o sistema mostra os horários reais da agenda em seguida'
+        : (instanceData?.calendly_link ||
+            (instanceData?.owner_phone
+                ? `https://wa.me/55${(instanceData.owner_phone || '').replace(/\D/g, '')}`
+                : 'https://antix.com.br/agendar'));
 
     // --- Constituição do agente (regras customizadas do cliente, com variáveis resolvidas) ---
     const constituicaoResolvida = promptBase
@@ -2211,6 +2225,19 @@ if (matchClima) updates.sentiment = matchClima[1].toLowerCase();
             internal_notes: `Conversa encerrada pela IA em ${new Date().toLocaleString('pt-BR')}`
         }).eq('id', lead.id);
         console.log(`🔕 [ENCERRADO] Conversa finalizada para ${lead.name}. Lead pausado.`);
+    }
+
+    // 🚦 TRAVA "1 PERGUNTA POR MENSAGEM": o prompt proíbe empilhar perguntas, mas o LLM às vezes
+    // manda 2-3 de uma vez (ex.: "recebem inbound? como é o follow-up? perde oportunidade?").
+    // Se houver 2+ "?" e NÃO houver link de agendamento, corta tudo depois da 1ª pergunta.
+    // (Com link presente, deixa passar — é o CTA de fechamento, não qualificação empilhada.)
+    {
+        const nPerguntas = (textoLimpo.match(/\?/g) || []).length;
+        const temLink = /https?:\/\//i.test(textoLimpo);
+        if (nPerguntas > 1 && !temLink) {
+            textoLimpo = textoLimpo.slice(0, textoLimpo.indexOf('?') + 1).trim();
+            console.log(`🚦 [1-PERGUNTA] ${nPerguntas} perguntas empilhadas — cortado após a 1ª.`);
+        }
     }
 
     // ── 3. ENVIO FATIADO ──
