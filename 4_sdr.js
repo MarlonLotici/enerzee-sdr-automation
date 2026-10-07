@@ -4707,11 +4707,31 @@ async function orquestrarAgendamento(lead, ultimaMsg, instanceData, userId, inte
 const workerIA = new Worker('FilaIA', async (job) => {
     const { leadId, whatsappId, instanceId, remoteJid } = job.data;
     console.log(`⚙️ [WORKER] Processando o job de IA para o WhatsApp ID: ${whatsappId}`);
-    
+
+    // 🔒 ANTI-DUPLICAÇÃO (concorrência): o worker roda com concurrency:5 e dois jobs do MESMO
+    // lead podiam rodar juntos → 2 respostas iguais/parecidas. Se já há um job processando esta
+    // conversa, ignora este (o job em curso lê o histórico fresco e cobre as msgs picadas).
+    if (iaRespondendo.has(whatsappId)) {
+        console.log(`🔒 [WORKER] ${whatsappId} já em processamento — job duplicado ignorado (anti-duplicação).`);
+        return;
+    }
+    iaRespondendo.add(whatsappId);
+
     try {
         // 1. Recupera os dados frescos do lead
         const { data: lead } = await supabase.from('leads').select('*').eq('id', leadId).single();
         if (!lead) throw new Error("Lead não encontrado no banco.");
+
+        // 🧵 ANTI-DUPLICAÇÃO (contexto defasado): guarda o horário da última msg do lead AGORA.
+        // Se chegar msg mais nova enquanto processamos, abortamos o envio no fim (um job novo
+        // responde com o contexto completo) — mata o "respondeu algo que o lead já tinha dito".
+        let _tsUserInicial = null;
+        try {
+            const { data: _u } = await supabase.from('messages').select('created_at')
+                .eq('whatsapp_id', whatsappId).eq('role', 'user')
+                .order('created_at', { ascending: false }).limit(1).maybeSingle();
+            _tsUserInicial = _u?.created_at || null;
+        } catch (_) {}
 
         // 🎯 Detecção de estados finais — evita IA tentar vender num funil já encerrado
 const estadosFinais = ['dead', 'invalid', 'blacklisted', 'booked'];
@@ -5149,6 +5169,7 @@ if (bookingAtivo && typeof resposta === 'string') {
             const _txt = resposta.trim();
             const _trivial = _txt.length < 25 && !/[?]/.test(_txt) && !/https?:\/\//.test(_txt);
             if (!_trivial) {
+                console.log(`🧑‍⚖️ [SUPERVISOR] Revisando rascunho de ${lead.name}...`);
                 const _crit = await supervisorAgent.revisar({ historico, lead, draft: resposta, primeiroContato })
                     .catch(() => ({ ok: true, problemas: [] }));
                 if (!_crit.ok && _crit.problemas.length) {
@@ -5163,6 +5184,19 @@ if (bookingAtivo && typeof resposta === 'string') {
                 }
             }
         }
+
+        // 🧵 ANTI-DUPLICAÇÃO (contexto defasado): se o lead mandou msg nova durante todo esse
+        // processamento, esta resposta ficou velha → NÃO envia. O job da msg nova responde com o
+        // contexto completo. Mata o "respondeu pergunta que o lead já tinha respondido".
+        try {
+            const { data: _u2 } = await supabase.from('messages').select('created_at')
+                .eq('whatsapp_id', whatsappId).eq('role', 'user')
+                .order('created_at', { ascending: false }).limit(1).maybeSingle();
+            if (_u2?.created_at && _tsUserInicial && new Date(_u2.created_at) > new Date(_tsUserInicial)) {
+                console.log(`🧵 [ANTI-DUP] Chegou msg nova de ${lead.name} durante o processamento — abortando resposta defasada.`);
+                return;
+            }
+        } catch (_) {}
 
         // 4.3. Filtra, Carimba no WPP e Envia (instancia?.sock: oficial não tem socket → null, envio vai por HTTP)
         await filtrarEEnviarResposta(instancia?.sock, remoteJid, resposta, historico, lead, instanceId, instanceData?.tts_voice || null);
@@ -6014,7 +6048,7 @@ module.exports = {
         const _keyGaveta = `${instanceId}:${cleanJid}`;
         const _antigo = gavetaOficialTimers.get(_keyGaveta);
         if (_antigo) clearTimeout(_antigo);
-        const _janela = Number(process.env.GAVETA_OFICIAL_MS) || 9000;
+        const _janela = Number(process.env.GAVETA_OFICIAL_MS) || 12000;
         const _leadId = lead.id;
         const _timer = setTimeout(async () => {
             gavetaOficialTimers.delete(_keyGaveta);

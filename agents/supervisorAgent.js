@@ -49,7 +49,7 @@ RASCUNHO DA IA (a avaliar):
 """${String(draft).slice(0, 900)}"""
 
 PROBLEMAS A DETECTAR (use estas chaves exatas em "problemas"):
-- "contexto_incoerente": [MAIS IMPORTANTE] a resposta NÃO tem a ver com o que o lead ACABOU de dizer — ignora a pergunta/assunto dele ou responde outra coisa. A resposta tem que conversar com a última mensagem do lead.
+- "contexto_incoerente": [MAIS IMPORTANTE] a resposta NÃO tem a ver com o que o lead ACABOU de dizer — ignora a pergunta/assunto dele, responde outra coisa, OU pergunta algo que o lead JÁ respondeu antes no histórico (ex.: ele disse que tem 2 funcionários e a IA pergunta se tem alguém). A resposta tem que conversar com a última mensagem do lead e não repetir o que já foi dito.
 - "nao_explora_necessidade": a real dor/necessidade do lead ainda NÃO está clara e a resposta não avança nessa descoberta (deixou de fazer a pergunta de SPIN que revelaria o que ele realmente precisa).
 - "pulou_etapa": furou a ordem do roteiro (boas-vindas/rapport → SPIN → explicar solução → convidar p/ reunião → propor horário). Ex.: foi direto pra qualificação dura no 1º contato, ou propôs horário sem ter convidado e o lead topado.
 - "agendou_cedo": ofereceu/empurrou horário sem qualificação suficiente, ou o lead NÃO demonstrou interesse claro em marcar (ex.: só respondeu uma pergunta de qualificação).
