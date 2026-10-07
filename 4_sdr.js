@@ -6000,8 +6000,12 @@ module.exports = {
         const instanceData = await getRegrasEmCache(instanceId);
         if (!instanceData) return { ok: false, motivo: 'instancia_desconhecida' };
 
-        // ✓✓ Marca a mensagem do lead como LIDA (os tiques azuis) — no Baileys era automático.
-        cloudApiTransport.marcarComoLido({ apiKey: instanceData.cloud_api_key, baseUrl: instanceData.cloud_base_url }, norm.msgId);
+        // ✓✓ Marca como LIDA (tiques azuis) com atraso ALEATÓRIO (2-9s) — ler na hora parece robô.
+        {
+            const _cfgLido = { apiKey: instanceData.cloud_api_key, baseUrl: instanceData.cloud_base_url };
+            const _mid = norm.msgId;
+            setTimeout(() => cloudApiTransport.marcarComoLido(_cfgLido, _mid), Math.floor(Math.random() * 7000) + 2000);
+        }
 
         // 🎙️ ÁUDIO (voice note): a Cloud API só manda o ID da mídia. Baixa da Meta e transcreve
         // com o Whisper (o Baileys já fazia isso com o buffer do socket). Sem isso, o áudio chega
@@ -6061,7 +6065,7 @@ module.exports = {
         const _keyGaveta = `${instanceId}:${cleanJid}`;
         const _antigo = gavetaOficialTimers.get(_keyGaveta);
         if (_antigo) clearTimeout(_antigo);
-        const _janela = Number(process.env.GAVETA_OFICIAL_MS) || 12000;
+        const _janela = Number(process.env.GAVETA_OFICIAL_MS) || 15000;
         const _leadId = lead.id;
         const _timer = setTimeout(async () => {
             gavetaOficialTimers.delete(_keyGaveta);

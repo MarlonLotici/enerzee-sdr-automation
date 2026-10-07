@@ -43,8 +43,13 @@ test('AGENDA quando o lead pede explicitamente', () => {
     assert.equal(deveProporAgendamento({ texto: 'pode ser amanhã às 10h', intencao: 'DUVIDA', currentStage: 1, temSlots: false }), true);
 });
 
-test('AGENDA quando intenção é COMPRA (aceite)', () => {
-    assert.equal(deveProporAgendamento({ texto: 'fechado, quero sim', intencao: 'COMPRA', currentStage: 2, temSlots: false }), true);
+test('AGENDA quando intenção é COMPRA (aceite) JÁ qualificado (estágio>=3)', () => {
+    assert.equal(deveProporAgendamento({ texto: 'fechado, quero sim', intencao: 'COMPRA', currentStage: 3, temSlots: false }), true);
+});
+
+test('NÃO agenda (afoita): COMPRA cedo, antes de qualificar (estágio<3)', () => {
+    // "às vezes sim" confirmando uma dor no início NÃO pode disparar horário.
+    assert.equal(deveProporAgendamento({ texto: 'às vezes sim', intencao: 'COMPRA', currentStage: 2, temSlots: false }), false);
 });
 
 test('AGENDA quando já há slots propostos (conversa de agenda em curso)', () => {
