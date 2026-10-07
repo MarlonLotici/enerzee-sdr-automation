@@ -1216,11 +1216,21 @@ PROIBIDO dizer de novo "vou ver os horários" / "deixa eu ver os horários" — 
 - NUNCA ofereça prospecção ativa / disparo em massa. Nosso foco é atender e qualificar quem chega.
 - Responda SEMPRE no MESMO idioma em que o lead escreveu.${secaoEstadoAgenda}`;
 
+    // 🧑 NOME DO CONTATO: quando nomeLead='vc' (pushName vazio OU nome de EMPRESA, filtrado por
+    // extrairNomeHumano), peça o nome da PESSOA com leveza — mas só se a IA ainda não perguntou
+    // (senão vira insistência). Evita "Oi, Mercado Bom Preço" e o genérico "vc" pra sempre.
+    const jaPerguntouNome = historico.some(m => m.role === 'assistant'
+        && /como (posso|devo|eu) (te |lhe )?chamar|como voc[êe] se chama|qual (é |seria )?o seu nome|me diz (o )?seu nome/i.test(m.content || ''));
+    const secaoPerguntarNome = (nomeLead === 'vc' && !jaPerguntouNome) ? `
+
+[NOME DO CONTATO — VOCÊ AINDA NÃO SABE]
+Você não tem o nome da PESSOA (o perfil do WhatsApp veio vazio ou é nome de empresa). Em algum ponto natural desta resposta, pergunte de forma leve como pode chamá-la (ex.: "ah, como posso te chamar?"). NUNCA trate o nome da empresa como se fosse o nome da pessoa. Peça UMA vez só; se ela não disser, siga normal.` : '';
+
     // use_modular_sections=false no banco → apenas o system_prompt do tenant, sem injeção hardcoded
     // Sem seções hardcoded: só o prompt do próprio tenant (com variáveis resolvidas) + o guard
     // universal de acolhida no 1º contato + a regra anti-invenção (essas duas não são "regra de
     // negócio" de nenhum tenant — são comportamento de qualidade que vale pra qualquer um).
-    return constituicaoResolvida + secaoAcolhidaInbound + REGRA_ANTI_INVENCAO;
+    return constituicaoResolvida + secaoAcolhidaInbound + secaoPerguntarNome + REGRA_ANTI_INVENCAO;
 }
 // ============================================================================
 // 🧠 NÚCLEO IA: "THE ARCHITECT" - STATE OF THE ART SDR V3.0 (MULTI-TENANT REAL)
@@ -4194,19 +4204,55 @@ await delay(jitterAntiBan);
                 .lte('calendly_event_at', setentaCincoMinISO)
                 .limit(3);
 
+            // Helper: dispara lembrete respeitando o transporte. Baileys precisa de socket pronto;
+            // chip OFICIAL (Cloud API) envia por HTTP sem socket — sem isso, a guarda de socket
+            // pulava o chip oficial (ex.: Antix) e o lembrete nunca saía.
+            const dispararLembrete = async (lr, texto, flagUpdate, tag) => {
+                const regrasL = await getRegrasEmCache(lr.instance_id);
+                const ehOficialL = regrasL?.whatsapp_provider === 'official';
+                const instanciaL = sessions.get(lr.instance_id);
+                if (!ehOficialL && (!instanciaL || !instanciaL.ready)) return false;
+                await enviarMensagemIA(instanciaL?.sock || null, lr.whatsapp_id, { text: texto }, lr.instance_id);
+                await db.saveMessage(lr.whatsapp_id, 'assistant', texto, lr.instance_id);
+                await supabase.from('leads').update(flagUpdate).eq('id', lr.id);
+                console.log(`🔔 [${tag}] Enviado para ${lr.name}`);
+                return true;
+            };
+
             if (leads1h && leads1h.length > 0) {
                 for (const lr of leads1h) {
-                    const instanciaL = sessions.get(lr.instance_id);
-                    if (!instanciaL || !instanciaL.ready) continue;
                     const horaF = new Date(lr.calendly_event_at).toLocaleTimeString('pt-BR', { hour: '2-digit', minute: '2-digit', timeZone: 'America/Sao_Paulo' });
                     const nome  = saudacaoPrimeiroNome(lr.dono, 'você');
                     const linkTxt = lr.gcal_meet_link ? ` Link: ${lr.gcal_meet_link}` : '';
                     const msg1h = `${nome}, nossa conversa é daqui a pouco, às ${horaF}!${linkTxt} Até já 🙌`;
-                    await enviarMensagemIA(instanciaL.sock, lr.whatsapp_id, { text: msg1h }, lr.instance_id);
-                    await db.saveMessage(lr.whatsapp_id, 'assistant', msg1h, lr.instance_id);
-                    await supabase.from('leads').update({ lembrete_1h_enviado: true }).eq('id', lr.id);
-                    console.log(`🔔 [LEMBRETE-1H] Enviado para ${lr.name} — reunião às ${horaF}`);
-                    await delay(Math.floor(Math.random() * 20000) + 20000);
+                    if (await dispararLembrete(lr, msg1h, { lembrete_1h_enviado: true }, `LEMBRETE-1H ${horaF}`))
+                        await delay(Math.floor(Math.random() * 20000) + 20000);
+                }
+            }
+
+            // ================================================================
+            // 📅 5c. LEMBRETE 10MIN ANTES — evento entre agora+5min e agora+15min. Flag reminder_10m_sent.
+            // ================================================================
+            const cincoMinISO  = new Date(agora + 5 * 60 * 1000).toISOString();
+            const quinzeMinISO = new Date(agora + 15 * 60 * 1000).toISOString();
+            const { data: leads10m } = await supabase
+                .from('leads')
+                .select('id, name, whatsapp_id, instance_id, dono, calendly_event_at, gcal_meet_link')
+                .in('status', ['booked', 'closed'])
+                .eq('calendly_booked', true)
+                .not('reminder_10m_sent', 'is', true)
+                .gte('calendly_event_at', cincoMinISO)
+                .lte('calendly_event_at', quinzeMinISO)
+                .limit(3);
+
+            if (leads10m && leads10m.length > 0) {
+                for (const lr of leads10m) {
+                    const horaF = new Date(lr.calendly_event_at).toLocaleTimeString('pt-BR', { hour: '2-digit', minute: '2-digit', timeZone: 'America/Sao_Paulo' });
+                    const nome  = saudacaoPrimeiroNome(lr.dono, 'você');
+                    const linkTxt = lr.gcal_meet_link ? ` Link: ${lr.gcal_meet_link}` : '';
+                    const msg10m = `${nome}, é agora! Nossa conversa começa em ~10 min, às ${horaF}.${linkTxt} Já já te chamo 🙌`;
+                    if (await dispararLembrete(lr, msg10m, { reminder_10m_sent: true }, `LEMBRETE-10MIN ${horaF}`))
+                        await delay(Math.floor(Math.random() * 10000) + 10000);
                 }
             }
 
@@ -4462,7 +4508,9 @@ async function orquestrarAgendamento(lead, ultimaMsg, instanceData, userId, inte
     // Decisão pura (lib/agendaDecisao.js): só segue com UM sinal real de agendamento.
     // Inclui o guard de saudação pura — "oi" com estágio herdado NÃO oferece horário.
     // Mata também a promessa vazia "vou verificar e te retorno" (estágio>=4 sem slots → propõe agora).
-    if (!deveProporAgendamento({ texto: ultimaMsg, intencao, currentStage: lead.current_stage, temSlots }))
+    // Se JÁ está agendado, não sai cedo: cai no bloco de "já agendado" abaixo (confirma/remarca),
+    // em vez de deixar o closer ecoar horários antigos do histórico (bug da inconsistência).
+    if (!jaAgendado && !deveProporAgendamento({ texto: ultimaMsg, intencao, currentStage: lead.current_stage, temSlots }))
         return { tratado: false, bookingAtivo: true, agendaConectada };
 
     const calId = cfg.booking_calendar_id || cfg.calendar_id || 'primary';
@@ -4494,7 +4542,7 @@ async function orquestrarAgendamento(lead, ultimaMsg, instanceData, userId, inte
             status: 'booked', calendly_booked: true, current_stage: 5, is_paused: true,
             gcal_event_id: ev.eventId, gcal_meet_link: ev.meetLink || null,
             calendly_event_at: slot.inicioISO, slots_propostos: null, slot_calendar_id: null,
-            reminder_sent: null, lembrete_1h_enviado: false,
+            reminder_sent: null, lembrete_1h_enviado: false, reminder_10m_sent: false,
             internal_notes: `Reunião ${remarcou ? 'remarcada' : 'criada'} na Google Agenda (${slot.label}) em ${new Date().toLocaleString('pt-BR')}.`,
         }).eq('id', lead.id);
         console.log(`✅ [AGENDAMENTO] ${lead.name}: evento ${remarcou ? 'remarcado' : 'criado'} (${slot.label}) ${ev.meetLink || ''}`);
@@ -4531,8 +4579,16 @@ async function orquestrarAgendamento(lead, ultimaMsg, instanceData, userId, inte
         return ok(`${abre}${_variar(['Consigo te encaixar', 'Tenho livre', 'Dá pra marcar'])} ${labels(slots)}. ${_variar(['Qual fica melhor?', 'Qual prefere?', 'Qual encaixa melhor aí?'])} 😊`);
     };
 
-    // ── JÁ AGENDADO e o lead volta querendo mexer → modo REMARCAÇÃO (reoferece; efetivar faz patch) ──
-    if (jaAgendado && !temSlots) return await ofertar(false);
+    // ── JÁ AGENDADO e o lead volta ──────────────────────────────────────────
+    // Só reoferece horário se ele PEDIR pra remarcar/cancelar. Caso contrário, confirma o que
+    // já está marcado (sem reofertar e sem deixar o closer ecoar horários velhos do histórico).
+    if (jaAgendado && !temSlots) {
+        const querRemarcar = /\b(remarc|desmarc|cancel|outro hor[áa]rio|outro dia|mudar|trocar|adiar|antecipar|n[ãa]o (vou )?(poss|conseg|d[áa]))/i.test(String(ultimaMsg || ''));
+        if (querRemarcar) return await ofertar(false);
+        const quando = lead.calendly_event_at ? rotularSlotBRT(new Date(lead.calendly_event_at)) : 'no horário combinado';
+        const linkTxt = lead.gcal_meet_link ? ' O link da reunião já está aqui em cima 😊' : '';
+        return ok(`Nossa conversa já está agendada pra ${quando}, aqui mesmo no WhatsApp.${linkTxt} Qualquer coisa é só me chamar! 🙌`);
+    }
 
     // ── FASE CONFIRMAÇÃO: já há slots propostos, o lead está respondendo ──
     if (temSlots) {
@@ -4658,6 +4714,20 @@ if (funilEncerrado) {
         const primeiroContato = !historico.some(m => m.role === 'assistant');
 
         const ultimaMsg = historico[historico.length - 1].content;
+
+        // 🧑 CAPTURA DE NOME (geral, não só no agendamento): se ainda não temos um nome de PESSOA
+        // (dono vazio ou nome de empresa) e o lead declarou um agora ("meu nome é...", "sou o..."),
+        // salva em dono/name. Assim a IA passa a tratar pelo primeiro nome no resto da conversa.
+        if (!extrairNomeHumano(lead.dono)) {
+            const nmDecl = extrairNomeDeclarado(ultimaMsg);
+            if (nmDecl && extrairNomeHumano(nmDecl)) {
+                const patch = { dono: nmDecl };
+                if (!extrairNomeHumano(lead.name)) patch.name = nmDecl; // só sobrescreve name se tb não era pessoa
+                await supabase.from('leads').update(patch).eq('id', lead.id).then(() => {}, () => {});
+                lead.dono = nmDecl;
+                console.log(`🧑 [NOME] Nome declarado capturado: ${nmDecl} (lead ${String(lead.id).slice(0, 8)})`);
+            }
+        }
 
         // 📅 HOOK DE CONFIRMAÇÃO DE REUNIÃO: se esse lead recebeu um pedido de confirmação hoje,
         // interpretamos a resposta (✅/❌) e NÃO rodamos o funil de venda. 'indefinido' segue normal.
