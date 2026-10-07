@@ -46,6 +46,7 @@ const intelAgent = require('./agents/intelAgent'); //
 const profilerAgent = require('./agents/profilerAgent'); // identifica o perfil do lead 
 const objectionAgent = require('./agents/objectionAgent'); // esse agente assume o controle quando o router identifica objeção 
 const auditorAgent = require('./agents/auditorAgent'); // faz auditoria das conversas como um 'juiz'
+const supervisorAgent = require('./agents/supervisorAgent'); // crítico em tempo real: julga (DeepSeek) → corrige (gpt-oss)
 const handoffAgent = require('./agents/handoffAgent');
 const motoresEmExecucao = new Set(); // 🛡️ Impede que o mesmo chip ligue dois loops infinitos
 const { useRedisAuthState, clearRedisSession, saveOwnerToRedis, getOwnerFromRedis } = require('./auth_redis_adapter');
@@ -5108,6 +5109,29 @@ if (bookingAtivo && typeof resposta === 'string') {
         }
     }
 }
+
+        // 🧑‍⚖️ SUPERVISOR (crítico em tempo real): o DeepSeek JULGA o rascunho; se achar problema
+        // grave, o gpt-oss REESCREVE corrigindo só aquilo. O modelo fraco nunca escreve o texto
+        // final (não polui). Gate: pula saudações/acks triviais pra não gastar à toa. Fail-open:
+        // qualquer erro → segue com o rascunho original. Liga/desliga via SUPERVISOR_ATIVO.
+        if (process.env.SUPERVISOR_ATIVO !== 'false' && typeof resposta === 'string') {
+            const _txt = resposta.trim();
+            const _trivial = _txt.length < 25 && !/[?]/.test(_txt) && !/https?:\/\//.test(_txt);
+            if (!_trivial) {
+                const _crit = await supervisorAgent.revisar({ historico, lead, draft: resposta, primeiroContato })
+                    .catch(() => ({ ok: true, problemas: [] }));
+                if (!_crit.ok && _crit.problemas.length) {
+                    const _corr = await supervisorAgent.corrigir({ draft: resposta, problemas: _crit.problemas, historico, promptBase: promptResolvido })
+                        .catch(() => null);
+                    if (_corr) {
+                        console.log(`🧑‍⚖️ [SUPERVISOR] Corrigiu [${_crit.problemas.join(', ')}] para ${lead.name}.`);
+                        resposta = _corr;
+                    } else {
+                        console.log(`🧑‍⚖️ [SUPERVISOR] Apontou [${_crit.problemas.join(', ')}] mas não conseguiu reescrever — mantendo rascunho.`);
+                    }
+                }
+            }
+        }
 
         // 4.3. Filtra, Carimba no WPP e Envia (instancia?.sock: oficial não tem socket → null, envio vai por HTTP)
         await filtrarEEnviarResposta(instancia?.sock, remoteJid, resposta, historico, lead, instanceId, instanceData?.tts_voice || null);
