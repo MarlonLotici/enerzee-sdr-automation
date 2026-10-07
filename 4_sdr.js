@@ -2889,7 +2889,11 @@ if (fromMe) {
     }
 
     // --- 4. LÓGICA DE RESPOSTA IA (COMPORTAMENTO NA PAUSA) ---
-    if (lead.is_paused) {
+    // 🤝 CONCIERGE: lead AGENDADO (sem pausa manual humana) NÃO entra na lógica de "despertador"
+    // (que é pra pausa manual) — ele deve responder sempre que escreve. Deixa seguir pro fluxo normal
+    // (a msg é salva no enqueue). Cobre booked legado com is_paused=true; novos já nascem is_paused=false.
+    const _bookedResponde = lead.is_paused && lead.status === 'booked' && !lead.manual_pause;
+    if (lead.is_paused && !_bookedResponde) {
         if (texto && messageType !== 'audioMessage') {
             await db.saveMessage(lead.whatsapp_id, 'user', texto, instanceId);
             const intencaoDespertador = analisarIntencaoRegex(texto);
@@ -4598,7 +4602,10 @@ async function orquestrarAgendamento(lead, ultimaMsg, instanceData, userId, inte
         if (!ev?.eventId) throw new Error('Google não retornou eventId');
         const remarcou = !!lead.gcal_event_id;
         await supabase.from('leads').update({
-            status: 'booked', calendly_booked: true, current_stage: 5, is_paused: true,
+            // is_paused=false: o lead continua RESPONSIVO (modo concierge trata) após agendar. O
+            // disparo proativo NÃO volta por causa disso — o VIGIA/fila filtram por status='contact',
+            // e booked nunca é cutucado. Antes era true e silenciava o pós-venda via inbound.
+            status: 'booked', calendly_booked: true, current_stage: 5, is_paused: false,
             gcal_event_id: ev.eventId, gcal_meet_link: ev.meetLink || null,
             calendly_event_at: slot.inicioISO, slots_propostos: null, slot_calendar_id: null,
             reminder_sent: null, lembrete_1h_enviado: false, reminder_10m_sent: false,
