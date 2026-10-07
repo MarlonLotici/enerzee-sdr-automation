@@ -545,10 +545,15 @@ if (session?.user?.id) checkBriefing()
         }
 
         const fetchMessages = async () => {
+            // Isola por TENANT: o mesmo whatsapp_id pode existir em 2 contas (numero testado em
+            // chips de clientes diferentes). Sem user_id a conversa misturaria msgs do outro tenant.
+            const { data: { session: _s } } = await supabase.auth.getSession();
+            const _uid = _s?.user?.id;
             const { data, error } = await supabase
                 .from('messages')
                 .select('*')
                 .eq('whatsapp_id', activeChat.whatsapp_id)
+                .eq('user_id', _uid)
                 .order('created_at', { ascending: true }); // Mais antigas em cima, mais novas embaixo
 
             if (data && !error) {
@@ -885,7 +890,7 @@ if (session?.user?.id) checkBriefing()
                 body: JSON.stringify({ instanceId: activeChat.instance_id, whatsappId: activeChat.whatsapp_id, text }),
             });
             if (res.ok) {
-                const { data: msgs } = await supabase.from('messages').select('*').eq('whatsapp_id', activeChat.whatsapp_id).order('created_at', { ascending: true });
+                const { data: msgs } = await supabase.from('messages').select('*').eq('whatsapp_id', activeChat.whatsapp_id).eq('user_id', s?.user?.id).order('created_at', { ascending: true });
                 if (msgs) setChatMessages(msgs);
                 setTimeout(() => chatEndRef.current?.scrollIntoView({ behavior: 'smooth' }), 100);
             } else {

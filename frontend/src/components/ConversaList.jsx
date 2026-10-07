@@ -366,7 +366,9 @@ export default function ConversaList({ onSelect, activeId, socket, instances = [
            const { data: leads, error } = await supabase
     .from('leads')
     .select('id, name, whatsapp_id, status, is_paused, manual_pause, last_contact_at, created_at, instance_id, dono, niche, bairro, phone, cnpj, capital_social_numeric, porte, current_stage, lead_temperature, internal_notes, followup_count, link_sent_at, calendly_booked')
-    .in('status', ['contact', 'waiting_analysis'])
+    // 'booked'/'closed' incluídos: ao agendar/fechar, a conversa NÃO pode sumir da aba — você ainda
+    // precisa falar com quem já marcou (confirmar, remarcar, tirar dúvida). Antes só contact/waiting.
+    .in('status', ['contact', 'waiting_analysis', 'booked', 'closed'])
     .eq('user_id', userId)
     .order('last_contact_at', { ascending: false })
     .limit(300)
@@ -378,12 +380,14 @@ export default function ConversaList({ onSelect, activeId, socket, instances = [
 
             const comUltimaMsg = await Promise.all(
                 leads.map(async lead => {
-                    // Preview por whatsapp_id só (unívoco — nenhum número se repete entre leads).
-                    // Sem .eq('instance_id') porque leads órfãos têm instance_id=null e .eq(col,null) não casa.
+                    // Preview isolado por TENANT: o mesmo número pode existir em 2 contas (ex.: testado
+                    // no chip do Foz e no da Sofia). Sem .eq('user_id') o preview puxaria a última msg
+                    // do OUTRO tenant. (Não uso instance_id: lead órfão tem instance_id=null.)
                     const { data: msgs } = await supabase
                         .from('messages')
                         .select('role, content, created_at')
                         .eq('whatsapp_id', lead.whatsapp_id)
+                        .eq('user_id', userId)
                         .order('created_at', { ascending: false })
                         .limit(1)
 
