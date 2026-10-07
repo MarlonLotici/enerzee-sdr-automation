@@ -4614,7 +4614,7 @@ async function orquestrarAgendamento(lead, ultimaMsg, instanceData, userId, inte
         const abre = ocupadoAntes
             ? _variar(['Esse já tá tomado 😕 mas sem problema! ', 'Nesse eu já tenho um compromisso, mas relaxa que a gente encaixa. ', 'Esse eu não consigo, mas tenho outras ótimas opções! ', 'Puxa, esse já foi preenchido — mas achei outros horários. '])
             : _variar(['Que bom! ', 'Show! ', 'Massa! ']);
-        return ok(`${abre}${_variar(['Consigo te encaixar', 'Tenho livre', 'Dá pra marcar'])} ${labels(slots)}. ${_variar(['Qual fica melhor?', 'Qual prefere?', 'Qual encaixa melhor aí?'])} 😊`);
+        return ok(`${abre}${_variar(['Consigo te encaixar', 'Tenho livre', 'Dá pra marcar'])} ${labels(slots)} pra ${_variar(['uma conversa rápida com nosso especialista', 'um papo de 15 min com nosso especialista', 'uma call com nosso time pra te mostrar na prática'])}. ${_variar(['Qual fica melhor?', 'Qual prefere?', 'Qual encaixa melhor aí?'])} 😊`);
     };
 
     // ── JÁ AGENDADO e o lead volta ──────────────────────────────────────────

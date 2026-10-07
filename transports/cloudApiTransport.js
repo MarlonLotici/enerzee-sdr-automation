@@ -89,11 +89,16 @@ function normalizarInbound(webhookBody) {
         if (!msg) return null; // pode ser um evento de status (sent/delivered/read), não mensagem
         const contato = value?.contacts?.[0];
         const tipoMeta = msg.type;
+        // Reação (👍 etc.): a Cloud API manda type:'reaction' com o emoji. Vira texto pra IA
+        // interpretar no contexto (ex.: 👍 depois de "faz sentido marcar?" = sim) — antes caía em
+        // "sem texto" e era ignorada.
+        const reacao = msg.reaction?.emoji ? `(o lead reagiu com ${msg.reaction.emoji})` : '';
         const texto = msg.text?.body
             || msg.button?.text
             || msg.interactive?.button_reply?.title
             || msg.interactive?.list_reply?.title
-            || msg.audio?.caption || msg.image?.caption || msg.video?.caption || '';
+            || msg.audio?.caption || msg.image?.caption || msg.video?.caption
+            || reacao || '';
         // Mídia: a Cloud API entrega só um ID; o conteúdo é baixado à parte (ver baixarMidia).
         const midia = msg.audio || msg.voice || msg.video || msg.image || msg.document || null;
         return {
