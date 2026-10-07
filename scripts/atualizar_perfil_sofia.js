@@ -12,10 +12,13 @@ const GRAPH = 'https://graph.facebook.com/v25.0';
 const img = process.argv[2];
 
 const PERFIL = {
-  about: 'Sofia, IA da Antix. Atendo 24h pelo WhatsApp.', // máx. 139 caracteres
+  about: 'Sofia, IA da Antix. Atendo 24h pelo WhatsApp 🤖', // máx. 139 caracteres
   description:
-    'Sofia, assistente de IA da Antix. Qualifico leads e agendo reuniões pelo WhatsApp, 24h por dia.',
-  websites: ['https://antix-ia.com'],
+    'Sofia, assistente de IA da Antix. Atendo, qualifico e agendo reuniões pelo WhatsApp 24h por dia — sua empresa nunca mais perde um lead por demora.',
+  email: 'atx@antix-colony.com',
+  address: 'Florianópolis - SC, Brasil',
+  // A Cloud API aceita ATÉ 2 sites. Instagram entra como 2º link (URL limpa, sem tracking).
+  websites: ['https://antix-ia.com', 'https://www.instagram.com/antix_ia'],
   vertical: 'PROF_SERVICES',
 };
 
