@@ -283,7 +283,7 @@ const { calcularBackoffReconexao } = require('./lib/reconexao');
 // 🚫 Travas de qualidade da resposta no chat do site (puras, testáveis) — lib/webGuardrails.js.
 const { stripWeb, enxugarWeb } = require('./lib/webGuardrails');
 // 📅 Decisão pura de agendamento (não agenda com "oi") — lib/agendaDecisao.js.
-const { deveProporAgendamento, aceitouConviteDeReuniao } = require('./lib/agendaDecisao');
+const { deveProporAgendamento, aceitouConviteDeReuniao, ehSaudacaoPura } = require('./lib/agendaDecisao');
 
 // ============================================================================
 // 🗄️ PERSISTÊNCIA DA GAVETA (nunca perder inbound num restart/deploy)
@@ -3894,6 +3894,12 @@ async function loopRecuperacaoConversas() {
         // ====================================================================
         // Filtra apenas leads dos chips atualmente ativos — isolamento entre tenants
         const chipsAtivos = [...sessions.keys()];
+        // Chips OFICIAIS (Cloud API) não têm sessão Baileys, mas precisam entrar aqui pra os
+        // LEMBRETES de reunião (1h/10min) rodarem — senão o loop os ignora e o lembrete nunca sai.
+        try {
+            const { data: _ofs } = await supabase.from('instances').select('id').eq('whatsapp_provider', 'official');
+            for (const _o of (_ofs || [])) if (!chipsAtivos.includes(_o.id)) chipsAtivos.push(_o.id);
+        } catch (_) {}
         if (chipsAtivos.length === 0) return;
 
         const { data: leadsAtivos } = await supabase
@@ -4617,9 +4623,16 @@ async function orquestrarAgendamento(lead, ultimaMsg, instanceData, userId, inte
     if (jaAgendado && !temSlots) {
         const querRemarcar = /\b(remarc|desmarc|cancel|outro hor[áa]rio|outro dia|mudar|trocar|adiar|antecipar|n[ãa]o (vou )?(poss|conseg|d[áa]))/i.test(String(ultimaMsg || ''));
         if (querRemarcar) return await ofertar(false);
-        const quando = lead.calendly_event_at ? rotularSlotBRT(new Date(lead.calendly_event_at)) : 'no horário combinado';
-        const linkTxt = lead.gcal_meet_link ? ' O link da reunião já está aqui em cima 😊' : '';
-        return ok(`Nossa conversa já está agendada pra ${quando}, aqui mesmo no WhatsApp.${linkTxt} Qualquer coisa é só me chamar! 🙌`);
+        // Saudação/mensagem curta pós-agendamento (ex.: "oi") → quase sempre é dúvida sobre a
+        // reunião. Acolhe e OFERECE ajuda (não reoferece horário nem dá stall). Pergunta aberta.
+        if (ehSaudacaoPura(ultimaMsg) || String(ultimaMsg || '').trim().length < 15) {
+            const _nome = saudacaoPrimeiroNome(lead.dono, '');
+            const quando = lead.calendly_event_at ? rotularSlotBRT(new Date(lead.calendly_event_at)) : 'no horário combinado';
+            return ok(`Oi${_nome ? ' ' + _nome : ''}! 😊 Tá tudo certo pra nossa conversa ${quando}. Tem alguma dúvida ou posso te ajudar em algo até lá?`);
+        }
+        // Mensagem com conteúdo real (dúvida/pergunta) → deixa o fluxo normal responder NO CONTEXTO
+        // (o closer responde a dúvida; não reoferece horário porque já está agendado).
+        return { tratado: false, bookingAtivo: true, agendaConectada };
     }
 
     // ── FASE CONFIRMAÇÃO: já há slots propostos, o lead está respondendo ──
