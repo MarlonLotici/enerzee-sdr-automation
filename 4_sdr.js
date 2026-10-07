@@ -95,8 +95,12 @@ const MAPA_DESCONTO_REGIONAL = {
 };
 
 // 🎯 FIX #11: Contexto por nicho — injeta vocabulário do setor no prompt
-function gerarContextoNicho(niche) {
+function gerarContextoNicho(niche, productType = 'solar') {
     if (!niche) return '';
+    // ⚡ Este contexto é TODO sobre consumo de ENERGIA (herança da Enerzee/solar). Pra tenants
+    // não-solar (Antix, genérico) ele é ruído — faria a Sofia falar de "ar condicionado/freezer"
+    // ao vender IA de atendimento. Só injeta pra product_type='solar'.
+    if (productType !== 'solar') return '';
     const n = niche.toLowerCase();
     if (n.includes('restaurante') || n.includes('alimenta') || n.includes('padaria') || n.includes('lanchonete'))
         return '\nCONTEXTO DE NICHO: Empresa do ramo alimentício. Mencione custos de câmara fria, forno elétrico, coifa. Use "o gasto com energia na cozinha industrial".';
@@ -1076,7 +1080,7 @@ const concessionariaLocal = (MAPA_CONCESSIONARIAS[contextoLead.estado] || 'conce
     const economiaAnualFormatada = `R$ ${economiaAnual.toLocaleString('pt-BR')}`;
     if (valorRealDaConta) console.log(`💡 [ECONOMIA REAL] Lead informou conta de R$${valorRealDaConta} → economia ${percentualTexto}%: ${economiaMensalFormatada}/mês, ${economiaAnualFormatada}/ano`);
     
-    const nicheContext = gerarContextoNicho(contextoLead.niche); // mantido para compat com ${nicheContext} no promptBase
+    const nicheContext = gerarContextoNicho(contextoLead.niche, instanceData?.product_type); // energia só p/ solar; outros tenants → vazio
     const estagioAtual = String(contextoLead.current_stage || 0);
 
     // --- 4. Reversão de objeção ---
