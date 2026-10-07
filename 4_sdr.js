@@ -278,7 +278,7 @@ const { calcularBackoffReconexao } = require('./lib/reconexao');
 // 🚫 Travas de qualidade da resposta no chat do site (puras, testáveis) — lib/webGuardrails.js.
 const { stripWeb, enxugarWeb } = require('./lib/webGuardrails');
 // 📅 Decisão pura de agendamento (não agenda com "oi") — lib/agendaDecisao.js.
-const { deveProporAgendamento } = require('./lib/agendaDecisao');
+const { deveProporAgendamento, aceitouConviteDeReuniao } = require('./lib/agendaDecisao');
 
 // ============================================================================
 // 🗄️ PERSISTÊNCIA DA GAVETA (nunca perder inbound num restart/deploy)
@@ -1231,7 +1231,20 @@ Você não tem o nome da PESSOA (o perfil do WhatsApp veio vazio ou é nome de e
     // Sem seções hardcoded: só o prompt do próprio tenant (com variáveis resolvidas) + o guard
     // universal de acolhida no 1º contato + a regra anti-invenção (essas duas não são "regra de
     // negócio" de nenhum tenant — são comportamento de qualidade que vale pra qualquer um).
-    return constituicaoResolvida + secaoAcolhidaInbound + secaoPerguntarNome + REGRA_ANTI_INVENCAO;
+    // 🧭 ESPINHA DORSAL DO SDR — ordem fixa da conversa (boas-vindas→SPIN→solução→convite→horário).
+    // Vale pra todos os tenants: evita o rushing (pular rapport/qualificação e já propor horário) e
+    // reforça que CADA resposta tem que ter a ver com o que o lead acabou de dizer (coerência).
+    const REGRA_ROTEIRO = `
+
+[ROTEIRO — ESPINHA DORSAL DA CONVERSA (siga nesta ordem, NÃO pule etapas)]
+1. BOAS-VINDAS + RAPPORT: cumprimente, seja humano, crie conexão. Se não souber o nome da pessoa, pergunte.
+2. SPIN — DESCOBRIR A NECESSIDADE REAL: uma pergunta por vez, entenda a situação e principalmente a DOR/necessidade de verdade do lead hoje. Não avance sem entender o que ele realmente precisa.
+3. EXPLICAR A SOLUÇÃO para AQUELA dor específica (conecte o que você faz ao que ELE disse — nada genérico).
+4. CONVIDAR: pergunte se faz sentido uma conversa/reunião rápida pra mostrar na prática.
+5. PROPOR HORÁRIO: APENAS depois que ele topar o convite (ou pedir explicitamente pra marcar). NUNCA proponha horário porque o lead só respondeu uma pergunta de qualificação.
+REGRA DE OURO: cada resposta sua PRECISA ter a ver com o que o lead ACABOU de dizer. Se ele perguntar algo ou mudar de assunto, responda AQUILO primeiro, depois retome o roteiro. Entenda a real intenção dele antes de conduzir.`;
+
+    return constituicaoResolvida + secaoAcolhidaInbound + secaoPerguntarNome + REGRA_ROTEIRO + REGRA_ANTI_INVENCAO;
 }
 // ============================================================================
 // 🧠 NÚCLEO IA: "THE ARCHITECT" - STATE OF THE ART SDR V3.0 (MULTI-TENANT REAL)
@@ -4494,7 +4507,7 @@ function _montarSlotNoDia(baseISO, h, min, duracaoMin) {
     };
 }
 
-async function orquestrarAgendamento(lead, ultimaMsg, instanceData, userId, intencao) {
+async function orquestrarAgendamento(lead, ultimaMsg, instanceData, userId, intencao, historico = []) {
     // Carrega a config de booking SEMPRE (mesmo quando não vamos agendar): o worker precisa
     // saber se o booking está ativo (e se há agenda conectada) pra o closer NÃO mandar Calendly.
     const { data: cfg } = await supabase.from('calendar_connections')
@@ -4511,7 +4524,8 @@ async function orquestrarAgendamento(lead, ultimaMsg, instanceData, userId, inte
     // Mata também a promessa vazia "vou verificar e te retorno" (estágio>=4 sem slots → propõe agora).
     // Se JÁ está agendado, não sai cedo: cai no bloco de "já agendado" abaixo (confirma/remarca),
     // em vez de deixar o closer ecoar horários antigos do histórico (bug da inconsistência).
-    if (!jaAgendado && !deveProporAgendamento({ texto: ultimaMsg, intencao, currentStage: lead.current_stage, temSlots }))
+    const aceitouConvite = aceitouConviteDeReuniao(historico, ultimaMsg);
+    if (!jaAgendado && !deveProporAgendamento({ texto: ultimaMsg, intencao, currentStage: lead.current_stage, temSlots, aceitouConvite }))
         return { tratado: false, bookingAtivo: true, agendaConectada };
 
     const calId = cfg.booking_calendar_id || cfg.calendar_id || 'primary';
@@ -4819,7 +4833,7 @@ if (!userId) {
 let bookingAtivo = false;
 let agendaConectada = false;
 {
-    const agend = await orquestrarAgendamento(lead, ultimaMsg, instanceData, userId, intencao).catch((e) => {
+    const agend = await orquestrarAgendamento(lead, ultimaMsg, instanceData, userId, intencao, historico).catch((e) => {
         console.error(`❌ [AGENDAMENTO] Orquestração falhou para ${lead.name}:`, e.message);
         return { tratado: false };
     });
@@ -5101,7 +5115,7 @@ if (bookingAtivo && typeof resposta === 'string') {
     const semSlots  = !(Array.isArray(lead.slots_propostos) && lead.slots_propostos.length);
     const naoBooked = lead.status !== 'booked';
     if (deuStallDeAgenda && semSlots && naoBooked) {
-        const _ag = await orquestrarAgendamento(lead, ultimaMsg, instanceData, userId, 'COMPRA')
+        const _ag = await orquestrarAgendamento(lead, ultimaMsg, instanceData, userId, 'COMPRA', historico)
             .catch(e => { console.error(`❌ [AGENDA-STALL-FIX] ${e.message}`); return null; });
         if (_ag?.tratado && _ag.resposta) {
             console.log(`🩹 [AGENDA-STALL-FIX] Closer deu stall sem proposta — substituindo pelos horários reais.`);
@@ -6049,7 +6063,7 @@ module.exports = {
 
         // 📅 AGENDAMENTO REAL: a Sofia consulta a Google Agenda da Antix e propõe/cria horários
         // REAIS — igual ao WhatsApp (nada de link falso). Só dispara quando há intenção de marcar.
-        const agend = await orquestrarAgendamento(lead, texto, instanceData, USER_ID, intencao).catch(() => ({ tratado: false }));
+        const agend = await orquestrarAgendamento(lead, texto, instanceData, USER_ID, intencao, historico).catch(() => ({ tratado: false }));
         if (agend?.tratado && agend.resposta) {
             const rA = stripWeb(agend.resposta) || 'Deixa eu ver os horários certinho aqui e já te falo 🙌';
             await db.saveMessage(waId, 'assistant', rA, null, USER_ID, 'web').catch(() => {});

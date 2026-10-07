@@ -49,6 +49,9 @@ RASCUNHO DA IA (a avaliar):
 """${String(draft).slice(0, 900)}"""
 
 PROBLEMAS A DETECTAR (use estas chaves exatas em "problemas"):
+- "contexto_incoerente": [MAIS IMPORTANTE] a resposta NÃO tem a ver com o que o lead ACABOU de dizer — ignora a pergunta/assunto dele ou responde outra coisa. A resposta tem que conversar com a última mensagem do lead.
+- "nao_explora_necessidade": a real dor/necessidade do lead ainda NÃO está clara e a resposta não avança nessa descoberta (deixou de fazer a pergunta de SPIN que revelaria o que ele realmente precisa).
+- "pulou_etapa": furou a ordem do roteiro (boas-vindas/rapport → SPIN → explicar solução → convidar p/ reunião → propor horário). Ex.: foi direto pra qualificação dura no 1º contato, ou propôs horário sem ter convidado e o lead topado.
 - "agendou_cedo": ofereceu/empurrou horário sem qualificação suficiente, ou o lead NÃO demonstrou interesse claro em marcar (ex.: só respondeu uma pergunta de qualificação).
 - "pulou_acolhida": é primeiro contato e a IA já disparou qualificação dura, sem acolher/entender o motivo.
 - "nao_pediu_nome": não sabemos o nome e a IA tinha espaço pra perguntar "como posso te chamar?" e não perguntou (nem usou o nome porque não tem).
@@ -59,15 +62,20 @@ PROBLEMAS A DETECTAR (use estas chaves exatas em "problemas"):
 - "inconsistente": contradiz o estado (ex.: já agendado e reoferece horário; repete "vou ver os horários" já ditos).
 - "robotico": tom de robô cordial ("tranquilo!", "compreendo!", "estou à disposição") ou fora da persona.
 
+Antes de decidir, raciocine em 1 linha qual é a REAL intenção/necessidade do lead agora (campo "intencao_real").
 Responda SOMENTE um JSON:
-{"ok": true|false, "problemas": ["chave1","chave2"]}
-"ok" = true e "problemas":[] quando o rascunho está adequado. "ok" = false quando houver pelo menos um problema grave.`;
+{"intencao_real": "...", "ok": true|false, "problemas": ["chave1","chave2"]}
+"ok" = true e "problemas":[] quando o rascunho está adequado (coerente com o lead e no passo certo do roteiro). "ok" = false quando houver pelo menos um problema grave.`;
 
-        const raw = (await chamarLLM({ messages: [{ role: 'user', content: prompt }], model: MODELOS.rapido, maxTokens: 220 }) || '').trim();
+        // Juiz = modelo rápido por padrão (classificação barata). SUPERVISOR_MODELO=cerebro sobe o
+        // poder de análise (pega incoerência de contexto mais sutil) ao custo de + latência/token.
+        const modeloJuiz = process.env.SUPERVISOR_MODELO === 'cerebro' ? MODELOS.cerebro : MODELOS.rapido;
+        const raw = (await chamarLLM({ messages: [{ role: 'user', content: prompt }], model: modeloJuiz, maxTokens: 260 }) || '').trim();
         const parsed = _parseJsonRobusto(raw);
         if (!parsed || typeof parsed.ok !== 'boolean') return { ok: true, problemas: [] }; // fail-open
         const problemas = Array.isArray(parsed.problemas) ? parsed.problemas.filter(p => typeof p === 'string') : [];
-        return { ok: parsed.ok && problemas.length === 0, problemas };
+        if (parsed.intencao_real) console.log(`🧑‍⚖️ [SUPERVISOR] Intenção real do lead: ${String(parsed.intencao_real).slice(0, 120)}`);
+        return { ok: parsed.ok && problemas.length === 0, problemas, intencaoReal: parsed.intencao_real || null };
     } catch (e) {
         console.error('❌ [SUPERVISOR] revisar falhou (fail-open):', e.message);
         return { ok: true, problemas: [] };
@@ -76,6 +84,9 @@ Responda SOMENTE um JSON:
 
 // Dicas de reescrita por problema → instrução concreta pro modelo forte corrigir.
 const _DICAS = {
+    contexto_incoerente:  'Responda ao que o lead ACABOU de dizer — foque na mensagem dele, não mude de assunto. A resposta tem que conversar com a última fala dele.',
+    nao_explora_necessidade:'Faça UMA pergunta de SPIN pra entender a real dor/necessidade do lead (o que ele precisa resolver hoje), antes de seguir. Nada de propor solução/horário ainda.',
+    pulou_etapa:          'Respeite a ordem: rapport → descobrir a necessidade (SPIN) → explicar a solução → convidar pra reunião → só então horário. Volte pra etapa que foi pulada.',
     agendou_cedo:      'NÃO ofereça horário agora. Volte a qualificar/entender o lead com UMA pergunta aberta. Nada de propor reunião.',
     pulou_acolhida:    'É primeiro contato: acolha em 1 frase (quem você é + o que a empresa faz), demonstre curiosidade pelo motivo do contato. NÃO dispare qualificação dura ainda.',
     nao_pediu_nome:    'Pergunte de forma leve como pode chamar a pessoa ("ah, como posso te chamar?") — só isso de pergunta.',

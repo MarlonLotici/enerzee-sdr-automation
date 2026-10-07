@@ -1,7 +1,7 @@
 'use strict';
 const test = require('node:test');
 const assert = require('node:assert/strict');
-const { querAgendar, ehSaudacaoPura, deveProporAgendamento } = require('../lib/agendaDecisao');
+const { querAgendar, ehSaudacaoPura, deveProporAgendamento, aceitouConviteDeReuniao, ehAfirmativo } = require('../lib/agendaDecisao');
 
 // ── ehSaudacaoPura ─────────────────────────────────────────────────────────────
 test('ehSaudacaoPura: reconhece cumprimentos puros', () => {
@@ -58,4 +58,37 @@ test('AGENDA no estágio>=4 com mensagem real (não-saudação) — mata "vou ve
 test('defaults seguros: sem argumentos → não agenda', () => {
     assert.equal(deveProporAgendamento(), false);
     assert.equal(deveProporAgendamento({}), false);
+});
+
+// ── BACKBONE: não propor horário quando o lead só respondeu uma qualificação ────
+test('NÃO agenda quando o lead só responde uma pergunta de qualificação (bug "30 minutos")', () => {
+    // Estágio alto NÃO basta: sem sinal real de agendar, não propõe.
+    assert.equal(deveProporAgendamento({ texto: '30 minutos', intencao: 'DUVIDA', currentStage: 4, temSlots: false }), false);
+    assert.equal(deveProporAgendamento({ texto: 'eu já recebo clientes', intencao: 'CONTINUAR', currentStage: 4, temSlots: false }), false);
+    assert.equal(deveProporAgendamento({ texto: 'por wpp', intencao: 'DUVIDA', currentStage: 5, temSlots: false }), false);
+});
+
+test('AGENDA quando a IA convidou pra reunião e o lead topou (aceitouConvite + afirmativo)', () => {
+    assert.equal(deveProporAgendamento({ texto: 'sim, faz sentido', intencao: 'DUVIDA', currentStage: 3, temSlots: false, aceitouConvite: true }), true);
+    assert.equal(deveProporAgendamento({ texto: 'bora', intencao: 'CONTINUAR', currentStage: 3, temSlots: false, aceitouConvite: true }), true);
+});
+
+test('NÃO agenda com "sim" se a IA NÃO tinha convidado pra reunião', () => {
+    assert.equal(deveProporAgendamento({ texto: 'sim', intencao: 'DUVIDA', currentStage: 3, temSlots: false, aceitouConvite: false }), false);
+});
+
+test('aceitouConviteDeReuniao: detecta convite anterior + aceite', () => {
+    const histComConvite = [
+        { role: 'user', content: 'to vendo sim' },
+        { role: 'assistant', content: 'faz sentido a gente marcar uma call rápida de 15 min pra te mostrar?' },
+    ];
+    assert.equal(aceitouConviteDeReuniao(histComConvite, 'sim, bora'), true);
+    assert.equal(aceitouConviteDeReuniao(histComConvite, 'ainda não sei'), false); // não é afirmativo
+    const histSemConvite = [{ role: 'assistant', content: 'e quantos leads vocês recebem por mês?' }];
+    assert.equal(aceitouConviteDeReuniao(histSemConvite, 'sim'), false); // não houve convite
+});
+
+test('ehAfirmativo: pega aceites curtos e ignora negativas/dúvidas', () => {
+    for (const s of ['sim', 'bora', 'pode ser', 'quero', 'faz sentido', 'perfeito', 'fechado']) assert.ok(ehAfirmativo(s), `"${s}"`);
+    for (const s of ['não', 'talvez', 'depois eu vejo', 'quanto custa?']) assert.ok(!ehAfirmativo(s), `"${s}"`);
 });
