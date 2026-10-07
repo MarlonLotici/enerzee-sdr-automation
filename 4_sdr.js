@@ -42,6 +42,7 @@ const { gerarAudioTTS } = require('./ttsElevenLabs');
 const { createClient } = require('@supabase/supabase-js');
 const routerAgent = require('./agents/routerAgent'); // faz a distribuição entre os agentes dependendo da necessidade 
 const closerAgent = require('./agents/closerAgent'); //é o closer que assume a conversa
+const conciergeAgent = require('./agents/conciergeAgent'); // modo pós-agendamento: cuida de quem já marcou (não vende)
 const intelAgent = require('./agents/intelAgent'); // 
 const profilerAgent = require('./agents/profilerAgent'); // identifica o perfil do lead 
 const objectionAgent = require('./agents/objectionAgent'); // esse agente assume o controle quando o router identifica objeção 
@@ -2709,9 +2710,16 @@ if (fromMe) {
             return;
         }
 
-        if (lead.is_paused) {
+        // 🤝 EXCEÇÃO CONCIERGE: lead AGENDADO fica is_paused=true (pra não entrar em disparo proativo),
+        // mas precisa continuar RESPONDENDO quando ELE escreve (confirmar/remarcar/cancelar/dúvida).
+        // Então booked auto-pausado (sem intervenção humana) passa; pausa MANUAL de humano é respeitada.
+        const _bookedAutoPausado = lead.status === 'booked' && lead.is_paused && !lead.manual_pause;
+        if (lead.is_paused && !_bookedAutoPausado) {
             console.log(`⏸️ [TRAVA HUMANA] A IA ignorou ${lead.name} porque o lead está pausado no banco (is_paused = true).`);
             return;
+        }
+        if (_bookedAutoPausado) {
+            console.log(`🤝 [CONCIERGE] ${lead.name} agendado (pausado p/ proativo) — mas respondendo porque ELE escreveu.`);
         }
 
         // 🧟 GUARD: flood de mensagens idênticas antes do is_paused propagar no banco
@@ -4642,7 +4650,30 @@ async function orquestrarAgendamento(lead, ultimaMsg, instanceData, userId, inte
         // sem despejar horário.
         const querCancelar = /\b(cancel\w*|desmarc\w*|desist\w*|n[ãa]o\s+(vou\s+)?(mais|quero)\b|n[ãa]o\s+vou\s+(poder|conseguir))/i.test(_txt);
         const querRemarcar = /\b(remarc\w*|outro\s+hor[áa]rio|outro\s+dia|mudar|trocar|adiar|antecipar|mais\s+(cedo|tarde)|n[ãa]o\s+(vou\s+)?(poss|conseg|d[áa]))/i.test(_txt);
-        if (querCancelar && !querRemarcar) {
+        // Confirmação EXPLÍCITA de cancelar (passo 2) — só aqui a reunião é apagada de verdade.
+        // Inclui "de vez" (resposta curta à pergunta "cancelar de vez ou remarcar?"), exceto "de vez
+        // em quando". A condição abaixo usa (querCancelar || cancelConfirmado) pra pegar esse "de vez"
+        // solto, que sozinho não tem palavra de cancelamento.
+        const cancelConfirmado = /\b(de\s+vez(?!\s+em\s+quando)|pode\s+(cancelar|desmarcar)|cancela(r)?\s+(mesmo|sim|isso|por\s+favor|de\s+vez)|quero\s+cancelar\s+mesmo|confirmo\s+(o\s+)?cancel|sim[,.\s]+(pode\s+)?cancel)/i.test(_txt);
+        // Apaga o evento na Google Agenda + libera o lead. Avisa que pode remarcar quando quiser.
+        const efetivarCancelamento = async () => {
+            const _nome = saudacaoPrimeiroNome(lead.dono, '');
+            const quando = lead.calendly_event_at ? rotularSlotBRT(new Date(lead.calendly_event_at)) : 'nossa conversa';
+            if (lead.gcal_event_id) {
+                try { await gcal.cancelarEvento(userId, lead.gcal_calendar_id || calId, lead.gcal_event_id); }
+                catch (e) { console.error(`❌ [CANCELAMENTO] Falha ao deletar evento de ${lead.name}:`, e.message); }
+            }
+            await supabase.from('leads').update({
+                status: 'contact', calendly_booked: false, current_stage: 2, is_paused: false, manual_pause: false,
+                gcal_event_id: null, gcal_meet_link: null, calendly_event_at: null, slots_propostos: null, slot_calendar_id: null,
+                reminder_sent: null, lembrete_1h_enviado: false, reminder_10m_sent: false,
+                internal_notes: `Reunião CANCELADA pelo lead (${quando}) em ${new Date().toLocaleString('pt-BR')}.`,
+            }).eq('id', lead.id);
+            console.log(`🗑️ [CANCELAMENTO] ${lead.name}: evento apagado e lead liberado.`);
+            return ok(`Prontinho${_nome ? ', ' + _nome : ''}! Cancelei ${quando}. Se quiser remarcar mais pra frente, é só me chamar. 🙂`);
+        };
+        if ((querCancelar || cancelConfirmado) && !querRemarcar) {
+            if (cancelConfirmado) return await efetivarCancelamento();  // confirmou → apaga de verdade
             const _nome = saudacaoPrimeiroNome(lead.dono, '');
             const quando = lead.calendly_event_at ? rotularSlotBRT(new Date(lead.calendly_event_at)) : 'nossa conversa';
             return ok(`Sem problema${_nome ? ', ' + _nome : ''}! Prefere que eu cancele ${quando} de vez, ou quer remarcar pra um horário que fique melhor pra você? 🙂`);
@@ -5032,6 +5063,17 @@ if (!promptResolvido) {
         internal_notes: `Lead já tem geração solar ativa. Encerrado em ${new Date().toLocaleString('pt-BR')}.`
     }).eq('id', lead.id);
     resposta = 'Entendi! Como vocês já têm geração ativa, a ANEEL não permite acumular dois benefícios. Parabéns pela gestão energética!';
+
+} else if (lead.status === 'booked') {
+    // 🤝 MODO CONCIERGE: lead JÁ agendou = convertido. As ações de agenda (remarcar/cancelar/
+    // confirmar horário) já foram tratadas no orquestrarAgendamento acima; se chegou aqui, é
+    // dúvida/conversa solta → responde SEM vender (não reabre funil, não empurra reunião).
+    console.log(`🤝 [CONCIERGE] ${lead.name} já agendado — modo pós-venda (sem conversão).`);
+    const _quando = lead.calendly_event_at ? rotularSlotBRT(new Date(lead.calendly_event_at)) : null;
+    resposta = await conciergeAgent.gerarRespostaConcierge(historico, lead, promptResolvido, {
+        quando: _quando,
+        instanceType: instanceData?.product_type || 'generico',
+    });
 
 } else if (intencao === 'AGENDA_RETORNO') {
     console.log(`📅 [WORKER-IA] Lead ${lead.name} pediu retorno em horário específico. Gerando confirmação...`);

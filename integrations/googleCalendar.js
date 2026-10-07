@@ -242,6 +242,22 @@ async function remarcarEvento(userId, calendarId, eventId, { inicioISO, fimISO }
     return { eventId: ev.id, htmlLink: ev.htmlLink || null, meetLink };
 }
 
+// Cancela (deleta) um evento da agenda. sendUpdates:'all' → a Google avisa o convidado (lead)
+// por e-mail que a reunião foi cancelada. Idempotente-ish: se o evento já sumiu, trata como ok.
+async function cancelarEvento(userId, calendarId, eventId) {
+    const auth = await _authDoTenant(userId);
+    if (!auth) return false;
+    const cal = google.calendar({ version: 'v3', auth });
+    try {
+        await cal.events.delete({ calendarId: calendarId || 'primary', eventId, sendUpdates: 'all' });
+        return true;
+    } catch (e) {
+        // 404/410 = evento já não existe → considera cancelado (não quebra o fluxo).
+        if (e?.code === 404 || e?.code === 410) return true;
+        throw e;
+    }
+}
+
 // Reescreve o emoji de status no título do evento (✅/❌/❓). Idempotente.
 async function atualizarEmojiTitulo(userId, calendarId, eventId, emoji) {
     const auth = await _authDoTenant(userId);
@@ -264,6 +280,7 @@ module.exports = {
     criarEvento,
     verificarLivre,
     remarcarEvento,
+    cancelarEvento,
     atualizarEmojiTitulo,
     assinarState,
     verificarState,
