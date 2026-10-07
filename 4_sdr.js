@@ -244,6 +244,7 @@ const instanciasDeletadas = new Set(); // chips removidos pelo painel — bloque
 const instanciasEmResetManual = new Set(); // impede duplo reset_session simultâneo no mesmo chip
 const mapaRastreioLID = new Map();
 const gavetaDeMensagens = new Map(); // 🧠 OUVIDO PACIENTE: Gaveta temporária de mensagens
+const gavetaOficialTimers = new Map(); // 🗄️ GAVETA (Cloud API): key `${instanceId}:${jid}` → timer de debounce do disparo
 const mensagensJaProcessadas = new Map(); // 🛡️ DEDUP: Previne reprocessamento de msg.key.id do Baileys
 const cacheRegrasInstancia = new Map(); // 🧠 Memória de curto prazo para regras
 const cacheAvisosMidia = new Map(); // 🛡️ TTL 5min — previne race condition em flood de fotos/catálogos
@@ -1196,7 +1197,8 @@ const concessionariaLocal = (MAPA_CONCESSIONARIAS[contextoLead.estado] || 'conce
 
 [PRIMEIRO CONTATO — O LEAD FALOU PRIMEIRO]
 Ele te procurou por conta própria — você nunca abriu essa conversa antes. Não presuma que ele já sabe quem você é ou por que está falando com você. NÃO dispare a pergunta de qualificação do roteiro (Passo 1) nesta primeira resposta.
-Em vez disso: apresente-se em 1 frase curta (quem você é e o que a ${companyName} faz), demonstre curiosidade genuína pelo motivo do contato dele, e responda com clareza qualquer pergunta ou dúvida direta que ele tenha feito. Seja calorosa e humana — acolhimento antes de roteiro.
+Em vez disso: **logo de cara, apresente-se em 1 frase calorosa** (seu nome + o que a ${companyName} faz) e use UM emoji natural (😊, 🙌) pra não soar seco/robótico. Demonstre curiosidade genuína pelo motivo do contato e responda com clareza qualquer dúvida direta dele. Acolhimento antes de roteiro.
+Evite abrir com um "Oi, tudo bem?" vazio e já emendar a pergunta do nome — primeiro diga quem você é de um jeito simpático; perguntar o nome vem junto ou logo depois, de forma leve.
 Só avance para a qualificação (Passo 1 em diante) na mensagem seguinte, depois que ele engajar ou responder.`;
 
     // 📅 ESTADO REAL DE AGENDAMENTO (dado do lead, não regra de negócio) — evita a IA repetir
@@ -2276,10 +2278,17 @@ if (matchClima) updates.sentiment = matchClima[1].toLowerCase();
     // depois quebra frases longas em balões curtos sem NUNCA cortar frase no meio, protege URLs,
     // tira "?" colado após link e joga o link de agendamento pro último balão.
     let mensagensSplit = dividirEmBaloes(textoLimpo);
-    // 🛡️ TRAVA ANTI-PAREDÃO: nunca manda mais de 2 balões (mata o "3+ balões seguidos" robótico).
-    // Mantém o 1º balão (contexto) + o último (a pergunta/CTA), pra não perder o gancho da conversa.
+    // 🛡️ TRAVA ANTI-PAREDÃO: normalmente corta pra 2 balões (mata o "3+ balões seguidos" robótico),
+    // mantendo o 1º (contexto) + o último (pergunta/CTA). EXCEÇÃO: se algum balão tem LINK (ex.: o
+    // link da reunião no agendamento), permite até 3 — senão a trava derrubava o balão do link do
+    // meio e o lead só recebia o convite por email (bug observado no 1º agendamento oficial).
     if (mensagensSplit.length > 2) {
-        mensagensSplit = [mensagensSplit[0], mensagensSplit[mensagensSplit.length - 1]];
+        const temLink = mensagensSplit.some(b => /https?:\/\//.test(b));
+        if (temLink) {
+            mensagensSplit = mensagensSplit.slice(0, 3); // confirma + link + fechamento, na ordem
+        } else {
+            mensagensSplit = [mensagensSplit[0], mensagensSplit[mensagensSplit.length - 1]];
+        }
     }
     console.log(`📤 [FILTRO] Enviando ${mensagensSplit.length} balão(ões) para ${lead.name}...`);
 
@@ -4568,7 +4577,8 @@ async function orquestrarAgendamento(lead, ultimaMsg, instanceData, userId, inte
             internal_notes: `Reunião ${remarcou ? 'remarcada' : 'criada'} na Google Agenda (${slot.label}) em ${new Date().toLocaleString('pt-BR')}.`,
         }).eq('id', lead.id);
         console.log(`✅ [AGENDAMENTO] ${lead.name}: evento ${remarcou ? 'remarcado' : 'criado'} (${slot.label}) ${ev.meetLink || ''}`);
-        const linkTxt = ev.meetLink ? `\n[QUEBRA]\nSegue o link da nossa reunião: ${ev.meetLink}` : '';
+        const avisoEmail = lead.email ? ' (também mandei o convite no seu email 📩)' : '';
+        const linkTxt = ev.meetLink ? `\n[QUEBRA]\nSegue o link da nossa reunião: ${ev.meetLink}${avisoEmail}` : '';
         // REVEAL do Antix no fluxo de agenda real: preserva o "efeito UAU" (antes só saía no
         // fechamento via Calendly). Só pra product_type='antix' — outros clientes não revelam IA.
         const revealTxt = instanceData?.product_type === 'antix'
@@ -5993,12 +6003,30 @@ module.exports = {
             }
         }
 
+        // Salva a mensagem já (painel em tempo real + histórico completo pra IA).
         await db.saveMessage(cleanJid, 'user', norm.texto, instanceId);
-        inboundAtivo.set(instanceId, (inboundAtivo.get(instanceId) || 0) + 1);
-        await filaMensagensIA.add('gerar_resposta',
-            { leadId: lead.id, whatsappId: cleanJid, instanceId, remoteJid: cleanJid },
-            { priority: 1, attempts: 3 });
-        return { ok: true, leadId: lead.id };
+
+        // 🗄️ GAVETA OFICIAL (OUVIDO PACIENTE p/ Cloud API): o lead costuma mandar a ideia em 2-3
+        // mensagens picadas (ainda mais em clínica). Sem isso, cada mensagem virava 1 job → a IA
+        // respondia 2-3x ("engasgo"). Aqui só o DISPARO do job é debounced: cada msg é salva na
+        // hora, mas o job só roda após ~GAVETA_OFICIAL_MS de silêncio, e o worker lê o histórico
+        // inteiro (as mensagens picadas) e responde UMA vez. leadId do último inbound é o alvo.
+        const _keyGaveta = `${instanceId}:${cleanJid}`;
+        const _antigo = gavetaOficialTimers.get(_keyGaveta);
+        if (_antigo) clearTimeout(_antigo);
+        const _janela = Number(process.env.GAVETA_OFICIAL_MS) || 9000;
+        const _leadId = lead.id;
+        const _timer = setTimeout(async () => {
+            gavetaOficialTimers.delete(_keyGaveta);
+            try {
+                inboundAtivo.set(instanceId, (inboundAtivo.get(instanceId) || 0) + 1);
+                await filaMensagensIA.add('gerar_resposta',
+                    { leadId: _leadId, whatsappId: cleanJid, instanceId, remoteJid: cleanJid },
+                    { priority: 1, attempts: 3 });
+            } catch (e) { console.error(`❌ [GAVETA-OFICIAL] Falha ao enfileirar: ${e.message}`); }
+        }, _janela);
+        gavetaOficialTimers.set(_keyGaveta, _timer);
+        return { ok: true, leadId: lead.id, gaveta: true };
     },
 
     // 🌐 WEB CHAT — o widget do site (antix-ia.com) conversa com a IA (persona Antix/Kauana).
