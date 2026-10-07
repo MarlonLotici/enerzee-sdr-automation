@@ -1250,6 +1250,9 @@ Você não tem o nome da PESSOA (o perfil do WhatsApp veio vazio ou é nome de e
 5. PROPOR HORÁRIO: APENAS depois que ele topar o convite (ou pedir explicitamente pra marcar). NUNCA proponha horário porque o lead só respondeu uma pergunta de qualificação.
 REGRA DE OURO: cada resposta sua PRECISA ter a ver com o que o lead ACABOU de dizer. Se ele perguntar algo ou mudar de assunto, responda AQUILO primeiro, depois retome o roteiro. Entenda a real intenção dele antes de conduzir.
 
+[LEAD QUE JÁ TE CONHECE E VOLTOU — JOGO DE CINTURA]
+Quando já existe histórico e o lead te chama de novo, ele quase nunca quer "começar o roteiro". Na maioria das vezes é pra: (a) TIRAR UMA DÚVIDA (ex.: "como funciona a reunião?", "é online?", "quanto tempo dura?") → RESPONDA a dúvida de verdade, com clareza, SEM despejar horário por cima; (b) CONFIRMAR o horário já marcado → confirme com segurança (dia/hora), sem reofertar; (c) REMARCAR → aí sim ajude a achar outro horário; (d) DESMARCAR/CANCELAR → acolha, NÃO insista em marcar; pergunte se prefere cancelar de vez ou remarcar. NUNCA empurre reunião por cima de uma pergunta — primeiro resolve o que ele trouxe; só volte a falar de horário se fizer sentido e, de preferência, deixando ELE puxar.
+
 [NÃO SEJA INTERROGATÓRIO — textura humana]
 Não faça pergunta atrás de pergunta seca. Em cerca de 1 a cada 3 respostas, ANTES de perguntar, reaja ao que ele disse: um comentário genuíno, uma validação ("faz todo sentido, muita gente trava nisso"), um elogio contextual ("legal que vocês já usam o Instagram pra isso") ou um micro-insight — e SÓ ENTÃO faça a pergunta. Nas outras vezes, pode ir mais direto (não force elogio toda hora, senão soa falso). O objetivo é parecer uma conversa humana, não um formulário.`;
 
@@ -4625,7 +4628,18 @@ async function orquestrarAgendamento(lead, ultimaMsg, instanceData, userId, inte
     // Só reoferece horário se ele PEDIR pra remarcar/cancelar. Caso contrário, confirma o que
     // já está marcado (sem reofertar e sem deixar o closer ecoar horários velhos do histórico).
     if (jaAgendado && !temSlots) {
-        const querRemarcar = /\b(remarc|desmarc|cancel|outro hor[áa]rio|outro dia|mudar|trocar|adiar|antecipar|n[ãa]o (vou )?(poss|conseg|d[áa]))/i.test(String(ultimaMsg || ''));
+        const _txt = String(ultimaMsg || '');
+        // CANCELAR ≠ REMARCAR. Remarcar: o lead quer OUTRO horário → ofertar faz sentido. Cancelar/
+        // desmarcar: ele NÃO quer mais marcar agora → empurrar slots por cima disso é justamente o
+        // "empurrar reunião" que incomoda. Acolhe e devolve a escolha (cancelar de vez x remarcar),
+        // sem despejar horário.
+        const querCancelar = /\b(cancel\w*|desmarc\w*|desist\w*|n[ãa]o\s+(vou\s+)?(mais|quero)\b|n[ãa]o\s+vou\s+(poder|conseguir))/i.test(_txt);
+        const querRemarcar = /\b(remarc\w*|outro\s+hor[áa]rio|outro\s+dia|mudar|trocar|adiar|antecipar|mais\s+(cedo|tarde)|n[ãa]o\s+(vou\s+)?(poss|conseg|d[áa]))/i.test(_txt);
+        if (querCancelar && !querRemarcar) {
+            const _nome = saudacaoPrimeiroNome(lead.dono, '');
+            const quando = lead.calendly_event_at ? rotularSlotBRT(new Date(lead.calendly_event_at)) : 'nossa conversa';
+            return ok(`Sem problema${_nome ? ', ' + _nome : ''}! Prefere que eu cancele ${quando} de vez, ou quer remarcar pra um horário que fique melhor pra você? 🙂`);
+        }
         if (querRemarcar) return await ofertar(false);
         // Saudação/mensagem curta pós-agendamento (ex.: "oi") → quase sempre é dúvida sobre a
         // reunião. Acolhe e OFERECE ajuda (não reoferece horário nem dá stall). Pergunta aberta.

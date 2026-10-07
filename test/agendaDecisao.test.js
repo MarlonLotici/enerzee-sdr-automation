@@ -1,7 +1,7 @@
 'use strict';
 const test = require('node:test');
 const assert = require('node:assert/strict');
-const { querAgendar, ehSaudacaoPura, deveProporAgendamento, aceitouConviteDeReuniao, ehAfirmativo } = require('../lib/agendaDecisao');
+const { querAgendar, ehSaudacaoPura, deveProporAgendamento, aceitouConviteDeReuniao, ehAfirmativo, ehDuvidaSobreReuniao } = require('../lib/agendaDecisao');
 
 // ── ehSaudacaoPura ─────────────────────────────────────────────────────────────
 test('ehSaudacaoPura: reconhece cumprimentos puros', () => {
@@ -91,6 +91,43 @@ test('aceitouConviteDeReuniao: detecta convite anterior + aceite', () => {
     assert.equal(aceitouConviteDeReuniao(histComConvite, 'ainda não sei'), false); // não é afirmativo
     const histSemConvite = [{ role: 'assistant', content: 'e quantos leads vocês recebem por mês?' }];
     assert.equal(aceitouConviteDeReuniao(histSemConvite, 'sim'), false); // não houve convite
+});
+
+// ── ehDuvidaSobreReuniao / não empurrar reunião por cima de uma pergunta ──────
+test('ehDuvidaSobreReuniao: pergunta SOBRE a reunião é dúvida (não pedido de marcar)', () => {
+    for (const s of [
+        'E como funciona a reunião?',            // o caso do print
+        'como funciona a reunião',
+        'o que é essa call?',
+        'quanto tempo dura a reunião?',
+        'a reunião é online ou presencial?',
+        'a call é paga?',
+        'preciso levar algo pra reunião?',
+        'me explica como funciona a reunião',
+        'pra que serve essa conversa?',
+    ]) assert.ok(ehDuvidaSobreReuniao(s), `"${s}" deveria ser dúvida sobre a reunião`);
+});
+
+test('ehDuvidaSobreReuniao: pedido real de marcar NÃO é dúvida', () => {
+    for (const s of [
+        'podemos marcar uma reunião',
+        'quero agendar a reunião',
+        'bora marcar essa call',
+        'que dia você tem?',
+        'tem horário amanhã?',
+    ]) assert.ok(!ehDuvidaSobreReuniao(s), `"${s}" NÃO é dúvida (é pedido de marcar)`);
+});
+
+test('NÃO agenda quando o lead só PERGUNTA sobre a reunião (bug do print)', () => {
+    // A palavra "reunião" na pergunta NÃO pode disparar a oferta de horário por cima da dúvida.
+    assert.equal(deveProporAgendamento({ texto: 'E como funciona a reunião?', intencao: 'DUVIDA', currentStage: 4, temSlots: false }), false);
+    assert.equal(deveProporAgendamento({ texto: 'a reunião é online?', intencao: 'DUVIDA', currentStage: 5, temSlots: false }), false);
+    assert.equal(deveProporAgendamento({ texto: 'quanto tempo dura a call?', intencao: 'DUVIDA', currentStage: 4, temSlots: false }), false);
+});
+
+test('mesmo sendo dúvida, se já há slots em curso segue no fluxo de agenda (LLM responde no contexto)', () => {
+    // temSlots vence: a fase de confirmação do orquestrador roteia a dúvida pro LLM, sem reofertar.
+    assert.equal(deveProporAgendamento({ texto: 'como funciona a reunião?', intencao: 'DUVIDA', currentStage: 4, temSlots: true }), true);
 });
 
 test('ehAfirmativo: pega aceites curtos e ignora negativas/dúvidas', () => {
