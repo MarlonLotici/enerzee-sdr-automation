@@ -4485,6 +4485,7 @@ async function orquestrarAgendamento(lead, ultimaMsg, instanceData, userId, inte
                 inicioISO: slot.inicioISO, fimISO: slot.fimISO,
                 titulo:    `Reunião — ${lead.name || 'Lead'}`,
                 descricao: `Agendado pela SDR IA (Antix). Lead: ${lead.name || ''} · ${lead.phone || lead.whatsapp_id}${lead.email ? ' · ' + lead.email : ''}`,
+                emailConvidado: lead.email || undefined,   // convida a pessoa → ela recebe convite + lembretes da Google no e-mail dela
             });
         }
         if (!ev?.eventId) throw new Error('Google não retornou eventId');
@@ -4542,7 +4543,10 @@ async function orquestrarAgendamento(lead, ultimaMsg, instanceData, userId, inte
         // Canal: no site (@web, sem telefone) o e-mail é o ÚNICO contato → obrigatório. No WhatsApp
         // o telefone já é o contato e o Meet vai no chat → e-mail dispensável (não regride conversão).
         const ehWeb = String(lead.whatsapp_id || '').includes('@web');
-        const precisaEmail = ehWeb;
+        // Pede e-mail SEMPRE (web e WhatsApp): o e-mail vira convidado real no evento, então a
+        // pessoa recebe o convite e os lembretes da Google no e-mail dela (pedido do cliente).
+        const precisaEmail = true;
+        void ehWeb;
         const emailNaMsg = (String(ultimaMsg || '').match(/[^\s@]+@[^\s@]+\.[^\s@]+/) || [])[0];
         if (emailNaMsg && !emailValido(lead.email)) { await supabase.from('leads').update({ email: emailNaMsg }).eq('id', lead.id).then(() => {}, () => {}); lead.email = emailNaMsg; }
         let nomePreenchidoAgora = false;
