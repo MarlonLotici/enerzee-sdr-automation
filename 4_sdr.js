@@ -1242,7 +1242,10 @@ Você não tem o nome da PESSOA (o perfil do WhatsApp veio vazio ou é nome de e
 3. EXPLICAR A SOLUÇÃO para AQUELA dor específica (conecte o que você faz ao que ELE disse — nada genérico).
 4. CONVIDAR: pergunte se faz sentido uma conversa/reunião rápida pra mostrar na prática.
 5. PROPOR HORÁRIO: APENAS depois que ele topar o convite (ou pedir explicitamente pra marcar). NUNCA proponha horário porque o lead só respondeu uma pergunta de qualificação.
-REGRA DE OURO: cada resposta sua PRECISA ter a ver com o que o lead ACABOU de dizer. Se ele perguntar algo ou mudar de assunto, responda AQUILO primeiro, depois retome o roteiro. Entenda a real intenção dele antes de conduzir.`;
+REGRA DE OURO: cada resposta sua PRECISA ter a ver com o que o lead ACABOU de dizer. Se ele perguntar algo ou mudar de assunto, responda AQUILO primeiro, depois retome o roteiro. Entenda a real intenção dele antes de conduzir.
+
+[NÃO SEJA INTERROGATÓRIO — textura humana]
+Não faça pergunta atrás de pergunta seca. Em cerca de 1 a cada 3 respostas, ANTES de perguntar, reaja ao que ele disse: um comentário genuíno, uma validação ("faz todo sentido, muita gente trava nisso"), um elogio contextual ("legal que vocês já usam o Instagram pra isso") ou um micro-insight — e SÓ ENTÃO faça a pergunta. Nas outras vezes, pode ir mais direto (não force elogio toda hora, senão soa falso). O objetivo é parecer uma conversa humana, não um formulário.`;
 
     return constituicaoResolvida + secaoAcolhidaInbound + secaoPerguntarNome + REGRA_ROTEIRO + REGRA_ANTI_INVENCAO;
 }
@@ -4589,7 +4592,7 @@ async function orquestrarAgendamento(lead, ultimaMsg, instanceData, userId, inte
         await supabase.from('leads').update({ slots_propostos: slots, slot_calendar_id: calId, current_stage: 4 }).eq('id', lead.id);
         console.log(`📅 [AGENDAMENTO] ${lead.name}: propondo ${labels(slots)}`);
         const abre = ocupadoAntes
-            ? _variar(['Esse já tá ocupado 😕 ', 'Puxa, nesse eu já tenho compromisso. ', 'Esse horário não tá livre. '])
+            ? _variar(['Esse já tá tomado 😕 mas sem problema! ', 'Nesse eu já tenho um compromisso, mas relaxa que a gente encaixa. ', 'Esse eu não consigo, mas tenho outras ótimas opções! ', 'Puxa, esse já foi preenchido — mas achei outros horários. '])
             : _variar(['Que bom! ', 'Show! ', 'Massa! ']);
         return ok(`${abre}${_variar(['Consigo te encaixar', 'Tenho livre', 'Dá pra marcar'])} ${labels(slots)}. ${_variar(['Qual fica melhor?', 'Qual prefere?', 'Qual encaixa melhor aí?'])} 😊`);
     };
@@ -4655,7 +4658,7 @@ async function orquestrarAgendamento(lead, ultimaMsg, instanceData, userId, inte
         if (pedido) {
             const foraExpediente = pedido.h < horaInicio || (pedido.h + duracaoMin / 60) > horaFim;
             if (foraExpediente) {
-                return ok(`Nesse horário eu não atendo (funciono das ${horaInicio}h às ${horaFim}h). ${_variar(['Que tal', 'Prefere'])} ${labels(lead.slots_propostos)}?`);
+                return ok(`Ah, nesse horário eu não consigo (meu atendimento é das ${horaInicio}h às ${horaFim}h) 😅 ${_variar(['Mas que tal', 'Dá pra ser'])} ${labels(lead.slots_propostos)}?`);
             }
             const alvo = _montarSlotNoDia(lead.slots_propostos[0]?.inicioISO, pedido.h, pedido.m, duracaoMin);
             let livre = false;
@@ -5935,6 +5938,9 @@ module.exports = {
 
         const instanceData = await getRegrasEmCache(instanceId);
         if (!instanceData) return { ok: false, motivo: 'instancia_desconhecida' };
+
+        // ✓✓ Marca a mensagem do lead como LIDA (os tiques azuis) — no Baileys era automático.
+        cloudApiTransport.marcarComoLido({ apiKey: instanceData.cloud_api_key, baseUrl: instanceData.cloud_base_url }, norm.msgId);
 
         // 🎙️ ÁUDIO (voice note): a Cloud API só manda o ID da mídia. Baixa da Meta e transcreve
         // com o Whisper (o Baileys já fazia isso com o buffer do socket). Sem isso, o áudio chega

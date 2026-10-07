@@ -113,6 +113,20 @@ function normalizarInbound(webhookBody) {
     }
 }
 
+// Marca uma mensagem recebida como LIDA (os ✓✓ azuis). No Baileys isso era automático
+// (sock.readMessages); na Cloud API precisa de um POST explícito. Fire-and-forget: falha não
+// pode atrapalhar o fluxo de resposta. messageId = o wamid da mensagem do lead.
+async function marcarComoLido(config, messageId) {
+    if (!messageId) return;
+    try {
+        await fetch(`${_base(config)}/messages`, {
+            method: 'POST',
+            headers: { Authorization: `Bearer ${_apiKey(config)}`, 'Content-Type': 'application/json' },
+            body: JSON.stringify({ messaging_product: 'whatsapp', status: 'read', message_id: messageId }),
+        });
+    } catch (_) { /* silencioso de propósito */ }
+}
+
 // Baixa uma mídia recebida (áudio/imagem/doc) da Cloud API.
 // Passo 1: GET {graphRoot}/{mediaId} -> { url, mime_type }  (raiz SEM o phone_number_id)
 // Passo 2: GET {url} com Bearer -> binário.
@@ -134,6 +148,7 @@ module.exports = {
     enviarTexto,
     enviarTemplate,
     baixarMidia,
+    marcarComoLido,
     normalizarInbound,
     nome: 'official',
     implementado: true,
