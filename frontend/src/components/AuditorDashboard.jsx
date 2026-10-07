@@ -64,6 +64,29 @@ export default function AuditorDashboard({ socket }) {
     const [loading, setLoading]   = useState(true)
     const [lastSync, setLastSync] = useState(null)
     const [filtroNota, setFiltroNota] = useState('todos') // 'todos' | 'baixa' | 'alta'
+    const [rodando, setRodando] = useState(false)
+    const [runMsg, setRunMsg]   = useState(null)
+
+    // ▶️ Antecipa um ciclo do auditor (que normalmente roda sozinho de hora em hora). Útil pra ver
+    // o relatório na hora, sem esperar o loop. Recarrega os dados alguns segundos depois.
+    const rodarAgora = async () => {
+        setRodando(true); setRunMsg(null)
+        try {
+            const { data: { session: s } } = await supabase.auth.getSession()
+            const resp = await fetch('/api/account/rodar-auditoria', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${s?.access_token}` },
+            })
+            const json = await resp.json()
+            if (!resp.ok || !json.ok) throw new Error(json.error || 'Falha ao iniciar.')
+            setRunMsg(json.running ? 'Auditoria já estava rodando…' : 'Auditoria iniciada — atualizando em instantes…')
+            setTimeout(fetchData, 8000)
+        } catch (e) {
+            setRunMsg('Erro: ' + e.message)
+        } finally {
+            setRodando(false)
+        }
+    }
 
     const fetchData = async () => {
         setLoading(true)
@@ -222,8 +245,16 @@ export default function AuditorDashboard({ socket }) {
     )
 
     if (!metrics) return (
-        <div className="flex items-center justify-center h-64 text-slate-600 text-sm">
-            Nenhuma auditoria disponível ainda. O loop roda a cada 2 horas.
+        <div className="flex flex-col items-center justify-center h-64 gap-4 text-slate-600 text-sm">
+            <p>Nenhuma auditoria disponível ainda. O loop roda sozinho de hora em hora.</p>
+            <button
+                onClick={rodarAgora}
+                disabled={rodando}
+                className="flex items-center gap-2 px-4 h-10 rounded-xl border border-amber-500/25 bg-amber-500/10 text-amber-300 hover:bg-amber-500/20 text-[11px] font-black uppercase tracking-widest transition-all disabled:opacity-50"
+            >
+                <RefreshCw size={13} className={rodando ? 'animate-spin' : ''} /> {rodando ? 'Iniciando…' : 'Rodar auditoria agora'}
+            </button>
+            {runMsg && <p className="text-[11px] text-amber-400">{runMsg}</p>}
         </div>
     )
 
@@ -235,10 +266,21 @@ export default function AuditorDashboard({ socket }) {
                 <div>
                     <h2 className="text-base font-black tracking-tighter text-white">QA · Auditor de IA</h2>
                     <p className="text-[10px] text-slate-500 mt-0.5">{metrics.total} conversas analisadas · sync {lastSync?.toLocaleTimeString('pt-BR', { hour: '2-digit', minute: '2-digit' })}</p>
+                    {runMsg && <p className="text-[10px] text-amber-400 mt-0.5">{runMsg}</p>}
                 </div>
-                <button onClick={fetchData} className="p-2 rounded-xl border border-white/5 bg-white/[0.03] hover:bg-white/[0.06] transition-all">
-                    <RefreshCw size={13} className="text-slate-400" />
-                </button>
+                <div className="flex items-center gap-2">
+                    <button
+                        onClick={rodarAgora}
+                        disabled={rodando}
+                        className="flex items-center gap-2 px-3 h-9 rounded-xl border border-amber-500/25 bg-amber-500/10 text-amber-300 hover:bg-amber-500/20 text-[10px] font-black uppercase tracking-widest transition-all disabled:opacity-50"
+                        title="Antecipar um ciclo do auditor (normalmente roda de hora em hora)"
+                    >
+                        <RefreshCw size={12} className={rodando ? 'animate-spin' : ''} /> {rodando ? 'Iniciando…' : 'Rodar agora'}
+                    </button>
+                    <button onClick={fetchData} className="p-2 rounded-xl border border-white/5 bg-white/[0.03] hover:bg-white/[0.06] transition-all">
+                        <RefreshCw size={13} className="text-slate-400" />
+                    </button>
+                </div>
             </div>
 
             {/* KPIs */}

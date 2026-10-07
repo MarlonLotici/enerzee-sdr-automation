@@ -697,6 +697,20 @@ app.post('/api/account/apply-persona', autenticarMiddleware, express.json(), asy
     }
 });
 
+// ▶️ RODAR AUDITORIA AGORA — antecipa um ciclo do auditor QA (que já roda de hora em hora). O auditor é
+// post-mortem e varre todos os tenants de uma vez (filtra por user_id só na exibição), então basta
+// disparar o loop; o painel do usuário vê os novos relatórios ao atualizar.
+app.post('/api/account/rodar-auditoria', autenticarMiddleware, express.json(), async (req, res) => {
+    try {
+        if (!sdr?.rodarAuditoriaAgora)
+            return res.status(503).json({ error: 'Auditor ainda não inicializado.' });
+        const r = await sdr.rodarAuditoriaAgora();
+        res.json(r);
+    } catch (err) {
+        res.status(500).json({ error: err.message });
+    }
+});
+
 // ============================================================
 // 📅 GOOGLE AGENDA — OAuth + confirmação diária de reuniões (opt-in por tenant)
 // ============================================================

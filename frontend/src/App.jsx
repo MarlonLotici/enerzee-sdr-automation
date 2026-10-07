@@ -618,10 +618,14 @@ if (session?.user?.id) checkBriefing()
         const { data } = await supabase.from('profiles')
             .select('calendly_link, default_agent_name, default_company_name, default_daily_limit, opening_templates, notes')
             .eq('id', s.user.id).maybeSingle();
+        // 🪪 Identidade do SDR reflete o CHIP, não o default herdado da conta. A persona é por chip
+        // (instances.agent_name) — o default do profile é só semente pra chips futuros. Sem isto, o
+        // painel mostrava o nome antigo da conta (ex.: "Sara") enquanto o chip já rodava como "Sofia".
+        const _chip = instances.find(i => i.id === selectedInstanceId) || instances[0];
         setSettingsForm({
             calendly_link: data?.calendly_link || '',
-            default_agent_name: data?.default_agent_name || '',
-            default_company_name: data?.default_company_name || '',
+            default_agent_name: _chip?.agent_name || data?.default_agent_name || '',
+            default_company_name: _chip?.company_name || data?.default_company_name || '',
             default_daily_limit: data?.default_daily_limit || '',
             opening_a: data?.opening_templates?.padrao?.[0] || '',
             opening_b: data?.opening_templates?.padrao?.[1] || '',
@@ -1068,6 +1072,12 @@ if (session?.user?.id) checkBriefing()
     }
 
     // Se estiver logado, libera o cockpit do sistema:
+// 📥 Conta 100% receptiva (inbound): todos os chips são oficiais/inbound_only. Nesse modo
+// escondemos controles de DISPARO (varredura, limite diário, etc.) — disparo frio num número
+// oficial = risco de ban. Serve de portão pro "modo inbound" do painel.
+const contaInbound = instances.length > 0 && instances.every(i =>
+    i.whatsapp_provider === 'official' || i.inbound_only === true || i.somente_receptivo === true
+);
 return (
     <div className="h-screen w-full flex relative bg-[#0A0A0A] overflow-hidden">
 
@@ -1110,7 +1120,7 @@ return (
 
     {/* MODAL DE CONFIGURAÇÕES DA CONTA */}
     {showSettings && (
-        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/70 backdrop-blur-sm" onClick={() => setShowSettings(false)}>
+        <div className="fixed inset-0 z-[1100] flex items-center justify-center bg-black/70 backdrop-blur-sm" onClick={() => setShowSettings(false)}>
             <div className="bg-[#111] border border-white/10 rounded-2xl p-6 w-full max-w-2xl shadow-2xl max-h-[90vh] flex flex-col" onClick={e => e.stopPropagation()}>
                 <div className="flex items-center justify-between mb-5 shrink-0">
                     <div>
@@ -1161,31 +1171,25 @@ return (
                         )}
                     </div>
 
-                    {/* — Limites e Agendamento — */}
-                    <div>
-                        <p className="text-[9px] font-black text-amber-500/60 uppercase tracking-widest mb-3">Limites e Agendamento</p>
-                        <div className="grid grid-cols-2 gap-3">
-                            <div>
-                                <label className="text-[10px] font-black text-amber-300/80 uppercase tracking-widest block mb-1.5">Limite Diário (leads/dia)</label>
-                                <Input
-                                    type="number"
-                                    value={settingsForm.default_daily_limit}
-                                    onChange={e => setSettingsForm(f => ({ ...f, default_daily_limit: e.target.value }))}
-                                    placeholder="Ex: 50"
-                                    className="bg-black/30 border-white/10 text-white text-sm h-10 focus:border-amber-500"
-                                />
-                            </div>
-                            <div>
-                                <label className="text-[10px] font-black text-amber-300/80 uppercase tracking-widest block mb-1.5">Link Calendly</label>
-                                <Input
-                                    value={settingsForm.calendly_link}
-                                    onChange={e => setSettingsForm(f => ({ ...f, calendly_link: e.target.value }))}
-                                    placeholder="https://calendly.com/..."
-                                    className="bg-black/30 border-white/10 text-white text-sm h-10 focus:border-amber-500"
-                                />
+                    {/* — Limite de Disparo — (controle de OUTBOUND: escondido em conta inbound/receptiva,
+                        onde não há disparo frio. Campo Calendly removido: agenda real do Google é a via oficial.) */}
+                    {!contaInbound && (
+                        <div>
+                            <p className="text-[9px] font-black text-amber-500/60 uppercase tracking-widest mb-3">Limite de Disparo</p>
+                            <div className="grid grid-cols-2 gap-3">
+                                <div>
+                                    <label className="text-[10px] font-black text-amber-300/80 uppercase tracking-widest block mb-1.5">Limite Diário (leads/dia)</label>
+                                    <Input
+                                        type="number"
+                                        value={settingsForm.default_daily_limit}
+                                        onChange={e => setSettingsForm(f => ({ ...f, default_daily_limit: e.target.value }))}
+                                        placeholder="Ex: 50"
+                                        className="bg-black/30 border-white/10 text-white text-sm h-10 focus:border-amber-500"
+                                    />
+                                </div>
                             </div>
                         </div>
-                    </div>
+                    )}
 
                     {/* — Aberturas A/B/C — */}
                     <div>
@@ -1352,7 +1356,7 @@ return (
 
     {/* MODAL — CÉREBRO DA CONVERSA (tenant_prompts) */}
     {showPrompts && (
-        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/70 backdrop-blur-sm" onClick={() => setShowPrompts(false)}>
+        <div className="fixed inset-0 z-[1100] flex items-center justify-center bg-black/70 backdrop-blur-sm" onClick={() => setShowPrompts(false)}>
             <div className="bg-[#111] border border-white/10 rounded-2xl p-6 w-full max-w-3xl shadow-2xl max-h-[92vh] flex flex-col" onClick={e => e.stopPropagation()}>
                 <div className="flex items-center justify-between mb-4 shrink-0">
                     <div>

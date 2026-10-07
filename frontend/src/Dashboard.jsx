@@ -119,7 +119,7 @@ function KpiCard({ icon: Icon, label, value, sub, color, trend, info }) {
 // ============================================================
 // CHIP STATUS CARD
 // ============================================================
-function ChipCard({ chip, disparosHoje, limite }) {
+function ChipCard({ chip, disparosHoje, limite, inbound }) {
     const pct = Math.min(Math.round((disparosHoje / limite) * 100), 100)
     const conectado = chip.whatsapp_status === 'CONNECTED'
     return (
@@ -134,24 +134,31 @@ function ChipCard({ chip, disparosHoje, limite }) {
                     {conectado ? 'Online' : 'Offline'}
                 </span>
             </div>
-            <div>
-                <div className="flex justify-between text-[9px] font-black text-slate-500 uppercase mb-1.5">
-                    <span>Disparos hoje</span>
-                    <span style={{ color: pct >= 90 ? CORES.vermelho : pct >= 70 ? CORES.amarelo : CORES.verde }}>
-                        {disparosHoje}/{limite}
-                    </span>
+            {inbound ? (
+                /* 📥 Chip receptivo: cota de disparo não se aplica (número oficial só recebe). */
+                <div className="flex items-center gap-2 text-[9px] font-black uppercase tracking-widest text-sky-400/80">
+                    <span className="px-2 py-0.5 rounded-full bg-sky-500/10 border border-sky-500/20">Receptivo · só recebe</span>
                 </div>
-                <div className="h-1.5 w-full bg-slate-800 rounded-full overflow-hidden">
-                    <div
-                        className="h-full rounded-full transition-all duration-700"
-                        style={{
-                            width: `${pct}%`,
-                            background: pct >= 90 ? CORES.vermelho : pct >= 70 ? CORES.amarelo : CORES.azul,
-                            boxShadow: `0 0 8px ${pct >= 90 ? CORES.vermelho : CORES.azul}`
-                        }}
-                    />
+            ) : (
+                <div>
+                    <div className="flex justify-between text-[9px] font-black text-slate-500 uppercase mb-1.5">
+                        <span>Disparos hoje</span>
+                        <span style={{ color: pct >= 90 ? CORES.vermelho : pct >= 70 ? CORES.amarelo : CORES.verde }}>
+                            {disparosHoje}/{limite}
+                        </span>
+                    </div>
+                    <div className="h-1.5 w-full bg-slate-800 rounded-full overflow-hidden">
+                        <div
+                            className="h-full rounded-full transition-all duration-700"
+                            style={{
+                                width: `${pct}%`,
+                                background: pct >= 90 ? CORES.vermelho : pct >= 70 ? CORES.amarelo : CORES.azul,
+                                boxShadow: `0 0 8px ${pct >= 90 ? CORES.vermelho : CORES.azul}`
+                            }}
+                        />
+                    </div>
                 </div>
-            </div>
+            )}
         </div>
     )
 }
@@ -175,8 +182,15 @@ const carregarDados = useCallback(async () => {
 
             const { data: instancias } = await supabase
                 .from('instances')
-                .select('id, name, whatsapp_status, daily_limit')
+                .select('id, name, whatsapp_status, daily_limit, whatsapp_provider, inbound_only, somente_receptivo')
                 .eq('user_id', uid)
+
+            // 📥 Conta 100% receptiva: todos os chips são oficiais/inbound. Nesse modo o painel troca
+            // a linguagem de DISPARO (que não existe aqui) por CONVERSAS recebidas. Evita o "Disparos
+            // Hoje" sempre zerado e a "Saúde dos Chips" com barra de cota de envio sem sentido.
+            const contaInbound = (instancias || []).length > 0 && (instancias || []).every(i =>
+                i.whatsapp_provider === 'official' || i.inbound_only === true || i.somente_receptivo === true
+            )
 
             // instancias segue sendo buscada só pra alimentar os cards de saúde de chip (chipsSaude).
             // NÃO é mais portão de visibilidade: leads/mensagens aparecem mesmo com zero chip conectado.
@@ -264,6 +278,10 @@ const carregarDados = useCallback(async () => {
 
             // Leads únicos que responderam nos últimos 30 dias (fonte: tabela messages)
             const leadsQueResponderam30d = new Set(mensagensDoCliente.map(m => m.whatsapp_id)).size
+            // 📥 Inbound: conversas (contatos distintos) que mandaram mensagem HOJE — substitui "disparos hoje"
+            const conversasHoje = new Set(
+                mensagensDoCliente.filter(m => new Date(m.created_at) >= hoje).map(m => m.whatsapp_id)
+            ).size
             // Taxa de resposta: janela 30d no numerador E denominador — agora comparáveis
             const taxaResposta = disparados30d > 0
                 ? Math.round((leadsQueResponderam30d / disparados30d) * 100)
@@ -352,22 +370,23 @@ const carregarDados = useCallback(async () => {
                 }
             })
 
-            // === TEMPO MÉDIO DE RESPOSTA — CORRIGIDO ===
-            // 🛡️ Bug antes: filtrava por lead.id quando messages tem whatsapp_id (JID)
+            // === TEMPO MÉDIO DE RESPOSTA DA IA — do contato à 1ª resposta ===
+            // 🛡️ Antes media disparo(last_contact_at)→resposta do LEAD, o que num chip receptivo
+            // (inbound) não faz sentido e gerava números absurdos (ex.: "186min"). Agora mede o que o
+            // card promete: o gap entre a mensagem do LEAD e a resposta seguinte da IA, por conversa
+            // (1º par user→assistant, capado em 24h). Mesma lógica do Relatório de Resultados.
+            const _msgsPorJid = {}
+            ;(mensagens || []).forEach(m => {
+                (_msgsPorJid[m.whatsapp_id] = _msgsPorJid[m.whatsapp_id] || []).push(m)
+            })
             let somaTempos = 0, contTempos = 0
-            const leadsComResposta = leads?.filter(l => l.last_contact_at && l.whatsapp_id) || []
-            for (const lead of leadsComResposta) {
-                const envio = new Date(lead.last_contact_at)
-                const primeiraResposta = mensagensDoCliente
-                    .filter(m => m.whatsapp_id === lead.whatsapp_id)  // ← CORRIGIDO
-                    .filter(m => new Date(m.created_at) > envio)       // só respostas APÓS o disparo
-                    .sort((a, b) => new Date(a.created_at) - new Date(b.created_at))[0]
-                
-                if (primeiraResposta) {
-                    const diff = (new Date(primeiraResposta.created_at) - envio) / 60000 // minutos
-                    if (diff > 0 && diff < 1440) {  // ignora respostas após 24h (provável outro contexto)
-                        somaTempos += diff
-                        contTempos++
+            for (const jid in _msgsPorJid) {
+                const arr = _msgsPorJid[jid].sort((a, b) => new Date(a.created_at) - new Date(b.created_at))
+                for (let i = 0; i < arr.length - 1; i++) {
+                    if (arr[i].role === 'user' && !arr[i].content?.startsWith('[AUTORESPOSTA]') && arr[i + 1].role === 'assistant') {
+                        const diff = (new Date(arr[i + 1].created_at) - new Date(arr[i].created_at)) / 60000 // min
+                        if (diff >= 0 && diff < 1440) { somaTempos += diff; contTempos++ }
+                        break // só o 1º par lead→IA de cada conversa
                     }
                 }
             }
@@ -408,8 +427,10 @@ const carregarDados = useCallback(async () => {
                     pausadoManual,
                     leadsRobo,
                     tempoMedioResposta,
-                    tempCounts
+                    tempCounts,
+                    conversasHoje,
                 },
+                contaInbound,
                 respostasPorHora,
                 chipsSaude,
             })
@@ -472,8 +493,11 @@ const carregarDados = useCallback(async () => {
 
             {/* === KPIs === */}
             <div className="grid grid-cols-2 lg:grid-cols-4 gap-4">
-                <KpiCard icon={Zap}   label="Disparos Hoje"        value={d?.kpis.disparosHoje || 0}    sub={`${d?.kpis.leadsNaFila || 0} na fila`}           color={CORES.azul}     info="Leads disparados hoje. O subtítulo mostra quantos leads com status 'new' ainda aguardam disparo na fila." />
-                <KpiCard icon={Clock} label="Tempo Médio Resposta" value={d?.kpis.tempoMedioResposta ? `${d.kpis.tempoMedioResposta}min` : '--'} sub="do disparo à 1ª resposta" color={CORES.ciano} info="Tempo médio entre o disparo e a primeira resposta do lead (últimos 30 dias). Quanto menor, mais quente a base." />
+                {d?.contaInbound
+                    ? <KpiCard icon={Zap} label="Conversas Hoje" value={d?.kpis.conversasHoje || 0} sub="contatos que escreveram hoje" color={CORES.azul} info="Contatos distintos que mandaram mensagem hoje. Em modo receptivo (inbound) não há disparo frio — a entrada é o cliente que chega." />
+                    : <KpiCard icon={Zap} label="Disparos Hoje" value={d?.kpis.disparosHoje || 0} sub={`${d?.kpis.leadsNaFila || 0} na fila`} color={CORES.azul} info="Leads disparados hoje. O subtítulo mostra quantos leads com status 'new' ainda aguardam disparo na fila." />
+                }
+                <KpiCard icon={Clock} label="Tempo Médio Resposta" value={d?.kpis.tempoMedioResposta ? `${d.kpis.tempoMedioResposta}min` : '--'} sub="do contato à resposta da IA" color={CORES.ciano} info="Tempo médio entre a mensagem do contato e a primeira resposta da IA, por conversa (capado em 24h). Quanto menor, mais rápido o atendimento." />
                 <KpiCard icon={Flame} label="Leads Hot"            value={d?.kpis.tempCounts?.hot || 0}  sub={`${d?.kpis.emFollowUp || 0} em follow-up`}       color={CORES.vermelho} info="Leads marcados como 'hot' pela IA. O subtítulo mostra quantos estão recebendo follow-up ativo no momento." />
                 <KpiCard icon={Bot}   label="Robôs Detectados"     value={d?.kpis.leadsRobo || 0}        sub="pausados automaticamente"                         color={CORES.slate}    info="Leads únicos onde a IA detectou autoresposta nos últimos 30 dias e pausou a conversa." />
             </div>
@@ -481,12 +505,12 @@ const carregarDados = useCallback(async () => {
             {/* === SAÚDE DOS CHIPS (full width) === */}
             <div className="glass-panel rounded-3xl p-6 border border-white/5">
                 <p className="text-[10px] font-black text-blue-400 uppercase tracking-[0.3em] mb-6 flex items-center gap-2">
-                    <Wifi className="h-4 w-4" /> Saúde dos Chips<InfoBtn text="Status e progresso de disparos de cada chip hoje. Verde = dentro do limite, amarelo = acima de 70%, vermelho = acima de 90% da cota diária." />
+                    <Wifi className="h-4 w-4" /> Saúde dos Chips<InfoBtn text={d?.contaInbound ? "Status de conexão de cada chip. Em modo receptivo o número é oficial e só recebe — não há cota de disparo." : "Status e progresso de disparos de cada chip hoje. Verde = dentro do limite, amarelo = acima de 70%, vermelho = acima de 90% da cota diária."} />
                 </p>
                 <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-3">
                     {d?.chipsSaude.length > 0 ? (
                         d.chipsSaude.map((c, i) => (
-                            <ChipCard key={i} chip={c.chip} disparosHoje={c.disparosHoje} limite={c.limite} />
+                            <ChipCard key={i} chip={c.chip} disparosHoje={c.disparosHoje} limite={c.limite} inbound={d?.contaInbound} />
                         ))
                     ) : (
                         <div className="col-span-3 flex flex-col items-center justify-center py-10 opacity-30">

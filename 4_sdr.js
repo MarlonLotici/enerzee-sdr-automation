@@ -4356,7 +4356,7 @@ await delay(jitterAntiBan);
 // ============================================================================
 let auditorEmExecucao = false;
 
-async function loopAuditor() {
+async function loopAuditor(agendarProximo = true) {
     if (auditorEmExecucao) return;
     auditorEmExecucao = true;
 
@@ -4446,8 +4446,12 @@ async function loopAuditor() {
     } finally {
         auditorEmExecucao = false;
         // Intervalo entre ciclos (default 1h). Menor = limpa backlog mais rápido, gasta mais token.
-        const AUDIT_INTERVALO_MS = parseInt(process.env.AUDITOR_INTERVALO_MS, 10) || 60 * 60 * 1000;
-        setTimeout(loopAuditor, AUDIT_INTERVALO_MS);
+        // agendarProximo=false → disparo sob demanda (botão "rodar agora"): roda 1 lote e NÃO cria
+        // uma nova corrente recorrente (senão acumularia loops duplicados a cada clique).
+        if (agendarProximo) {
+            const AUDIT_INTERVALO_MS = parseInt(process.env.AUDITOR_INTERVALO_MS, 10) || 60 * 60 * 1000;
+            setTimeout(loopAuditor, AUDIT_INTERVALO_MS);
+        }
     }
 }
 
@@ -5894,6 +5898,15 @@ module.exports = {
     // toggles de inbound_only/use_email_outbound/use_sms_outbound sejam lidos no próximo ciclo.
     invalidateInstanceCache: (instanceId) => {
         cacheRegrasInstancia.delete(instanceId);
+    },
+
+    // ▶️ Dispara a varredura do auditor QA sob demanda (botão "rodar agora" no painel). O loop já roda
+    // de hora em hora; aqui antecipamos um ciclo. agendarProximo=false evita criar corrente recorrente
+    // duplicada. Fire-and-forget: processa um lote em background e responde na hora.
+    rodarAuditoriaAgora: async () => {
+        if (auditorEmExecucao) return { ok: true, started: false, running: true };
+        loopAuditor(false);
+        return { ok: true, started: true };
     },
 
     // 🩺 SNAPSHOT DE SAÚDE: estado runtime de cada chip pro painel ao vivo (/api/health).
