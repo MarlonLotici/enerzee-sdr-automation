@@ -4748,7 +4748,10 @@ async function orquestrarAgendamento(lead, ultimaMsg, instanceData, userId, inte
             return ok(`Fechado, ${slot.label}! ✅ Só me confirma ${falta} pra eu te enviar o convite da reunião 🙌`);
         };
 
-        const escolhido = detectarConfirmacaoSlot(ultimaMsg, lead.slots_propostos);
+        // Mensagem anterior DA IA — resolve afirmação genérica ("pode ser") quando ela citou
+        // um horário específico no turno de antes (ver detectarConfirmacaoSlot, passo 4).
+        const ultimaMsgIA = [...historico].reverse().find((m) => m.role === 'assistant')?.content || '';
+        const escolhido = detectarConfirmacaoSlot(ultimaMsg, lead.slots_propostos, ultimaMsgIA);
         if (escolhido) {
             const bloqueio = travarSePreciso(escolhido);
             if (bloqueio) return bloqueio;
