@@ -80,7 +80,10 @@ const NAV_ITEMS = [
     { key: 'briefing', icon: FileText, label: 'Briefing', color: '#F59E0B' },
 ]
 
-function AppSidebar({ activeTab, setActiveTab, leadsCount, onLogout }) {
+function AppSidebar({ activeTab, setActiveTab, leadsCount, onLogout, contaInbound = false }) {
+    // Conta 100% receptiva (só chips oficiais/inbound): esconde o Radar (prospecção/disparo) —
+    // disparo frio num número oficial = risco de ban. As demais abas (atendimento) seguem iguais.
+    const navItems = contaInbound ? NAV_ITEMS.filter(i => i.key !== 'search') : NAV_ITEMS;
     return (
         <div className="sidebar flex flex-col h-full py-3 px-2 z-50 shrink-0"
              style={{ background: '#0d0d0d', borderRight: '1px solid rgba(255,255,255,0.06)' }}>
@@ -100,7 +103,7 @@ function AppSidebar({ activeTab, setActiveTab, leadsCount, onLogout }) {
 
             {/* Nav items */}
             <nav className="flex-1 flex flex-col gap-1 px-1">
-                {NAV_ITEMS.map(item => (
+                {navItems.map(item => (
                     <div
                         key={item.key}
                         onClick={() => setActiveTab(item.key)}
@@ -1083,6 +1086,11 @@ if (session?.user?.id) checkBriefing()
 const contaInbound = instances.length > 0 && instances.every(i =>
     i.whatsapp_provider === 'official' || i.inbound_only === true || i.somente_receptivo === true
 );
+// 📥 MODO ATENDIMENTO: em conta 100% receptiva, a aba Radar (prospecção/disparo) some do menu.
+// Como os chips carregam async e o default é 'search', aqui derivamos a aba efetiva — se a conta
+// é inbound e o default caiu em Radar, mostra WhatsApp. Evita setState-em-render (sem risco de loop)
+// e preserva o Radar normalmente nas contas de outbound.
+const effectiveTab = (contaInbound && activeTab === 'search') ? 'connections' : activeTab;
 return (
     <div className="h-screen w-full flex relative bg-[#0A0A0A] overflow-hidden">
 
@@ -1456,10 +1464,11 @@ return (
 
     {/* SIDEBAR */}
     <AppSidebar
-        activeTab={activeTab}
+        activeTab={effectiveTab}
         setActiveTab={setActiveTab}
         leadsCount={realTotalLeads}
         onLogout={() => supabase.auth.signOut()}
+        contaInbound={contaInbound}
     />
 
     {/* CONTEÚDO PRINCIPAL */}
@@ -1579,7 +1588,7 @@ return (
 </div>
         {/* ÁREA DE CONTEÚDO */}
         <div className="flex-1 flex flex-col overflow-hidden min-h-0">
-            <Tabs value={activeTab} onValueChange={setActiveTab} className="flex-1 flex flex-col overflow-hidden min-h-0">
+            <Tabs value={effectiveTab} onValueChange={setActiveTab} className="flex-1 flex flex-col overflow-hidden min-h-0">
                <TabsList className="hidden">
     <TabsTrigger value="search">Radar</TabsTrigger>
     <TabsTrigger value="crm">CRM</TabsTrigger>

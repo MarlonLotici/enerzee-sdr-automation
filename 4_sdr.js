@@ -6087,6 +6087,27 @@ module.exports = {
         const norm = cloudApiTransport.normalizarInbound(webhookBody);
         if (!norm) return { ok: false, motivo: 'sem_mensagem' };
 
+        // 🔁 IDEMPOTÊNCIA — a Cloud API da Meta entrega webhook *at-least-once*: a MESMA mensagem
+        // (mesmo wamid) é reenviada em retry/timeout/piscada de rede. Sem esta trava, a reentrega
+        // (a) salva a msg do lead 2x no histórico → a IA "lê mal o contexto" e se repete; e
+        // (b) se chega depois da janela da gaveta, dispara um 2º job → 2ª resposta (a duplicação
+        // relatada). SET NX atômico no Redis: a 1ª entrega grava a chave e segue; reentregas caem
+        // fora aqui mesmo, antes de salvar/enfileirar. Falha-ABERTO: se o Redis piscar, não trava
+        // o inbound (melhor arriscar uma rara duplicata que engolir a mensagem do cliente).
+        if (norm.msgId) {
+            try {
+                const _dedupKey = `wa_msg_seen:${instanceId}:${norm.msgId}`;
+                const _ttl = Number(process.env.INBOUND_DEDUP_TTL_S) || 21600; // 6h — cobre a janela de retry da Meta
+                const _novo = await redisConnection.set(_dedupKey, '1', 'EX', _ttl, 'NX');
+                if (_novo !== 'OK') {
+                    console.log(`🔁 [OFICIAL-DEDUP] Webhook repetido (msgId …${String(norm.msgId).slice(-10)}) — ignorado.`);
+                    return { ok: false, motivo: 'duplicado' };
+                }
+            } catch (e) {
+                console.warn(`⚠️ [OFICIAL-DEDUP] Redis indisponível (${e.message}) — seguindo sem dedup nesta mensagem.`);
+            }
+        }
+
         const instanceData = await getRegrasEmCache(instanceId);
         if (!instanceData) return { ok: false, motivo: 'instancia_desconhecida' };
 

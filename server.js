@@ -490,7 +490,14 @@ app.post('/webhook/whatsapp', webhookLimiter, express.json(), async (req, res) =
     // Responde 200 IMEDIATAMENTE (Meta/360dialog re-tentam se demorar) e processa depois.
     res.status(200).json({ ok: true });
     try {
-        if (!verificarWebhookSecret(req, 'WHATSAPP_WEBHOOK_SECRET')) return;
+        // ⚠️ Falha de config mais comum do inbound oficial: o secret está setado no servidor mas a
+        // URL do webhook (no painel da Meta/360dialog) não traz ?token=<secret> → todo inbound é
+        // descartado AQUI, em silêncio ("cai calado"). Logar ALTO pra isso aparecer nos logs do
+        // Railway em vez de o chip parecer "mudo" sem explicação no dia do lançamento.
+        if (!verificarWebhookSecret(req, 'WHATSAPP_WEBHOOK_SECRET')) {
+            console.warn(`🚫 [WA-WEBHOOK] Inbound DESCARTADO: token do webhook ausente/errado na URL (instanceId=${req.query.instanceId || '?'}). Confira ?token=<WHATSAPP_WEBHOOK_SECRET> na URL cadastrada na Meta.`);
+            return;
+        }
         if (!sdr?.receberInboundOficial) return console.warn('⚠️ [WA-WEBHOOK] SDR ainda não inicializado.');
         const instanceId = req.query.instanceId;
         if (!instanceId) return console.warn('⚠️ [WA-WEBHOOK] instanceId ausente na URL (?instanceId=...).');
