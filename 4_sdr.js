@@ -3918,9 +3918,13 @@ async function loopRecuperacaoConversas() {
         const chipsAtivos = [...sessions.keys()];
         // Chips OFICIAIS (Cloud API) não têm sessão Baileys, mas precisam entrar aqui pra os
         // LEMBRETES de reunião (1h/10min) rodarem — senão o loop os ignora e o lembrete nunca sai.
+        // Também guardamos o Set deles pro SALVAMENTO abaixo saber quando reenfileirar via fila
+        // (sem socket) em vez de exigir instancia.ready (que oficial nunca tem).
+        let chipsOficiaisIds = new Set();
         try {
             const { data: _ofs } = await supabase.from('instances').select('id').eq('whatsapp_provider', 'official');
-            for (const _o of (_ofs || [])) if (!chipsAtivos.includes(_o.id)) chipsAtivos.push(_o.id);
+            chipsOficiaisIds = new Set((_ofs || []).map(o => o.id));
+            for (const id of chipsOficiaisIds) if (!chipsAtivos.includes(id)) chipsAtivos.push(id);
         } catch (_) {}
         if (chipsAtivos.length === 0) return;
 
@@ -3957,7 +3961,7 @@ async function loopRecuperacaoConversas() {
                                     console.log(`⏸️ [RECUPERACAO] Chip ocupado. Pulando ${l.name} desta rodada.`);
                                     continue;
                                 }
-                                
+
                                 await processarMensagemManual(instancia.sock, l);
                                 liberarSemaforoChip(l.instance_id); // 🚦 Libera vaga
 
@@ -3965,6 +3969,17 @@ async function loopRecuperacaoConversas() {
                                 const jitterRecuperacao = Math.floor(Math.random() * 30000) + 30000;
                                 console.log(`⏸️ [ANTI-BAN] Aguardando ${Math.round(jitterRecuperacao/1000)}s antes da próxima recuperação...`);
                                 await delay(jitterRecuperacao);
+                            } else if (chipsOficiaisIds.has(l.instance_id)) {
+                                // 🌐 Chip OFICIAL (Cloud API): não tem socket Baileys, então o resgate acima
+                                // nunca disparava — era um no-op silencioso (o log acima "Reativando IA..."
+                                // mentia). Aqui reenfileiramos direto na fila; o worker já sabe responder
+                                // oficial via HTTP (ehOficial). O guard `iaRespondendo` já evita resposta
+                                // dupla caso o job original ainda esteja rodando ou em rota.
+                                console.log(`🌐 [SALVAMENTO-OFICIAL] Reenfileirando resposta pendente de ${l.name} (chip oficial).`);
+                                await filaMensagensIA.add('gerar_resposta', {
+                                    leadId: l.id, whatsappId: l.whatsapp_id, instanceId: l.instance_id, remoteJid: l.whatsapp_id
+                                }, { priority: 1, attempts: 3 }).catch(e =>
+                                    console.error(`❌ [SALVAMENTO-OFICIAL] Falha ao reenfileirar ${l.name}:`, e.message));
                             }
 
                         }
@@ -4369,7 +4384,7 @@ await delay(jitterAntiBan);
     } finally {
         // 🔓 LIBERA O BLOQUEIO E AGENDA O PRÓXIMO CICLO
         vigiaEmExecucao = false;
-        setTimeout(loopRecuperacaoConversas, 1000 * 60 * 5); // Roda a cada 5 minutos
+        setTimeout(loopRecuperacaoConversas, 1000 * 60 * 3); // Roda a cada 3 minutos (rede de segurança do inbound)
     }
 }
 

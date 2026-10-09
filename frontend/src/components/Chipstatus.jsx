@@ -16,6 +16,12 @@ const C = {
 
 // Retorna cor e label de acordo com whatsapp_status do banco
 function resolveStatus(instance, connectingSet) {
+    // Chip OFICIAL (Cloud API): não tem sessão Baileys que cai/precisa de QR — está sempre "no ar"
+    // via API. Mostra como tal em vez de "Offline"/"Re-escanear QR" (conceitos de Baileys que não
+    // se aplicam). Isso também auto-esconde o botão Reconectar (que exige status 'off').
+    if (instance.whatsapp_provider === 'official') {
+        return { color: C.connected, label: 'API Oficial', icon: 'on' }
+    }
     if (connectingSet.has(instance.id)) {
         return { color: C.connecting, label: 'Conectando', icon: 'loading' }
     }
@@ -40,6 +46,9 @@ function timeAgo(isoStr) {
 
 // ─── CHIP CARD ────────────────────────────────────────────────────────────────
 function ChipCard({ instance, dailyCount, statusInfo, onReconnect, onResetSession, qrCode, onLimitChange, onTogglePause, onToggleFlag, onSaveCampaignFields, onSavePersona }) {
+    // Chip oficial (Cloud API) não usa sessão Baileys — esconde controles que só fazem sentido no
+    // Baileys (resetar sessão / QR / reconectar). O status e o reconnect já são tratados em resolveStatus.
+    const isOficial = instance.whatsapp_provider === 'official'
     const [editingLimit, setEditingLimit] = useState(false)
     const [localLimit,   setLocalLimit]   = useState(instance.daily_limit ?? 30)
     const [saving,       setSaving]       = useState(false)
@@ -217,8 +226,13 @@ function ChipCard({ instance, dailyCount, statusInfo, onReconnect, onResetSessio
             </div>
 
             {/* ── Badges de canal ── */}
-            {(instance.inbound_only || instance.use_email_outbound || instance.use_sms_outbound) && (
+            {(instance.whatsapp_provider === 'official' || instance.inbound_only || instance.use_email_outbound || instance.use_sms_outbound) && (
                 <div style={{ display: 'flex', gap: 6, flexWrap: 'wrap' }}>
+                    {instance.whatsapp_provider === 'official' && (
+                        <span style={{ fontSize: 8, fontWeight: 900, color: '#1877F2', background: 'rgba(24,119,242,0.12)', border: '1px solid rgba(24,119,242,0.3)', borderRadius: '999px', padding: '3px 8px', textTransform: 'uppercase', letterSpacing: '0.1em' }}>
+                            ✓ API Oficial
+                        </span>
+                    )}
                     {instance.inbound_only && (
                         <span style={{ fontSize: 8, fontWeight: 900, color: '#3B82F6', background: 'rgba(59,130,246,0.12)', border: '1px solid rgba(59,130,246,0.3)', borderRadius: '999px', padding: '3px 8px', textTransform: 'uppercase', letterSpacing: '0.1em' }}>
                             Inbound Only
@@ -667,7 +681,8 @@ function ChipCard({ instance, dailyCount, statusInfo, onReconnect, onResetSessio
                 )
             })()}
 
-            {/* ── Resetar Sessão ── */}
+            {/* ── Resetar Sessão (só Baileys — oficial não tem sessão/chaves pra resetar) ── */}
+            {!isOficial && (
             <div style={{ position: 'relative', display: 'flex', alignItems: 'center', gap: 6 }}>
                 <button
                     onClick={() => onResetSession?.(instance.id)}
@@ -726,6 +741,7 @@ function ChipCard({ instance, dailyCount, statusInfo, onReconnect, onResetSessio
                     )}
                 </div>
             </div>
+            )}
         </div>
     )
 }
