@@ -63,13 +63,23 @@ const _corsRestrito = _envOrigins.length > 0;
 const ALLOWED_ORIGINS = [...new Set([
     process.env.PUBLIC_BASE_URL, process.env.APP_URL,
     'http://localhost:5173', 'http://localhost:3001',
-    'https://antix-ia.com', 'https://www.antix-ia.com', // site institucional (widget de chat)
+    // site institucional (widget de chat) — inclui http:// e www porque navegador in-app
+    // (Instagram/Facebook) às vezes carrega a página sem o 's' ou com www, e o preflight
+    // do widget vinha sendo bloqueado em silêncio (chat "não respondia" no celular).
+    'https://antix-ia.com', 'https://www.antix-ia.com',
+    'http://antix-ia.com', 'http://www.antix-ia.com',
     ..._envOrigins,
 ].filter(Boolean))];
+// Qualquer subdomínio/variante de antix-ia.com é confiável (o widget é público e rate-limited).
+function _ehOrigemAntix(origin) {
+    try { return /(^|\.)antix-ia\.com$/i.test(new URL(origin).hostname); } catch { return false; }
+}
 function corsOriginCheck(origin, callback) {
     if (!origin) return callback(null, true);            // same-origin server, curl, health check
     if (!_corsRestrito) return callback(null, true);     // sem ALLOWED_ORIGINS → permissivo (não quebra)
-    if (ALLOWED_ORIGINS.includes(origin)) return callback(null, true);
+    if (ALLOWED_ORIGINS.includes(origin) || _ehOrigemAntix(origin)) return callback(null, true);
+    // Loga a origin EXATA recusada — pra enxergar o que o navegador in-app manda e ajustar.
+    console.warn(`🚫 [CORS] Origin recusada: "${origin}"`);
     return callback(new Error('Origin não permitida pelo CORS'));
 }
 if (_corsRestrito) console.log(`🔒 [CORS] Modo estrito — origens: ${ALLOWED_ORIGINS.join(', ')}`);
