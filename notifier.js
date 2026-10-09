@@ -133,4 +133,18 @@ async function enviarAlerta(titulo, mensagem, cor = 3447003) {
     });
 }
 
-module.exports = { enviarAlerta, alertaHandoff, alertaCalendly, alertaChipOffline, cancelarDebounceChip, alertaDegradacaoIA };
+// 🔔 Alerta com THROTTLE: dispara no máximo 1x por `chave` a cada `janelaMin` minutos.
+// Pra modos de falha que podem repetir rápido (webhook caindo, chip sumido) — avisa SEM
+// floodar o Discord. Fire-and-forget: NUNCA lança (não pode atrapalhar o fluxo que chamou).
+const _ultimoAlertaPorChave = new Map();
+async function alertaThrottled(chave, titulo, mensagem, { janelaMin = 10, cor = 15158332 } = {}) {
+    try {
+        const agora = Date.now();
+        const ultimo = _ultimoAlertaPorChave.get(chave) || 0;
+        if (agora - ultimo < janelaMin * 60 * 1000) return; // ainda no cooldown
+        _ultimoAlertaPorChave.set(chave, agora);
+        await enviarAlerta(titulo, mensagem, cor);
+    } catch (_) { /* alerta nunca pode quebrar o chamador */ }
+}
+
+module.exports = { enviarAlerta, alertaThrottled, alertaHandoff, alertaCalendly, alertaChipOffline, cancelarDebounceChip, alertaDegradacaoIA };

@@ -18,7 +18,7 @@ const { processarLimpeza } = require('./2_clean');
 const { enriquecerLeadIndividual } = require('./3_enrich');
 const db = require('./database');
 const emailService = require('./emailService'); // usado no preview de email (gerarCopyOutbound)
-const { alertaCalendly, enviarAlerta } = require('./notifier');
+const { alertaCalendly, enviarAlerta, alertaThrottled } = require('./notifier');
 const budgetGuard = require('./budgetGuard'); // teto de custo / uso do dia por tenant (Redis)
 // 👁️ Observabilidade: buffer de erros recentes (pra enxergar a prod sem depender do cliente avisar).
 const obs = require('./lib/observabilidade');
@@ -496,13 +496,23 @@ app.post('/webhook/whatsapp', webhookLimiter, express.json(), async (req, res) =
         // Railway em vez de o chip parecer "mudo" sem explicação no dia do lançamento.
         if (!verificarWebhookSecret(req, 'WHATSAPP_WEBHOOK_SECRET')) {
             console.warn(`🚫 [WA-WEBHOOK] Inbound DESCARTADO: token do webhook ausente/errado na URL (instanceId=${req.query.instanceId || '?'}). Confira ?token=<WHATSAPP_WEBHOOK_SECRET> na URL cadastrada na Meta.`);
+            alertaThrottled('wa-webhook-token', '🚫 Inbound oficial DESCARTADO (token do webhook errado)',
+                `A Meta está entregando, mas o \`?token=\` da Callback URL não bate com WHATSAPP_WEBHOOK_SECRET. Todo WhatsApp está caindo calado. Confira a URL na Meta (ver RUNBOOK §3).`);
             return;
         }
         if (!sdr?.receberInboundOficial) return console.warn('⚠️ [WA-WEBHOOK] SDR ainda não inicializado.');
         const instanceId = req.query.instanceId;
         if (!instanceId) return console.warn('⚠️ [WA-WEBHOOK] instanceId ausente na URL (?instanceId=...).');
         const r = await sdr.receberInboundOficial(instanceId, req.body);
-        if (!r?.ok) console.log(`ℹ️ [WA-WEBHOOK] Nada a processar (${r?.motivo || 'sem resultado'}).`);
+        if (!r?.ok) {
+            console.log(`ℹ️ [WA-WEBHOOK] Nada a processar (${r?.motivo || 'sem resultado'}).`);
+            // 🔔 Chip sumido/errado: webhook chegou mas o instanceId não existe no banco. Foi O bug
+            // que ninguém viu hoje até o inbound morrer. Alerta alto (throttle 10min).
+            if (r?.motivo === 'instancia_desconhecida') {
+                alertaThrottled('wa-chip-missing', '🔴 Chip oficial NÃO ENCONTRADO no banco',
+                    `Chegou webhook pro instanceId \`${instanceId}\` mas não existe instância com esse id. O chip foi removido? WhatsApp está sem atender. Recrie (RUNBOOK §4).`);
+            }
+        }
     } catch (err) {
         console.error('❌ [WA-WEBHOOK] Erro:', err.message);
     }

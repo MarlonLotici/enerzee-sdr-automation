@@ -51,7 +51,7 @@ const supervisorAgent = require('./agents/supervisorAgent'); // crítico em temp
 const handoffAgent = require('./agents/handoffAgent');
 const motoresEmExecucao = new Set(); // 🛡️ Impede que o mesmo chip ligue dois loops infinitos
 const { useRedisAuthState, clearRedisSession, saveOwnerToRedis, getOwnerFromRedis } = require('./auth_redis_adapter');
-const { enviarAlerta, alertaHandoff, alertaCalendly, alertaChipOffline, cancelarDebounceChip } = require('./notifier');
+const { enviarAlerta, alertaThrottled, alertaHandoff, alertaCalendly, alertaChipOffline, cancelarDebounceChip } = require('./notifier');
 const { getNicheData, inicializarCache } = require('./nicheCache');
 const instanciasEncerrandoManualmente = new Set(); // 🛑 Flag para silenciar alertas no Discord ao remover chip
 
@@ -2336,10 +2336,12 @@ if (matchClima) updates.sentiment = matchClima[1].toLowerCase();
 
             if (sock) await sock.sendPresenceUpdate('composing', remoteJid); // oficial (Cloud API) não tem presença
 
-            // ⚡ CÁLCULO DE JITTER DINÂMICO: Simula tempo de leitura + raciocínio + digitação
+            // ⚡ CÁLCULO DE JITTER DINÂMICO: Simula tempo de leitura + raciocínio + digitação.
+            // Reduzido ~25-30% (mult 65→48, base 3000→2000, teto 12000→9000) pra resposta mais ágil
+            // sem perder o ritmo humano. Objeção ainda "pensa" um pouco mais (parece mais cuidadosa).
             const isObjecao = resposta.includes('CLIMA:DESCONFIADO') || resposta.includes('CLIMA:OCUPADO');
-            const multiplicador = isObjecao ? 90 : 65;
-            const tempoBase = Math.min(trecho.length * multiplicador + 3000, 12000);
+            const multiplicador = isObjecao ? 65 : 48;
+            const tempoBase = Math.min(trecho.length * multiplicador + 2000, 9000);
 
             await delay(tempoBase);
             // Salva no banco ANTES de enviar: se o job retentar, o anti-loop de 3 msgs bloqueia reenvio
@@ -3980,6 +3982,10 @@ async function loopRecuperacaoConversas() {
                                     leadId: l.id, whatsappId: l.whatsapp_id, instanceId: l.instance_id, remoteJid: l.whatsapp_id
                                 }, { priority: 1, attempts: 3 }).catch(e =>
                                     console.error(`❌ [SALVAMENTO-OFICIAL] Falha ao reenfileirar ${l.name}:`, e.message));
+                                // 🔔 Aviso precoce: se a rede de segurança precisou resgatar, o caminho normal
+                                // (gaveta→worker) falhou. Repetir muito = worker travando. Throttle 15min.
+                                alertaThrottled('salvamento-oficial', '⚠️ Resgate de resposta no chip oficial',
+                                    `A IA não respondeu ${l.name} pelo caminho normal — a rede de segurança (3min) reenfileirou. Se isso repetir, o worker da fila está travando (ver RUNBOOK §3).`, { janelaMin: 15 });
                             }
 
                         }
@@ -6191,7 +6197,7 @@ module.exports = {
         const _keyGaveta = `${instanceId}:${cleanJid}`;
         const _antigo = gavetaOficialTimers.get(_keyGaveta);
         if (_antigo) clearTimeout(_antigo);
-        const _janela = Number(process.env.GAVETA_OFICIAL_MS) || 15000;
+        const _janela = Number(process.env.GAVETA_OFICIAL_MS) || 10000; // 10s: junta msgs picadas mas responde mais ágil (era 15s)
         const _leadId = lead.id;
         const _timer = setTimeout(async () => {
             gavetaOficialTimers.delete(_keyGaveta);

@@ -1,0 +1,26 @@
+name: tests
+
+# Roda os 123 testes automatizados (node --test) em cada push e PR.
+# Objetivo: nenhum commit que quebra teste chega em prod sem alguém ver.
+# NÃO bloqueia o deploy sozinho (Railway deploya no push) — pra bloquear de verdade,
+# ative Branch Protection em versao-profissional exigindo este check verde.
+
+on:
+  push:
+  pull_request:
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    env:
+      # Não baixa Chromium do Puppeteer no CI (os testes não usam navegador).
+      PUPPETEER_SKIP_DOWNLOAD: 'true'
+      PUPPETEER_SKIP_CHROMIUM_DOWNLOAD: 'true'
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+      # --legacy-peer-deps: o googleapis exige isso neste projeto (conflito de peer deps).
+      - run: npm install --legacy-peer-deps
+      - run: npm test
