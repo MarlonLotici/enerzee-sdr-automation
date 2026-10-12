@@ -31,7 +31,8 @@ test('querAgendar: NÃO dispara em conversa comum', () => {
 // ("Hoje eles chegam...") fazia a IA pular pro agendamento no meio da descoberta da dor.
 test('querAgendar: NÃO dispara com temporal incidental em resposta de qualificação longa', () => {
     for (const s of [
-        'Hoje eles chegam através de campanhas de marketing e pelo instagram',
+        'Hoje eles chegam através de campanhas de marketing e pelo instagram', // "marketing" NÃO é contexto de agenda
+        'investimos muito em marketing hoje pra trazer esses leads',           // idem: marketing + hoje, descritivo
         'hoje em dia a gente perde muito lead que chega de madrugada',
         'quando eles respondem a gente já demorou pra voltar',
         'pode ser que a gente feche uns 10 por mês, não sei direito',
