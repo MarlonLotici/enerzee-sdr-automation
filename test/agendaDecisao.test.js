@@ -27,6 +27,30 @@ test('querAgendar: NÃO dispara em conversa comum', () => {
         assert.ok(!querAgendar(s), `"${s}" NÃO deveria disparar`);
     }
 });
+// 🐛 BUG real (2026-10-10): resposta de qualificação LONGA com palavra temporal incidental
+// ("Hoje eles chegam...") fazia a IA pular pro agendamento no meio da descoberta da dor.
+test('querAgendar: NÃO dispara com temporal incidental em resposta de qualificação longa', () => {
+    for (const s of [
+        'Hoje eles chegam através de campanhas de marketing e pelo instagram',
+        'hoje em dia a gente perde muito lead que chega de madrugada',
+        'quando eles respondem a gente já demorou pra voltar',
+        'pode ser que a gente feche uns 10 por mês, não sei direito',
+    ]) {
+        assert.ok(!querAgendar(s), `"${s}" NÃO deveria disparar (temporal incidental)`);
+    }
+});
+test('querAgendar: AINDA dispara em pedido curto de horário (temporal é o assunto)', () => {
+    for (const s of ['pode ser amanhã', 'semana que vem', 'tem algo hoje?', 'amanhã às 15h fica bom']) {
+        assert.ok(querAgendar(s), `"${s}" deveria disparar`);
+    }
+});
+// Fluxo completo da Andressa: 2ª resposta de qualificação NÃO deve propor horário.
+test('deveProporAgendamento: resposta de qualificação longa não agenda (caso Andressa)', () => {
+    assert.equal(deveProporAgendamento({
+        texto: 'Hoje eles chegam através de campanhas de marketing e pelo instagram',
+        intencao: 'CONTINUAR', currentStage: 1, temSlots: false,
+    }), false);
+});
 
 // ── deveProporAgendamento (o coração da trava) ─────────────────────────────────
 test('NÃO agenda com um "oi" (bug clássico do estágio herdado)', () => {
