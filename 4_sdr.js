@@ -130,6 +130,7 @@ function identificarArtigo(nome) {
 // subir Redis/BullMQ. Mesma lógica, só mudou de arquivo.
 const { extrairNomeHumano, saudacaoPrimeiroNome, extrairNomeDeclarado, empresaConfiavelDoLead } = require('./lib/textPuros');
 const { dividirEmBaloes } = require('./lib/baloes');
+const { semTravessao } = require('./lib/semTravessao');
 // 📅 Confirmação diária de reuniões via Google Agenda (feature opt-in por tenant).
 const { extrairTelefoneDescricao, eventoEhReuniao, digitosParaJids } = require('./lib/gcalParse');
 const { classificarConfirmacao } = require('./lib/confirmacao');
@@ -1222,6 +1223,7 @@ PROIBIDO dizer de novo "vou ver os horários" / "deixa eu ver os horários" — 
 - Se uma informação (preço, desconto, política de reembolso/garantia, certificação, prazo, integração, condição comercial) NÃO estiver EXPLÍCITA nas suas instruções acima, você NÃO sabe. Diga com naturalidade que o time confirma isso na conversa/reunião (ex.: "essa parte quem fecha certinho é o time na call"). É melhor dizer "confirmo pra você" do que inventar.
 - LINK de reunião: NUNCA invente um. Use APENAS um link que esteja escrito nas suas instruções. Se não houver, só conduza o lead pro agendamento — o sistema cria o horário e o link REAIS. Nunca afirme que uma reunião está confirmada por conta própria.
 - NUNCA ofereça prospecção ativa / disparo em massa. Nosso foco é atender e qualificar quem chega.
+- NUNCA use travessão (—) na resposta. Prefira vírgula, ponto ou quebra de frase.
 - Responda SEMPRE no MESMO idioma em que o lead escreveu.${secaoEstadoAgenda}`;
 
     // 🧑 NOME DO CONTATO: quando nomeLead='vc' (pushName vazio OU nome de EMPRESA, filtrado por
@@ -2283,6 +2285,9 @@ if (matchClima) updates.sentiment = matchClima[1].toLowerCase();
             console.log(`🚦 [1-PERGUNTA] ${nPerguntas} perguntas empilhadas — cortado após a 1ª.`);
         }
     }
+
+    // 🚫 TRAVESSÃO: a Sofia não usa — nem no texto fixo do código, nem no que a LLM gera sozinha.
+    textoLimpo = semTravessao(textoLimpo);
 
     // ── 3. ENVIO FATIADO ──
     // Split humano no CÓDIGO (não depende do LLM emitir [QUEBRA]): respeita o [QUEBRA] se veio,
@@ -6289,7 +6294,7 @@ module.exports = {
         // REAIS — igual ao WhatsApp (nada de link falso). Só dispara quando há intenção de marcar.
         const agend = await orquestrarAgendamento(lead, texto, instanceData, USER_ID, intencao, historico).catch(() => ({ tratado: false }));
         if (agend?.tratado && agend.resposta) {
-            const rA = stripWeb(agend.resposta) || 'Deixa eu ver os horários certinho aqui e já te falo 🙌';
+            const rA = semTravessao(stripWeb(agend.resposta)) || 'Deixa eu ver os horários certinho aqui e já te falo 🙌';
             await db.saveMessage(waId, 'assistant', rA, null, USER_ID, 'web').catch(() => {});
             if (ioSocket && leadNovo) ioSocket.to(`user:${USER_ID}`).emit('new_lead', lead);
             return { ok: true, reply: rA, handoff: false, leadId: lead.id };
@@ -6336,7 +6341,7 @@ module.exports = {
 
         // 🚫 ANTI-PAREDÃO (web): 1 pergunta por vez + no máx 2 frases. Trava pura em
         // lib/webGuardrails.js (enxugarWeb) — testada isoladamente.
-        const reply = enxugarWeb(stripWeb(respostaRaw)) || 'Opa, tive uma instabilidade aqui — consegue repetir?';
+        const reply = semTravessao(enxugarWeb(stripWeb(respostaRaw))) || 'Opa, tive uma instabilidade aqui, consegue repetir?';
         await db.saveMessage(waId, 'assistant', reply, null, USER_ID, 'web').catch(() => {});
         if (ioSocket && leadNovo) ioSocket.to(`user:${USER_ID}`).emit('new_lead', lead);
 
