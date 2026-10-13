@@ -6398,6 +6398,8 @@ module.exports = {
 - NÃO presuma que a pessoa é a dona do negócio. Em vez de "o que a SUA empresa faz", pergunte neutro ("com o que você trabalha?", "me conta um pouco do seu negócio?"). Descubra o papel dela com naturalidade.
 - ESPELHE o segmento: adapte exemplos e palavras ao negócio dela. Clínica/consultório → "pacientes", "agenda", "secretária". Salão → "clientes", "horários". Loja → "clientes", "vendas".
 - QUALIFIQUE com leveza ANTES de agendar: entenda o que ela faz, como atende os clientes hoje e onde perde tempo ou cliente (a dor). Só convide pra conversa quando houver interesse claro — não pule pra reunião cedo.
+- ESCOPO: a Antix faz automação do COMERCIAL/ATENDIMENTO (responder clientes na hora, qualificar, agendar, pós-venda). NÃO oferecemos IA pra contabilidade, impostos, jurídico, RH ou áreas fora do comercial. Se a dor da pessoa for fora disso, seja HONESTA ("isso foge um pouco do que a gente faz, nosso forte é o atendimento ao cliente") e veja se há dor no atendimento/comercial — nunca invente que resolvemos o que não resolvemos.
+- Se a pessoa PERGUNTAR algo sobre a reunião ("vamos falar sobre X?", "como é?", "quanto dura?"), RESPONDA a pergunta primeiro — nunca pule pro horário por cima dela.
 - PROIBIDO inventar horário ou link. NUNCA liste horários você mesma (nada de "Horário 1: 10h..."). Quando ela ACEITAR, diga em UMA linha curta que já vai ver os horários — o sistema mostra os reais na sequência. Nunca prometa "vou ver os horários" e pare sem entregar.`;
 
         const respostaRaw = await closerAgent.gerarRespostaCloser(historicoIA, lead, promptWeb, intencao, {

@@ -176,3 +176,17 @@ test('deveProporAgendamento: cumpre a promessa de agenda no turno seguinte (nao 
     // mas se o lead recuou, NÃO propõe
     assert.equal(deveProporAgendamento({ texto: 'depois eu vejo', intencao: 'CONTINUAR', currentStage: 2, temSlots: false, prometeuAgenda: true }), false);
 });
+
+// 🐛 BUG real (Lucas 2026-10-10): "vamos falar sobre contabilidade na reunião?" começava com
+// "vamos" → lido como aceite → pulou pro horário, ignorando a pergunta. Deve ser DÚVIDA.
+test('pergunta sobre a reunião começando com "vamos"/"pode" NÃO é aceite (é dúvida)', () => {
+    const q = 'vamos falar sobre contabilidade na reuniao?';
+    assert.equal(ehDuvidaSobreReuniao(q), true);
+    assert.equal(ehAfirmativo(q), false);
+    assert.equal(deveProporAgendamento({ texto: q, intencao: 'COMPRA', currentStage: 4, temSlots: false, aceitouConvite: true }), false);
+    // aceite curto legítimo segue funcionando
+    assert.equal(ehAfirmativo('vamos'), true);
+    assert.equal(ehAfirmativo('pode ser'), true);
+    // pedido explícito de marcar (mesmo com "?") NÃO é dúvida — é pra agendar
+    assert.equal(ehDuvidaSobreReuniao('podemos marcar a reunião?'), false);
+});
