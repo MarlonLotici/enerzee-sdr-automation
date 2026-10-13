@@ -81,10 +81,17 @@ test('AGENDA quando já há slots propostos (conversa de agenda em curso)', () =
     assert.equal(deveProporAgendamento({ texto: 'o primeiro', intencao: 'DUVIDA', currentStage: 4, temSlots: true }), true);
 });
 
-test('AGENDA quando o roteador entende COMPRA (ex.: "consegue essa semana?") já qualificado', () => {
-    // "consegue essa semana?" não é keyword explícita — quem entende que é pedido de horário é o
-    // roteador LLM (COMPRA). Com COMPRA + estágio>=3, o orquestrador propõe (mata "vou verificar").
-    assert.equal(deveProporAgendamento({ texto: 'consegue essa semana?', intencao: 'COMPRA', currentStage: 4, temSlots: false }), true);
+test('AGENDA quando o roteador entende COMPRA (aceite) já qualificado', () => {
+    // Aceite NÃO-pergunta classificado COMPRA pelo LLM, já qualificado → propõe.
+    assert.equal(deveProporAgendamento({ texto: 'bora, pode ser essa semana', intencao: 'COMPRA', currentStage: 4, temSlots: false }), true);
+});
+// 🐛 BUG real (Matheus 2026-10-10): "vocês conseguem me economizar quanto?" (PERGUNTA de produto,
+// com "hoje" incidental) virou oferta de horário. Pergunta genuína é respondida, nunca agendada.
+test('pergunta genuína (não-agenda) NÃO propõe horário, mesmo COMPRA já qualificado', () => {
+    assert.equal(deveProporAgendamento({ texto: 'hoje gasto 6 mil, vocês conseguem me economizar quanto?', intencao: 'COMPRA', currentStage: 4, temSlots: false }), false);
+    assert.equal(deveProporAgendamento({ texto: 'quanto custa?', intencao: 'COMPRA', currentStage: 4, temSlots: false }), false);
+    // pedido de horário em forma de pergunta AINDA agenda (passa por querAgendar)
+    assert.equal(deveProporAgendamento({ texto: 'pode ser às 10h?', intencao: 'DUVIDA', currentStage: 2, temSlots: false }), true);
 });
 
 test('defaults seguros: sem argumentos → não agenda', () => {

@@ -160,6 +160,7 @@ function AppSidebar({ activeTab, setActiveTab, leadsCount, onLogout, contaInboun
     const [loginPassword, setLoginPassword] = useState('');
     const [loginError, setLoginError] = useState(null);
     const [isLoggingIn, setIsLoggingIn] = useState(false);
+    const [resetMsg, setResetMsg] = useState(null); // feedback do "esqueci minha senha"
 
     // Monitora o estado de login
     useEffect(() => {
@@ -1018,6 +1019,16 @@ if (session?.user?.id) checkBriefing()
             setIsLoggingIn(false);
         };
 
+        const handleResetPassword = async () => {
+            setLoginError(null); setResetMsg(null);
+            if (!loginEmail || !/^[^s@]+@[^s@]+.[^s@]+$/.test(loginEmail)) {
+                setLoginError('Digite seu e-mail no campo acima pra enviar o link de redefinicao.');
+                return;
+            }
+            const { error } = await supabase.auth.resetPasswordForEmail(loginEmail, { redirectTo: window.location.origin });
+            if (error) setLoginError(error.message); else setResetMsg('Enviamos um link de redefinicao pro seu e-mail. Confira a caixa de entrada (e o spam).');
+        };
+
         return (
                 <div className="h-screen bg-[#0A0A0A] flex items-center justify-center p-6">
                     <div className="glass-panel p-10 rounded-[2.5rem] border-amber-500/30 flex flex-col max-w-md w-full relative overflow-hidden" style={{boxShadow:'0 0 40px rgba(245,158,11,0.15)'}}>
@@ -1073,7 +1084,16 @@ if (session?.user?.id) checkBriefing()
                         >
                             {isLoggingIn ? <Loader2 className="h-5 w-5 animate-spin mx-auto" /> : "ENTRAR NO ANTIX FLOW"}
                         </Button>
-                    </form>
+                    
+                        {resetMsg && (
+                            <div className="bg-emerald-500/10 border border-emerald-500/30 rounded-lg p-3">
+                                <p className="text-[10px] font-bold text-emerald-400 tracking-wider text-center">{resetMsg}</p>
+                            </div>
+                        )}
+                        <button type="button" onClick={handleResetPassword} className="text-[11px] text-slate-400 hover:text-amber-400 transition-colors text-center mt-1">
+                            Esqueci minha senha
+                        </button>
+                    </form>
                 </div>
             </div>
         )

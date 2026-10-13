@@ -285,7 +285,7 @@ const { calcularBackoffReconexao } = require('./lib/reconexao');
 // 🚫 Travas de qualidade da resposta no chat do site (puras, testáveis) — lib/webGuardrails.js.
 const { stripWeb, enxugarWeb } = require('./lib/webGuardrails');
 // 📅 Decisão pura de agendamento (não agenda com "oi") — lib/agendaDecisao.js.
-const { deveProporAgendamento, aceitouConviteDeReuniao, prometeuVerAgenda, ehSaudacaoPura } = require('./lib/agendaDecisao');
+const { deveProporAgendamento, aceitouConviteDeReuniao, prometeuVerAgenda, ehSaudacaoPura, querAgendar: querAgendarDecisao } = require('./lib/agendaDecisao');
 
 // ============================================================================
 // 🗄️ PERSISTÊNCIA DA GAVETA (nunca perder inbound num restart/deploy)
@@ -4864,9 +4864,11 @@ async function orquestrarAgendamento(lead, ultimaMsg, instanceData, userId, inte
     }
 
     // ── FASE OFERTA inicial ──
-    // Se o lead já citou um dia na mensagem que pediu pra marcar ("bora marcar quinta?"),
-    // oferece já nesse dia. Senão, próximos livres.
-    return await ofertar(false, extrairDiaPedido(ultimaMsg) || null);
+    // Só honra um DIA da mensagem se ela for de fato um pedido de agendar ("bora marcar quinta") ou
+    // aceite de convite — senão um "hoje"/"amanhã" INCIDENTAL ("hoje estou gastando 6 mil") marcaria
+    // no dia errado. Fora desses casos, oferece os próximos livres.
+    const diaInicial = (querAgendarDecisao(ultimaMsg) || aceitouConvite) ? (extrairDiaPedido(ultimaMsg) || null) : null;
+    return await ofertar(false, diaInicial);
 }
 
 const workerIA = new Worker('FilaIA', async (job) => {
