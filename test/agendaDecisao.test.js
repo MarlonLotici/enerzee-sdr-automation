@@ -15,10 +15,11 @@ test('ehSaudacaoPura: NÃO marca frase com conteúdo real', () => {
     }
 });
 
-// ── querAgendar ────────────────────────────────────────────────────────────────
-test('querAgendar: pega intenção de marcar (verbos, dias, relativos)', () => {
-    for (const s of ['quero agendar', 'podemos marcar uma reunião', 'pode ser amanhã', 'que horas você tem',
-        'tem horário na quinta?', 'vamos marcar', 'que dia fica bom', 'semana que vem']) {
+// ── querAgendar: SÓ pedido EXPLÍCITO (compreensão cuida do resto) ───────────────
+test('querAgendar: pega pedido EXPLÍCITO de marcar (verbos/horário com "às")', () => {
+    for (const s of ['quero agendar', 'podemos marcar uma reunião', 'que horas você tem',
+        'tem horário na quinta?', 'vamos marcar', 'que dia fica bom', 'me manda os horários',
+        'pode ser amanhã às 10h', 'às 14h fica bom']) {
         assert.ok(querAgendar(s), `"${s}" deveria disparar querAgendar`);
     }
 });
@@ -27,22 +28,21 @@ test('querAgendar: NÃO dispara em conversa comum', () => {
         assert.ok(!querAgendar(s), `"${s}" NÃO deveria disparar`);
     }
 });
-// 🐛 BUG real (2026-10-10): resposta de qualificação LONGA com palavra temporal incidental
-// ("Hoje eles chegam...") fazia a IA pular pro agendamento no meio da descoberta da dor.
-test('querAgendar: NÃO dispara com temporal incidental em resposta de qualificação longa', () => {
+// 🧠 COMPREENSÃO, não keyword: palavra temporal/duração incidental NUNCA dispara agendamento.
+// (A intenção de marcar vem do aceite de convite ou do roteador LLM — não de "hoje"/"amanhã"/"2h".)
+test('querAgendar: NÃO dispara com temporal/duração incidental', () => {
     for (const s of [
-        'Hoje eles chegam através de campanhas de marketing e pelo instagram', // "marketing" NÃO é contexto de agenda
-        'investimos muito em marketing hoje pra trazer esses leads',           // idem: marketing + hoje, descritivo
+        'Hoje trabalho com escritório de advocacia',   // caso Josiane
+        'Hoje eles chegam através de campanhas de marketing e pelo instagram',
         'hoje em dia a gente perde muito lead que chega de madrugada',
         'quando eles respondem a gente já demorou pra voltar',
-        'pode ser que a gente feche uns 10 por mês, não sei direito',
+        'pode ser que a gente feche uns 10 por mês',
+        'respondo em 2h',                              // duração, não horário
+        'o primeiro cliente chega cedo',               // ordinal descritivo
+        'pode ser amanhã',                             // dia solto, sem horário explícito
+        'semana que vem',
     ]) {
-        assert.ok(!querAgendar(s), `"${s}" NÃO deveria disparar (temporal incidental)`);
-    }
-});
-test('querAgendar: AINDA dispara em pedido curto de horário (temporal é o assunto)', () => {
-    for (const s of ['pode ser amanhã', 'semana que vem', 'tem algo hoje?', 'amanhã às 15h fica bom']) {
-        assert.ok(querAgendar(s), `"${s}" deveria disparar`);
+        assert.ok(!querAgendar(s), `"${s}" NÃO deveria disparar (incidental)`);
     }
 });
 // Fluxo completo da Andressa: 2ª resposta de qualificação NÃO deve propor horário.
@@ -81,8 +81,10 @@ test('AGENDA quando já há slots propostos (conversa de agenda em curso)', () =
     assert.equal(deveProporAgendamento({ texto: 'o primeiro', intencao: 'DUVIDA', currentStage: 4, temSlots: true }), true);
 });
 
-test('AGENDA no estágio>=4 com mensagem real (não-saudação) — mata "vou verificar e retorno"', () => {
-    assert.equal(deveProporAgendamento({ texto: 'consegue essa semana?', intencao: 'DUVIDA', currentStage: 4, temSlots: false }), true);
+test('AGENDA quando o roteador entende COMPRA (ex.: "consegue essa semana?") já qualificado', () => {
+    // "consegue essa semana?" não é keyword explícita — quem entende que é pedido de horário é o
+    // roteador LLM (COMPRA). Com COMPRA + estágio>=3, o orquestrador propõe (mata "vou verificar").
+    assert.equal(deveProporAgendamento({ texto: 'consegue essa semana?', intencao: 'COMPRA', currentStage: 4, temSlots: false }), true);
 });
 
 test('defaults seguros: sem argumentos → não agenda', () => {

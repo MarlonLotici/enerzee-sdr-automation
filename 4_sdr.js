@@ -4594,7 +4594,7 @@ function _montarSlotNoDia(baseISO, h, min, duracaoMin) {
     };
 }
 
-async function orquestrarAgendamento(lead, ultimaMsg, instanceData, userId, intencao, historico = []) {
+async function orquestrarAgendamento(lead, ultimaMsg, instanceData, userId, intencao, historico = [], opts = {}) {
     // Carrega a config de booking SEMPRE (mesmo quando não vamos agendar): o worker precisa
     // saber se o booking está ativo (e se há agenda conectada) pra o closer NÃO mandar Calendly.
     const { data: cfg } = await supabase.from('calendar_connections')
@@ -4613,7 +4613,9 @@ async function orquestrarAgendamento(lead, ultimaMsg, instanceData, userId, inte
     // em vez de deixar o closer ecoar horários antigos do histórico (bug da inconsistência).
     const aceitouConvite = aceitouConviteDeReuniao(historico, ultimaMsg);
     const prometeuAgenda = prometeuVerAgenda(historico);
-    if (!jaAgendado && !deveProporAgendamento({ texto: ultimaMsg, intencao, currentStage: lead.current_stage, temSlots, aceitouConvite, prometeuAgenda }))
+    // forcarOferta: trava anti-stall — quando o closer tentou "prometer e parar" (deixa eu ver os
+    // horários), o chamador re-invoca forçando a proposta de slots REAIS, pulando o gate.
+    if (!jaAgendado && !opts.forcarOferta && !deveProporAgendamento({ texto: ultimaMsg, intencao, currentStage: lead.current_stage, temSlots, aceitouConvite, prometeuAgenda }))
         return { tratado: false, bookingAtivo: true, agendaConectada };
 
     const calId = cfg.booking_calendar_id || cfg.calendar_id || 'primary';
@@ -5366,6 +5368,16 @@ if (bookingAtivo && typeof resposta === 'string') {
                 return;
             }
         } catch (_) {}
+
+        // 🛑 ANTI-STALL (WhatsApp): se o closer prometeu "deixa eu ver os horários" e PARARIA, o lead
+        // ia esperar uma msg que nunca chega. Intercepta e entrega os horários REAIS agora.
+        if (resposta && prometeuVerAgenda([{ role: 'assistant', content: String(resposta) }])) {
+            const forcado = await orquestrarAgendamento(lead, ultimaMsg, instanceData, userId, intencao, historico, { forcarOferta: true }).catch(() => null);
+            if (forcado?.tratado && forcado.resposta) {
+                await filtrarEEnviarResposta(instancia?.sock, remoteJid, forcado.resposta, historico, lead, instanceId, instanceData?.tts_voice || null);
+                return;
+            }
+        }
 
         // 4.3. Filtra, Carimba no WPP e Envia (instancia?.sock: oficial não tem socket → null, envio vai por HTTP)
         await filtrarEEnviarResposta(instancia?.sock, remoteJid, resposta, historico, lead, instanceId, instanceData?.tts_voice || null);
@@ -6379,11 +6391,14 @@ module.exports = {
 🌐 CANAL ATUAL: CHAT DO SITE (antix-ia.com) — teste ao vivo da IA
 =======================================================
 - Seja concisa: no máximo 2 balões curtos, UMA pergunta por vez.
-- CALOR no 1º contato: cumprimente de forma calorosa e humana UMA vez (ex.: "Oi, que bom te ver por aqui! 😊"). NUNCA comece com "Oi"/"Olá" de novo nas mensagens seguintes — já se cumprimentaram, siga a conversa direto.
-- LOGO no começo (se ainda não souber), pergunte o NOME da pessoa ("como posso te chamar?").
-- QUALIFIQUE DE VERDADE ANTES de falar em agendar: descubra (uma de cada vez) o segmento/empresa dela, como ela capta e qualifica os leads hoje, e onde perde oportunidade (a DOR). Só avance pro agendamento quando houver dor + interesse CLAROS — não pule pra reunião nas primeiras mensagens.
-- PROIBIDO inventar horário ou link. NUNCA liste horários você mesma (nada de "Horário 1: 10h...") — quem traz os horários REAIS é o sistema.
-- Se a pessoa perguntar algo sobre a reunião (como é, quanto dura), RESPONDA primeiro. Só quando ela ACEITAR marcar, diga em UMA linha curta que já vai puxar os horários — o sistema mostra os horários reais na sequência. Nunca prometa "vou ver os horários" e pare sem entregar.`;
+- TOM leve, simpático e humano, como uma pessoa conversando no WhatsApp (nada corporativo nem robótico). No máx 1 emoji por mensagem, quando couber natural.
+- LINGUAGEM SIMPLES de dono de negócio. PROIBIDO jargão técnico: nada de "lead", "pipeline", "qualificação", "SDR", "pós-venda", "conversão", "funil". Fale como o cliente fala: "clientes", "atendimento", "responder na hora", "encher a agenda", "não perder cliente".
+- RESPONDA ao que a pessoa diz ANTES de puxar sua pergunta. Se ela retribuir o cumprimento ("e você?", "tudo bem e contigo?"), responda com calor ("Tudo ótimo, obrigada! 😊") antes de seguir. Cumprimente UMA vez; não reabra com "Oi"/"Olá" nas mensagens seguintes.
+- LOGO no começo (se ainda não souber), pergunte o NOME ("como posso te chamar?").
+- NÃO presuma que a pessoa é a dona do negócio. Em vez de "o que a SUA empresa faz", pergunte neutro ("com o que você trabalha?", "me conta um pouco do seu negócio?"). Descubra o papel dela com naturalidade.
+- ESPELHE o segmento: adapte exemplos e palavras ao negócio dela. Clínica/consultório → "pacientes", "agenda", "secretária". Salão → "clientes", "horários". Loja → "clientes", "vendas".
+- QUALIFIQUE com leveza ANTES de agendar: entenda o que ela faz, como atende os clientes hoje e onde perde tempo ou cliente (a dor). Só convide pra conversa quando houver interesse claro — não pule pra reunião cedo.
+- PROIBIDO inventar horário ou link. NUNCA liste horários você mesma (nada de "Horário 1: 10h..."). Quando ela ACEITAR, diga em UMA linha curta que já vai ver os horários — o sistema mostra os reais na sequência. Nunca prometa "vou ver os horários" e pare sem entregar.`;
 
         const respostaRaw = await closerAgent.gerarRespostaCloser(historicoIA, lead, promptWeb, intencao, {
             instanceType: 'antix', bookingAtivo: true, agendaConectada: true, calendlyLink: '',
@@ -6393,6 +6408,19 @@ module.exports = {
         // Persiste o estágio declarado (qualificação progride + orquestrador propõe no momento certo)
         const mEst = String(respostaRaw || '').match(/\[ESTAGIO:\s*(\d)\s*\]/i);
         if (mEst) { const s = parseInt(mEst[1], 10); if (s >= 0 && s <= 5 && s !== (lead.current_stage || 0)) await supabase.from('leads').update({ current_stage: s }).eq('id', lead.id).then(() => {}, () => {}); }
+
+        // 🛑 ANTI-STALL: se o closer prometeu "deixa eu ver os horários" e PARARIA (o lead ia esperar
+        // uma msg que nunca chega, achando que travou), interceptamos e entregamos os horários REAIS
+        // agora mesmo — na mesma resposta. É o bug "promessa vazia" visto em teste real.
+        if (prometeuVerAgenda([{ role: 'assistant', content: String(respostaRaw || '') }])) {
+            const forcado = await orquestrarAgendamento(lead, texto, instanceData, USER_ID, intencao, historico, { forcarOferta: true }).catch(() => null);
+            if (forcado?.tratado && forcado.resposta) {
+                const rF = semTravessao(stripWeb(forcado.resposta)) || 'Deixa eu ver os horários certinho e já te falo 🙌';
+                await db.saveMessage(waId, 'assistant', rF, null, USER_ID, 'web').catch(() => {});
+                if (ioSocket && leadNovo) ioSocket.to(`user:${USER_ID}`).emit('new_lead', lead);
+                return { ok: true, reply: rF, handoff: (lead.current_stage || 0) >= 4, leadId: lead.id };
+            }
+        }
 
         // 🚫 ANTI-PAREDÃO (web): 1 pergunta por vez + no máx 2 frases. Trava pura em
         // lib/webGuardrails.js (enxugarWeb) — testada isoladamente.

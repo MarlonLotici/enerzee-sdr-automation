@@ -98,9 +98,11 @@ async function classificarMensagem(ultimaMensagemLead) {
         /\b(agendar|marcar|remarcar)\s+(uma\s+|a\s+)?(reuni[ãa]o|call|conversa|hor[áa]rio|demonstra)/i.test(ultimaMensagemLead) ||
         /\b(pode\s+ser|combinado|fechado|fechou|bora|t[ôo]\s+dentro|topo|aceito|vamos\s+(l[áa]|nessa|marcar))\b/i.test(ultimaMensagemLead) ||
         /\b(me\s+)?(manda|envia|mandar|enviar)\s+(o\s+|esse\s+|aquele\s+)?link\b/i.test(ultimaMensagemLead) ||
-        /\bqual\s+(o\s+)?link\b/i.test(ultimaMensagemLead) ||
-        /\b(o|a)\s+(primeir[oa]|segund[oa]|terceir[oa])\b/i.test(ultimaMensagemLead) ||        // confirma slot proposto ("o primeiro")
-        /\b(?:[àa]s\s?\d{1,2}|\d{1,2}\s?h(?:oras)?|\d{1,2}:\d{2})\b/i.test(ultimaMensagemLead)     // escolhe horário ("às 10", "10h", "15:00")
+        /\bqual\s+(o\s+)?link\b/i.test(ultimaMensagemLead)
+        // ⚠️ Removidos daqui os gatilhos "o primeiro/segundo" e "às 10 / 10h / 15:00": eram
+        // palavra-chave que virava COMPRA FALSO em frase descritiva ("respondo em 2h", "o primeiro
+        // cliente chega às 9h"). Escolha de slot/horário já é tratada no orquestrador de agendamento
+        // quando HÁ horários propostos (temSlots) — não precisa forçar COMPRA por regex aqui.
     );
     if (padraoCompra) {
         console.log("💰 [ROTEADOR] Aceite/escolha de horário detectado. Bypass para COMPRA.");
