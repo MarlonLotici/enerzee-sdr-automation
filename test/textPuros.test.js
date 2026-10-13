@@ -32,11 +32,17 @@ test('extrairNomeDeclarado: pega nome que o lead fala no chat', () => {
     assert.equal(extrairNomeDeclarado('me chamo Roberto'), 'Roberto');
     assert.equal(extrairNomeDeclarado('pode me chamar de Bia'), 'Bia');
     assert.equal(extrairNomeDeclarado('aqui é o Pedro'), 'Pedro');
+    // 🐛 BUG real (2026-10-10): "Sou Amanda"/"sou Andressa" sem artigo salvava "Sou" no pipeline.
+    assert.equal(extrairNomeDeclarado('Sou Amanda'), 'Amanda');
+    assert.equal(extrairNomeDeclarado('sou Andressa'), 'Andressa');
+    assert.equal(extrairNomeDeclarado('eu sou o João'), 'João');
 });
 
 test('extrairNomeDeclarado: rejeita quando o "nome" é empresa ou não há nome', () => {
     assert.equal(extrairNomeDeclarado('aqui é a Padaria São José'), null);
     assert.equal(extrairNomeDeclarado('sou o supermercado opção'), null);
+    assert.equal(extrairNomeDeclarado('sou de São Paulo'), null);   // não captura "De"
+    assert.equal(extrairNomeDeclarado('sou muito ocupado'), null);  // não captura "Muito"
     assert.equal(extrairNomeDeclarado('quanto custa?'), null);
     assert.equal(extrairNomeDeclarado('bom dia'), null);
     assert.equal(extrairNomeDeclarado(''), null);

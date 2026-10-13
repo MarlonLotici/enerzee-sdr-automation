@@ -1,7 +1,7 @@
 'use strict';
 const test = require('node:test');
 const assert = require('node:assert/strict');
-const { querAgendar, ehSaudacaoPura, deveProporAgendamento, aceitouConviteDeReuniao, ehAfirmativo, ehDuvidaSobreReuniao } = require('../lib/agendaDecisao');
+const { querAgendar, ehSaudacaoPura, deveProporAgendamento, aceitouConviteDeReuniao, ehAfirmativo, ehDuvidaSobreReuniao, prometeuVerAgenda } = require('../lib/agendaDecisao');
 
 // ── ehSaudacaoPura ─────────────────────────────────────────────────────────────
 test('ehSaudacaoPura: reconhece cumprimentos puros', () => {
@@ -158,4 +158,19 @@ test('mesmo sendo dúvida, se já há slots em curso segue no fluxo de agenda (L
 test('ehAfirmativo: pega aceites curtos e ignora negativas/dúvidas', () => {
     for (const s of ['sim', 'bora', 'pode ser', 'quero', 'faz sentido', 'perfeito', 'fechado']) assert.ok(ehAfirmativo(s), `"${s}"`);
     for (const s of ['não', 'talvez', 'depois eu vejo', 'quanto custa?']) assert.ok(!ehAfirmativo(s), `"${s}"`);
+});
+
+// 🐛 BUG real (Amanda 2026-10-10): a IA prometeu "deixa eu ver os horários" e ficou prometendo
+// em loop sem entregar os slots (promessa vazia) — o lead teve que cutucar.
+test('prometeuVerAgenda: detecta a IA prometendo puxar a agenda', () => {
+    assert.ok(prometeuVerAgenda([{ role: 'assistant', content: 'Deixa eu ver os horários aqui pra você.' }]));
+    assert.ok(prometeuVerAgenda([{ role: 'assistant', content: 'Vou abrir a agenda aqui e puxar os horários disponíveis pra gente.' }]));
+    assert.ok(prometeuVerAgenda([{ role: 'assistant', content: 'Já estou puxando os horários disponíveis...' }]));
+    assert.ok(!prometeuVerAgenda([{ role: 'assistant', content: 'Legal! Como vocês captam leads hoje?' }]));
+});
+test('deveProporAgendamento: cumpre a promessa de agenda no turno seguinte (nao fica prometendo)', () => {
+    assert.equal(deveProporAgendamento({ texto: 'beleza', intencao: 'CONTINUAR', currentStage: 2, temSlots: false, prometeuAgenda: true }), true);
+    assert.equal(deveProporAgendamento({ texto: 'ok', intencao: 'CONTINUAR', currentStage: 2, temSlots: false, prometeuAgenda: true }), true);
+    // mas se o lead recuou, NÃO propõe
+    assert.equal(deveProporAgendamento({ texto: 'depois eu vejo', intencao: 'CONTINUAR', currentStage: 2, temSlots: false, prometeuAgenda: true }), false);
 });

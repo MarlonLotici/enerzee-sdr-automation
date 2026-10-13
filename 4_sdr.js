@@ -285,7 +285,7 @@ const { calcularBackoffReconexao } = require('./lib/reconexao');
 // 🚫 Travas de qualidade da resposta no chat do site (puras, testáveis) — lib/webGuardrails.js.
 const { stripWeb, enxugarWeb } = require('./lib/webGuardrails');
 // 📅 Decisão pura de agendamento (não agenda com "oi") — lib/agendaDecisao.js.
-const { deveProporAgendamento, aceitouConviteDeReuniao, ehSaudacaoPura } = require('./lib/agendaDecisao');
+const { deveProporAgendamento, aceitouConviteDeReuniao, prometeuVerAgenda, ehSaudacaoPura } = require('./lib/agendaDecisao');
 
 // ============================================================================
 // 🗄️ PERSISTÊNCIA DA GAVETA (nunca perder inbound num restart/deploy)
@@ -4612,7 +4612,8 @@ async function orquestrarAgendamento(lead, ultimaMsg, instanceData, userId, inte
     // Se JÁ está agendado, não sai cedo: cai no bloco de "já agendado" abaixo (confirma/remarca),
     // em vez de deixar o closer ecoar horários antigos do histórico (bug da inconsistência).
     const aceitouConvite = aceitouConviteDeReuniao(historico, ultimaMsg);
-    if (!jaAgendado && !deveProporAgendamento({ texto: ultimaMsg, intencao, currentStage: lead.current_stage, temSlots, aceitouConvite }))
+    const prometeuAgenda = prometeuVerAgenda(historico);
+    if (!jaAgendado && !deveProporAgendamento({ texto: ultimaMsg, intencao, currentStage: lead.current_stage, temSlots, aceitouConvite, prometeuAgenda }))
         return { tratado: false, bookingAtivo: true, agendaConectada };
 
     const calId = cfg.booking_calendar_id || cfg.calendar_id || 'primary';
@@ -4780,6 +4781,32 @@ async function orquestrarAgendamento(lead, ultimaMsg, instanceData, userId, inte
         // Mensagem anterior DA IA — resolve afirmação genérica ("pode ser") quando ela citou
         // um horário específico no turno de antes (ver detectarConfirmacaoSlot, passo 4).
         const ultimaMsgIA = [...historico].reverse().find((m) => m.role === 'assistant')?.content || '';
+
+        // 📅 DIA PEDIDO primeiro (ANTES de casar slot por horário): se o lead citou um dia DIFERENTE
+        // do ofertado, o dia manda — mesmo que ele dê uma hora que bata num slot atual. Bug real:
+        // "16:30 na próxima sexta" casava com o slot "amanhã 16h30" por horário e marcava AMANHÃ.
+        const diaPedido = extrairDiaPedido(ultimaMsg);
+        if (diaPedido) {
+            const diaAtual = lead.slots_propostos[0] ? _brtAgenda(lead.slots_propostos[0].inicioISO) : null;
+            const mesmoDia = diaAtual && diaAtual.ano === diaPedido.ano && diaAtual.mes === diaPedido.mes && diaAtual.dia === diaPedido.dia;
+            if (!mesmoDia) {
+                // Pediu dia + hora juntos ("sexta às 16h30")? tenta marcar direto nesse dia+hora.
+                const horaComDia = extrairHorarioPedido(ultimaMsg);
+                if (horaComDia && !(horaComDia.h < horaInicio || (horaComDia.h + duracaoMin / 60) > horaFim)) {
+                    const alvo = _montarSlotNaData(diaPedido, horaComDia.h, horaComDia.m, duracaoMin);
+                    let livre = false;
+                    try { livre = await gcal.verificarLivre(userId, calId, alvo.inicioISO, alvo.fimISO); } catch { livre = false; }
+                    if (livre) {
+                        const bloqueio = travarSePreciso(alvo);
+                        if (bloqueio) return bloqueio;
+                        try { return await efetivar(alvo); } catch (e) { console.error(`❌ [AGENDAMENTO] efetivar dia+hora falhou: ${e.message}`); }
+                    }
+                }
+                // Só o dia (ou hora ocupada/fora): oferece 2 slots DESSE dia (ou avisa se não tem vaga).
+                return await ofertar(false, diaPedido);
+            }
+        }
+
         const escolhido = detectarConfirmacaoSlot(ultimaMsg, lead.slots_propostos, ultimaMsgIA);
         if (escolhido) {
             const bloqueio = travarSePreciso(escolhido);
@@ -4795,30 +4822,6 @@ async function orquestrarAgendamento(lead, ultimaMsg, instanceData, userId, inte
         if (lead.slots_propostos.length === 1 && (emailNaMsg || nomePreenchidoAgora) && contatoOk()) {
             try { return await efetivar(lead.slots_propostos[0]); }
             catch (e) { console.error(`❌ [AGENDAMENTO] efetivar retomada falhou: ${e.message}`); }
-        }
-        // 📅 DIA PEDIDO: o lead citou um dia específico DIFERENTE do que está ofertado ("pode ser na
-        // quinta?"). Regenera os slots PRA ESSE DIA — nunca marca no dia errado (bug real: pedia
-        // quinta e caía em amanhã). Vem depois do detectarConfirmacaoSlot pra não atropelar a escolha.
-        const diaPedido = extrairDiaPedido(ultimaMsg);
-        if (diaPedido) {
-            const diaAtual = lead.slots_propostos[0] ? _brtAgenda(lead.slots_propostos[0].inicioISO) : null;
-            const mesmoDia = diaAtual && diaAtual.ano === diaPedido.ano && diaAtual.mes === diaPedido.mes && diaAtual.dia === diaPedido.dia;
-            if (!mesmoDia) {
-                // Pediu dia + hora juntos ("quinta às 14h")? tenta marcar direto nesse dia+hora.
-                const horaComDia = extrairHorarioPedido(ultimaMsg);
-                if (horaComDia && !(horaComDia.h < horaInicio || (horaComDia.h + duracaoMin / 60) > horaFim)) {
-                    const alvo = _montarSlotNaData(diaPedido, horaComDia.h, horaComDia.m, duracaoMin);
-                    let livre = false;
-                    try { livre = await gcal.verificarLivre(userId, calId, alvo.inicioISO, alvo.fimISO); } catch { livre = false; }
-                    if (livre) {
-                        const bloqueio = travarSePreciso(alvo);
-                        if (bloqueio) return bloqueio;
-                        try { return await efetivar(alvo); } catch (e) { console.error(`❌ [AGENDAMENTO] efetivar dia+hora falhou: ${e.message}`); }
-                    }
-                }
-                // Só o dia (ou hora ocupada/fora): oferece 2 slots DESSE dia (ou avisa se não tem vaga).
-                return await ofertar(false, diaPedido);
-            }
         }
         // Não bateu com os 2 ofertados — o lead pediu OUTRO horário específico? (ex.: "as 14h")
         const pedido = extrairHorarioPedido(ultimaMsg);
@@ -6379,7 +6382,8 @@ module.exports = {
 - CALOR no 1º contato: cumprimente de forma calorosa e humana UMA vez (ex.: "Oi, que bom te ver por aqui! 😊"). NUNCA comece com "Oi"/"Olá" de novo nas mensagens seguintes — já se cumprimentaram, siga a conversa direto.
 - LOGO no começo (se ainda não souber), pergunte o NOME da pessoa ("como posso te chamar?").
 - QUALIFIQUE DE VERDADE ANTES de falar em agendar: descubra (uma de cada vez) o segmento/empresa dela, como ela capta e qualifica os leads hoje, e onde perde oportunidade (a DOR). Só avance pro agendamento quando houver dor + interesse CLAROS — não pule pra reunião nas primeiras mensagens.
-- PROIBIDO enviar QUALQUER link (você NÃO tem link) e PROIBIDO inventar horário. Quando a pessoa topar marcar, apenas diga que já vai ver os horários — o próprio sistema propõe os horários REAIS da agenda em seguida.`;
+- PROIBIDO inventar horário ou link. NUNCA liste horários você mesma (nada de "Horário 1: 10h...") — quem traz os horários REAIS é o sistema.
+- Se a pessoa perguntar algo sobre a reunião (como é, quanto dura), RESPONDA primeiro. Só quando ela ACEITAR marcar, diga em UMA linha curta que já vai puxar os horários — o sistema mostra os horários reais na sequência. Nunca prometa "vou ver os horários" e pare sem entregar.`;
 
         const respostaRaw = await closerAgent.gerarRespostaCloser(historicoIA, lead, promptWeb, intencao, {
             instanceType: 'antix', bookingAtivo: true, agendaConectada: true, calendlyLink: '',
