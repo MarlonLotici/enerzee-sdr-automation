@@ -197,3 +197,15 @@ test('pergunta sobre a reunião começando com "vamos"/"pode" NÃO é aceite (é
     // pedido explícito de marcar (mesmo com "?") NÃO é dúvida — é pra agendar
     assert.equal(ehDuvidaSobreReuniao('podemos marcar a reunião?'), false);
 });
+
+// 🐛 BUG real (Adalberto 2026-10-10): resposta de qualificação ("poucas horas", "20") que o LLM
+// rotulou COMPRA pulava pro horário. COMPRA só agenda se a mensagem FOR aceite (ehAfirmativo).
+test('COMPRA sem aceite real (resposta de qualificação) NÃO propõe horário', () => {
+    for (const s of ['poucas horas', '20', 'uns 3 por semana', 'não muitas', 'nada, ela só pede matrícula']) {
+        assert.equal(deveProporAgendamento({ texto: s, intencao: 'COMPRA', currentStage: 4, temSlots: false }), false, `"${s}" NÃO deveria agendar`);
+    }
+    // aceites reais classificados COMPRA seguem agendando
+    for (const s of ['fechado, quero sim', 'bora', 'pode ser', 'faz', 'legal']) {
+        assert.equal(deveProporAgendamento({ texto: s, intencao: 'COMPRA', currentStage: 3, temSlots: false }), true, `"${s}" deveria agendar`);
+    }
+});
