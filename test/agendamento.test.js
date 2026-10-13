@@ -49,6 +49,21 @@ test('minutos: "9h" (minuto 0) casa exatamente o slot 9h, não o 9h30', () => {
     assert.equal(detectarConfirmacaoSlot('pode ser 9h', SLOTS_MESMA_HORA).label, 'seg às 9h');
 });
 
+// 🐛 BUG real (Adair 2026-10-10): pediu "as 14" e casou com o slot 14h30 (único da casa das 14h).
+// Agora "14" NÃO casa 14h30 — devolve null pra o orquestrador montar 14h00 exato e conferir na agenda.
+test('hora sem minuto NÃO casa um slot de minuto diferente ("14" != "14h30")', () => {
+    const SLOTS_9_1430 = [
+        { inicioISO: '2026-10-15T12:00:00Z', fimISO: '2026-10-15T12:30:00Z', label: 'qui às 9h' },
+        { inicioISO: '2026-10-15T17:30:00Z', fimISO: '2026-10-15T18:00:00Z', label: 'qui às 14h30' },
+    ];
+    assert.equal(detectarConfirmacaoSlot('as 14 pode ser?', SLOTS_9_1430), null);
+    assert.equal(detectarConfirmacaoSlot('pode ser 14h', SLOTS_9_1430), null);
+    // mas "14h30" explícito casa o slot 14h30; e se houver um slot exatamente 14h00, "14" casa ele.
+    assert.equal(detectarConfirmacaoSlot('14h30 pode ser', SLOTS_9_1430).label, 'qui às 14h30');
+    const SLOTS_9_14 = [SLOTS_9_1430[0], { inicioISO: '2026-10-15T17:00:00Z', fimISO: '2026-10-15T17:30:00Z', label: 'qui às 14h' }];
+    assert.equal(detectarConfirmacaoSlot('as 14', SLOTS_9_14).label, 'qui às 14h');
+});
+
 // 🐛 BUG real (2026-10-09): "pode ser segunda" (dia da semana) era lido como "2ª opção"
 // (ordinal) e podia marcar o slot ERRADO se os 2 ofertados não fossem ambos segunda-feira.
 test('"segunda" sozinho NÃO é tratado como ordinal "2ª opção" (ambíguo com o dia da semana)', () => {
