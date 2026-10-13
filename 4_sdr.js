@@ -136,7 +136,7 @@ const { extrairTelefoneDescricao, eventoEhReuniao, digitosParaJids } = require('
 const { classificarConfirmacao } = require('./lib/confirmacao');
 const gcal = require('./integrations/googleCalendar');
 const { detectarConfirmacaoSlot, extrairHorarioPedido } = require('./lib/agendamento');
-const { rotularSlotBRT } = require('./lib/agendaSlots');
+const { rotularSlotBRT, extrairDiaPedido, _brt: _brtAgenda, _utcDeBRT: _utcDeBRTAgenda } = require('./lib/agendaSlots');
 
 // ✂️ LÂMINA DE CORTE: Transforma "Merci Delicatessen Restaurante e Pizzaria LTDA" em "Merci Delicatessen"
 function limparNomeEmpresa(nomeOriginal) {
@@ -4568,6 +4568,19 @@ if (!histRaw || histRaw.length === 0) return;
 // Pequena variação de frase ("ginga") pra não repetir texto robótico fixo.
 function _variar(frases) { return frases[Math.floor(Math.random() * frases.length)]; }
 
+// Constrói um slot numa DATA BRT específica ({ano,mes,dia}) na hora/min pedidos. Usado quando o
+// lead pede dia + hora ("quinta às 14h") — ancora no DIA PEDIDO, não no dia do slot antigo.
+function _montarSlotNaData(diaObj, h, min, duracaoMin) {
+    if (!diaObj) return null;
+    const ini = _utcDeBRTAgenda(diaObj.ano, diaObj.mes, diaObj.dia, h, min);
+    const iniMs = ini.getTime();
+    return {
+        inicioISO: ini.toISOString(),
+        fimISO:    new Date(iniMs + duracaoMin * 60 * 1000).toISOString(),
+        label:     rotularSlotBRT(ini),
+    };
+}
+
 // Constrói um slot no MESMO dia (BRT) de um slot de referência, na hora/min pedidos.
 function _montarSlotNoDia(baseISO, h, min, duracaoMin) {
     if (!baseISO) return null;
@@ -4649,10 +4662,12 @@ async function orquestrarAgendamento(lead, ultimaMsg, instanceData, userId, inte
     };
 
     // Oferta 2 horários REAIS e ESPAÇADOS (manhã/tarde), com variação de frase ("ginga").
-    const ofertar = async (ocupadoAntes) => {
+    // diaAlvo (opcional): {ano,mes,dia,label} — se o lead pediu um dia específico, só oferece slots
+    // DESSE dia; se o dia não tiver vaga, avisa (nunca empurra outro dia calado).
+    const ofertar = async (ocupadoAntes, diaAlvo = null) => {
         let slots;
         try {
-            slots = await gcal.listarHorariosLivres(userId, calId, { horaInicio, horaFim, duracaoMin, maxSlots: 2 });
+            slots = await gcal.listarHorariosLivres(userId, calId, { horaInicio, horaFim, duracaoMin, maxSlots: 2, diaAlvo: diaAlvo || undefined });
         } catch (e) {
             console.error(`❌ [AGENDAMENTO] Falha ao ler agenda de ${lead.name}:`, e.message);
             enviarAlerta(`⚠️ Agenda não pôde ser lida — ${lead.name}`, `${e.message}. Provável escopo OAuth — RECONECTE a Google Agenda.`, 15158332).catch(() => {});
@@ -4661,6 +4676,15 @@ async function orquestrarAgendamento(lead, ultimaMsg, instanceData, userId, inte
             return ok('Deu uma travadinha aqui pra puxar os horários 😅 Já pedi pra um especialista te chamar com as opções, tá?');
         }
         if (!slots.length) {
+            // Pediu um dia específico sem vaga: avisa e JÁ oferece os próximos livres (não empurra calado).
+            if (diaAlvo) {
+                const outros = await gcal.listarHorariosLivres(userId, calId, { horaInicio, horaFim, duracaoMin, maxSlots: 2 }).catch(() => []);
+                if (outros.length) {
+                    await supabase.from('leads').update({ slots_propostos: outros, slot_calendar_id: calId, current_stage: 4 }).eq('id', lead.id);
+                    return ok(`Em ${diaAlvo.label} eu não tenho horário livre 😕 Mas consigo ${labels(outros)}. Algum desses te atende?`);
+                }
+                return ok(`Em ${diaAlvo.label} minha agenda tá fechada e os próximos dias também estão concorridos 😕 Um especialista vai te chamar pra achar o melhor horário, tá?`);
+            }
             enviarAlerta(`📅 Agenda cheia — ${lead.name}`, 'Sem horário livre nos próximos dias.', 15158332).catch(() => {});
             return ok('Adorei seu interesse! Minha agenda tá bem concorrida nos próximos dias — um especialista vai te chamar pra achar o melhor horário. 🙌');
         }
@@ -4772,6 +4796,30 @@ async function orquestrarAgendamento(lead, ultimaMsg, instanceData, userId, inte
             try { return await efetivar(lead.slots_propostos[0]); }
             catch (e) { console.error(`❌ [AGENDAMENTO] efetivar retomada falhou: ${e.message}`); }
         }
+        // 📅 DIA PEDIDO: o lead citou um dia específico DIFERENTE do que está ofertado ("pode ser na
+        // quinta?"). Regenera os slots PRA ESSE DIA — nunca marca no dia errado (bug real: pedia
+        // quinta e caía em amanhã). Vem depois do detectarConfirmacaoSlot pra não atropelar a escolha.
+        const diaPedido = extrairDiaPedido(ultimaMsg);
+        if (diaPedido) {
+            const diaAtual = lead.slots_propostos[0] ? _brtAgenda(lead.slots_propostos[0].inicioISO) : null;
+            const mesmoDia = diaAtual && diaAtual.ano === diaPedido.ano && diaAtual.mes === diaPedido.mes && diaAtual.dia === diaPedido.dia;
+            if (!mesmoDia) {
+                // Pediu dia + hora juntos ("quinta às 14h")? tenta marcar direto nesse dia+hora.
+                const horaComDia = extrairHorarioPedido(ultimaMsg);
+                if (horaComDia && !(horaComDia.h < horaInicio || (horaComDia.h + duracaoMin / 60) > horaFim)) {
+                    const alvo = _montarSlotNaData(diaPedido, horaComDia.h, horaComDia.m, duracaoMin);
+                    let livre = false;
+                    try { livre = await gcal.verificarLivre(userId, calId, alvo.inicioISO, alvo.fimISO); } catch { livre = false; }
+                    if (livre) {
+                        const bloqueio = travarSePreciso(alvo);
+                        if (bloqueio) return bloqueio;
+                        try { return await efetivar(alvo); } catch (e) { console.error(`❌ [AGENDAMENTO] efetivar dia+hora falhou: ${e.message}`); }
+                    }
+                }
+                // Só o dia (ou hora ocupada/fora): oferece 2 slots DESSE dia (ou avisa se não tem vaga).
+                return await ofertar(false, diaPedido);
+            }
+        }
         // Não bateu com os 2 ofertados — o lead pediu OUTRO horário específico? (ex.: "as 14h")
         const pedido = extrairHorarioPedido(ultimaMsg);
         if (pedido) {
@@ -4806,7 +4854,9 @@ async function orquestrarAgendamento(lead, ultimaMsg, instanceData, userId, inte
     }
 
     // ── FASE OFERTA inicial ──
-    return await ofertar(false);
+    // Se o lead já citou um dia na mensagem que pediu pra marcar ("bora marcar quinta?"),
+    // oferece já nesse dia. Senão, próximos livres.
+    return await ofertar(false, extrairDiaPedido(ultimaMsg) || null);
 }
 
 const workerIA = new Worker('FilaIA', async (job) => {
@@ -6326,6 +6376,7 @@ module.exports = {
 🌐 CANAL ATUAL: CHAT DO SITE (antix-ia.com) — teste ao vivo da IA
 =======================================================
 - Seja concisa: no máximo 2 balões curtos, UMA pergunta por vez.
+- CALOR no 1º contato: cumprimente de forma calorosa e humana UMA vez (ex.: "Oi, que bom te ver por aqui! 😊"). NUNCA comece com "Oi"/"Olá" de novo nas mensagens seguintes — já se cumprimentaram, siga a conversa direto.
 - LOGO no começo (se ainda não souber), pergunte o NOME da pessoa ("como posso te chamar?").
 - QUALIFIQUE DE VERDADE ANTES de falar em agendar: descubra (uma de cada vez) o segmento/empresa dela, como ela capta e qualifica os leads hoje, e onde perde oportunidade (a DOR). Só avance pro agendamento quando houver dor + interesse CLAROS — não pule pra reunião nas primeiras mensagens.
 - PROIBIDO enviar QUALQUER link (você NÃO tem link) e PROIBIDO inventar horário. Quando a pessoa topar marcar, apenas diga que já vai ver os horários — o próprio sistema propõe os horários REAIS da agenda em seguida.`;

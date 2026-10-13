@@ -1,7 +1,7 @@
 'use strict';
 const test = require('node:test');
 const assert = require('node:assert/strict');
-const { calcularSlotsLivres, rotularSlotBRT } = require('../lib/agendaSlots');
+const { calcularSlotsLivres, rotularSlotBRT, extrairDiaPedido } = require('../lib/agendaSlots');
 
 // Helper: ISO de um horário BRT (UTC-3). ex.: brtISO(2026,7,20,10) = 2026-08-20T13:00:00Z
 function brtISO(ano, mesHumano, dia, hora, min = 0) {
@@ -72,5 +72,40 @@ test('calcularSlotsLivres: dia lotado → retorna vazio (não força slot invál
         agora, ocupados, diasAdiante: 0, // só hoje
         horaInicio: 9, horaFim: 18, duracaoMin: 60, maxSlots: 2, antecedenciaMin: 30,
     });
+    assert.equal(slots.length, 0);
+});
+
+// ── extrairDiaPedido + diaAlvo (respeitar o dia que o lead pede) ─────────────────
+// Âncora: sábado 10/out/2026, 12:00 BRT (= 2026-10-10T15:00:00Z).
+const SAB_10 = new Date('2026-10-10T15:00:00Z').getTime();
+
+test('extrairDiaPedido: dia da semana nomeado → próxima ocorrência futura', () => {
+    assert.deepEqual(extrairDiaPedido('pode ser na quinta?', SAB_10), { ano: 2026, mes: 9, dia: 15, label: 'quinta' });
+    assert.deepEqual(extrairDiaPedido('quero terça', SAB_10),        { ano: 2026, mes: 9, dia: 13, label: 'terça' });
+    assert.deepEqual(extrairDiaPedido('segunda-feira', SAB_10),      { ano: 2026, mes: 9, dia: 12, label: 'segunda' });
+});
+
+test('extrairDiaPedido: relativos (hoje/amanhã/depois de amanhã)', () => {
+    assert.equal(extrairDiaPedido('hoje às 14h', SAB_10).dia, 10);
+    assert.equal(extrairDiaPedido('amanhã', SAB_10).dia, 11);
+    assert.equal(extrairDiaPedido('depois de amanhã', SAB_10).dia, 12);
+});
+
+test('extrairDiaPedido: sem dia → null', () => {
+    assert.equal(extrairDiaPedido('as 14 pode ser?', SAB_10), null);
+    assert.equal(extrairDiaPedido('Hoje eles chegam por indicação', SAB_10).dia, 10); // "hoje" presente (ok)
+    assert.equal(extrairDiaPedido('quanto custa?', SAB_10), null);
+});
+
+test('calcularSlotsLivres com diaAlvo: só gera slots do dia pedido', () => {
+    const quinta = extrairDiaPedido('quinta', SAB_10);
+    const slots = calcularSlotsLivres({ agora: SAB_10, ocupados: [], diaAlvo: quinta, maxSlots: 2 });
+    assert.ok(slots.length > 0, 'deveria ter slots na quinta');
+    assert.ok(slots.every((s) => /qui/.test(s.label)), 'todos os slots devem ser de quinta');
+});
+
+test('calcularSlotsLivres com diaAlvo em fim de semana → vazio (nesse dia não tenho)', () => {
+    const domingo = extrairDiaPedido('amanhã', SAB_10); // amanhã de sábado = domingo (FDS)
+    const slots = calcularSlotsLivres({ agora: SAB_10, ocupados: [], diaAlvo: domingo, maxSlots: 2 });
     assert.equal(slots.length, 0);
 });
