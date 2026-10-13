@@ -4753,6 +4753,11 @@ async function orquestrarAgendamento(lead, ultimaMsg, instanceData, userId, inte
 
     // ── FASE CONFIRMAÇÃO: já há slots propostos, o lead está respondendo ──
     if (temSlots) {
+        // Trava anti-stall com slots JÁ propostos: o closer prometeu "ver os horários" por cima de
+        // slots que já existem → só RELEMBRA os horários (não re-busca, não deixa o stall passar).
+        if (opts.forcarOferta) {
+            return ok(`${_variar(['Consigo', 'Tenho livre', 'Dá pra marcar'])} ${labels(lead.slots_propostos)}. ${_variar(['Qual fica melhor?', 'Qual prefere?', 'Qual encaixa melhor aí?'])} 😊`);
+        }
         // 🔒 TRAVA DE AGENDAMENTO: só cria reunião REAL com horário explícito + NOME + E-MAIL.
         // Mata o "confirmou reunião sem dado nenhum". Captura nome/e-mail que o lead mandar agora.
         const emailValido = (e) => /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(String(e || '').trim());
