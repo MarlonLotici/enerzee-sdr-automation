@@ -69,3 +69,6 @@ temp_audio_*
 # backups locais (nunca versionar)
 *.bak
 *.bak2
+
+# saida do simulador de atendimentos (transcricoes/relatorios locais)
+scripts/sim_out/
