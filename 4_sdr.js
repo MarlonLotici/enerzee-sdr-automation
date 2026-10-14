@@ -4724,7 +4724,7 @@ async function orquestrarAgendamento(lead, ultimaMsg, instanceData, userId, inte
         const abre = ocupadoAntes
             ? _variar(['Esse já tá tomado 😕 mas sem problema! ', 'Nesse eu já tenho um compromisso, mas relaxa que a gente encaixa. ', 'Esse eu não consigo, mas tenho outras ótimas opções! ', 'Puxa, esse já foi preenchido — mas achei outros horários. '])
             : _variar(['Que bom! ', 'Show! ', 'Massa! ']);
-        return ok(`${abre}${_variar(['Consigo te encaixar', 'Tenho livre', 'Dá pra marcar'])} ${labels(slots)} pra ${_variar(['uma conversa rápida com nosso especialista', 'um papo de 15 min com nosso especialista', 'uma call com nosso time pra te mostrar na prática'])}. ${_variar(['Qual fica melhor?', 'Qual prefere?', 'Qual encaixa melhor aí?'])} 😊`);
+        return ok(`${abre}${_variar(['Consigo te encaixar', 'Tenho livre', 'Dá pra marcar'])} ${labels(slots)} pra ${_variar(['uma conversa rápida com nosso especialista', 'um papo de 30 min com nosso especialista', 'uma call com nosso time pra te mostrar na prática'])}. ${_variar(['Qual fica melhor?', 'Qual prefere?', 'Qual encaixa melhor aí?'])} 😊`);
     };
 
     // ── JÁ AGENDADO e o lead volta ──────────────────────────────────────────
@@ -4790,25 +4790,35 @@ async function orquestrarAgendamento(lead, ultimaMsg, instanceData, userId, inte
         // Mata o "confirmou reunião sem dado nenhum". Captura nome/e-mail que o lead mandar agora.
         const emailValido = (e) => /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(String(e || '').trim());
         const nomeValido  = (n) => { const s = String(n || '').trim().toLowerCase(); return s.length > 1 && !['lead', 'vc', 'você', 'voce', 'visitante do site', 'contato orgânico', 'contato organico', 'cliente'].includes(s); };
-        // Canal: no site (@web, sem telefone) o e-mail é o ÚNICO contato → obrigatório. No WhatsApp
-        // o telefone já é o contato e o Meet vai no chat → e-mail dispensável (não regride conversão).
+        // Canal: no site (@web, sem telefone) o e-mail é o ÚNICO contato. No WhatsApp o telefone já
+        // é o contato (o JID) — não faz sentido perguntar de novo.
         const ehWeb = String(lead.whatsapp_id || '').includes('@web');
         // Pede e-mail SEMPRE (web e WhatsApp): o e-mail vira convidado real no evento, então a
         // pessoa recebe o convite e os lembretes da Google no e-mail dela (pedido do cliente).
         const precisaEmail = true;
-        void ehWeb;
+        // Pede TELEFONE/WhatsApp só no site — lead que converte pelo site só deixava e-mail; agora
+        // também captura o WhatsApp (pedido real do operador: contato alternativo pra follow-up,
+        // caso o e-mail não seja respondido). No WhatsApp o número já é conhecido via o próprio canal.
+        const precisaTelefone = ehWeb;
+        const telefoneValido = (t) => /\d{10,13}/.test(String(t || '').replace(/\D/g, ''));
         const emailNaMsg = (String(ultimaMsg || '').match(/[^\s@]+@[^\s@]+\.[^\s@]+/) || [])[0];
-        if (emailNaMsg && !emailValido(lead.email)) { await supabase.from('leads').update({ email: emailNaMsg }).eq('id', lead.id).then(() => {}, () => {}); lead.email = emailNaMsg; }
+        if (emailNaMsg && !emailValido(lead.email)) { await supabase.from('leads').update({ email: emailNaMsg }).eq('id', lead.id).then(() => {}, (e) => console.error('[AGENDAMENTO] falha ao salvar email:', e.message)); lead.email = emailNaMsg; }
+        // Telefone: aceita formatos comuns ((48) 99999-8888, 48999998888, +55 48 99999-8888) — exige
+        // 10-13 dígitos pra não confundir com os números da qualificação (ticket, quantidade).
+        const telefoneNaMsg = (String(ultimaMsg || '').match(/(?:\+?55\s?)?\(?\d{2}\)?[\s.-]?9?\d{4}[\s.-]?\d{4}\b/) || [])[0];
+        if (precisaTelefone && telefoneNaMsg && !telefoneValido(lead.phone)) { await supabase.from('leads').update({ phone: telefoneNaMsg.replace(/\D/g, '') }).eq('id', lead.id).then(() => {}, (e) => console.error('[AGENDAMENTO] falha ao salvar telefone:', e.message)); lead.phone = telefoneNaMsg.replace(/\D/g, ''); }
         let nomePreenchidoAgora = false;
         if (!nomeValido(lead.name)) { const nm = extrairNomeDeclarado(ultimaMsg) || extrairNomeHumano(ultimaMsg); if (nm && nomeValido(nm)) { await supabase.from('leads').update({ name: nm, dono: nm }).eq('id', lead.id).then(() => {}, () => {}); lead.name = nm; nomePreenchidoAgora = true; } }
 
-        const contatoOk = () => nomeValido(lead.name) && (!precisaEmail || emailValido(lead.email));
-        // Pede o que faltar (nome/e-mail) ANTES de efetivar — e guarda o horário escolhido (reduz a 1).
+        const contatoOk = () => nomeValido(lead.name) && (!precisaEmail || emailValido(lead.email)) && (!precisaTelefone || telefoneValido(lead.phone));
+        // Pede o que faltar (nome/e-mail/telefone) ANTES de efetivar — e guarda o horário escolhido (reduz a 1).
         const travarSePreciso = (slot) => {
             if (contatoOk()) return null;
-            const faltaNome = !nomeValido(lead.name);
-            const faltaEmail = precisaEmail && !emailValido(lead.email);
-            const falta = (faltaNome && faltaEmail) ? 'seu nome e seu melhor e-mail' : faltaNome ? 'como posso te chamar' : 'seu melhor e-mail';
+            const faltas = [];
+            if (!nomeValido(lead.name)) faltas.push('como posso te chamar');
+            if (precisaEmail && !emailValido(lead.email)) faltas.push('seu melhor e-mail');
+            if (precisaTelefone && !telefoneValido(lead.phone)) faltas.push('seu WhatsApp com DDD');
+            const falta = faltas.length <= 1 ? (faltas[0] || 'seus dados') : faltas.slice(0, -1).join(', ') + ' e ' + faltas[faltas.length - 1];
             supabase.from('leads').update({ slots_propostos: [slot] }).eq('id', lead.id).then(() => {}, () => {});
             return ok(`Fechado, ${slot.label}! ✅ Só me confirma ${falta} pra eu te enviar o convite da reunião 🙌`);
         };
@@ -4853,10 +4863,17 @@ async function orquestrarAgendamento(lead, ultimaMsg, instanceData, userId, inte
                 return ok(`Opa, tive um probleminha aqui pra travar o horário. Consegue confirmar de novo: ${labels(lead.slots_propostos)}?`);
             }
         }
-        // RETOMADA: o lead acabou de mandar o nome/e-mail que faltava e só resta 1 horário guardado → efetiva.
-        if (lead.slots_propostos.length === 1 && (emailNaMsg || nomePreenchidoAgora) && contatoOk()) {
+        // RETOMADA: o lead acabou de mandar o que faltava (nome/e-mail/telefone) e só resta 1
+        // horário guardado → efetiva.
+        if (lead.slots_propostos.length === 1 && (emailNaMsg || telefoneNaMsg || nomePreenchidoAgora) && contatoOk()) {
             try { return await efetivar(lead.slots_propostos[0]); }
             catch (e) { console.error(`❌ [AGENDAMENTO] efetivar retomada falhou: ${e.message}`); }
+        }
+        // 🔎 Diagnóstico (bug real: lead mandou e-mail com 1 slot travado e NÃO agendou — suspeita
+        // de corrida entre 2 jobs processando a mesma msg, ligado ao P0 de duplicação já conhecido).
+        // Loga por que a RETOMADA não disparou, pra achar evidência concreta na próxima ocorrência.
+        if (lead.slots_propostos.length === 1 && !(emailNaMsg || telefoneNaMsg || nomePreenchidoAgora)) {
+            console.log(`🔎 [AGENDAMENTO-DIAG] ${lead.name}: 1 slot travado mas RETOMADA não disparou — msg="${String(ultimaMsg).slice(0, 60)}" emailNaMsg=${!!emailNaMsg} telefoneNaMsg=${!!telefoneNaMsg} nomePreenchidoAgora=${nomePreenchidoAgora} lead.email="${lead.email || ''}" lead.phone="${lead.phone || ''}" lead.name="${lead.name || ''}" contatoOk=${contatoOk()}`);
         }
         // Não bateu com os 2 ofertados — o lead pediu OUTRO horário específico? (ex.: "as 14h")
         const pedido = extrairHorarioPedido(ultimaMsg);
@@ -4876,11 +4893,12 @@ async function orquestrarAgendamento(lead, ultimaMsg, instanceData, userId, inte
             // Ocupado (ou falhou) → reoferece 2 horários livres reais, avisando.
             return await ofertar(true);
         }
-        // Pede OUTRO horário sem especificar qual (ex.: "tem outro horário?", "não tem mais cedo?"):
-        // ainda está tentando agendar — reoferece 2 horários REAIS agora, na hora. Sem isso, o
-        // closer promete "vou ver os horários" e ninguém entrega nada (promessa vazia observada
-        // em teste real: lead pediu "tem outro horário?" e a conversa travou).
-        if (/\b(outro|outra|mais\s+cedo|mais\s+tarde|nenhum\s+desses|diferente)\s*(hor[aá]rio|op[cç][aã]o)?/i.test(ultimaMsg || '')) {
+        // Pede OUTRO horário sem especificar qual (ex.: "tem outro horário?", "não tem mais cedo?",
+        // "final da tarde", "fim do dia", "à noite", "mais pra frente"): ainda está tentando agendar
+        // — reoferece 2 horários REAIS agora, na hora. Sem isso, cai no closer (LLM livre), que NÃO
+        // tem acesso à agenda real e só ECOA os mesmos 2 horários de antes — bug real observado
+        // (lead pediu "final da tarde" e recebeu os MESMOS horários de novo, sem variar).
+        if (/\b(outro|outra|mais\s+cedo|mais\s+tarde|nenhum\s+desses|diferente|mais\s+pra\s+frente|à?\s*noite)\s*(hor[aá]rio|op[cç][aã]o)?\b|\b(final|fim)\s+(da\s+tarde|do\s+dia)\b/i.test(ultimaMsg || '')) {
             return await ofertar(true);
         }
         // Mensagem que NÃO é escolha de slot nem horário (saudação, pergunta, mudou de assunto):
@@ -6469,7 +6487,7 @@ module.exports = {
   4) QUANTIFIQUE A DOR EM DINHEIRO: descubra (a) quantas oportunidades/clientes ela perde por semana pela demora e (b) quanto vale em média cada venda/consulta/cliente. Então FAÇA A CONTA em voz alta com os números REAIS que ela deu. Ex.: "então são uns 3 por semana × R$300 = R$900 por semana, quase R$3.600 por mês escapando — fora o tempo e o custo da equipe pra manter como está hoje". Deixe o tamanho do prejuízo claro.
   5) APRESENTE A SOLUÇÃO rápido: um agente de IA responde na hora, 24h, não deixa ninguém esperando — e isso recupera esse dinheiro. Cite 1-2 benefícios concretos.
   6) ⚠️ PERGUNTA DE VALIDAÇÃO (OBRIGATÓRIA, nunca pule): depois de apresentar a solução, faça uma pergunta DIRETA perguntando se esse valor recuperado faz diferença pra ela — algo como "esse valor a mais faria diferença no caixa/no crescimento do seu negócio?" ou "faz sentido recuperar esse valor?". NÃO convide pra reunião nessa mensagem — só pergunte e espere a resposta.
-  7) Só DEPOIS que ela responder SIM/confirmar que o valor importa (passo 6) → AÍ SIM convide pra uma conversa de 15 min com o time. A reunião vem DEPOIS da validação explícita, nunca antes, e nunca na MESMA mensagem que apresenta a solução.
+  7) Só DEPOIS que ela responder SIM/confirmar que o valor importa (passo 6) → AÍ SIM convide pra uma conversa de 30 min com o time. A reunião vem DEPOIS da validação explícita, nunca antes, e nunca na MESMA mensagem que apresenta a solução.
   ⛔ REGRA DURA 1: assim que tiver os DOIS números (quantas perde + quanto vale cada uma), a sua PRÓXIMA mensagem é OBRIGATORIAMENTE a conta + a solução + a pergunta de validação (passos 4, 5, 6 podem ir juntos) — JAMAIS ofereça horário logo após o cliente dizer o ticket/o valor.
   ⛔ REGRA DURA 2: NUNCA convide pra reunião na mesma mensagem que apresenta a conta/solução. Pergunte primeiro (passo 6), confirme a resposta, SÓ DEPOIS convide (passo 7). Pular a pergunta de validação e já convidar pra reunião é ERRO grave.
 - ESCOPO: a Antix faz automação do COMERCIAL/ATENDIMENTO (responder clientes na hora, qualificar, agendar, pós-venda). NÃO oferecemos IA pra contabilidade, impostos, jurídico, RH ou áreas fora do comercial. Se a dor da pessoa for fora disso, seja HONESTA ("isso foge um pouco do que a gente faz, nosso forte é o atendimento ao cliente") e veja se há dor no atendimento/comercial — nunca invente que resolvemos o que não resolvemos.
