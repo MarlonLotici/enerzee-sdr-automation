@@ -24,8 +24,9 @@ const { chamarLLM, MODELOS } = require('../lib/llm');
 
 const BASE_URL = process.env.SIM_BASE_URL || 'https://antix.up.railway.app';
 const N = parseInt(process.argv[2], 10) || 20;
-const CONC = parseInt(process.env.SIM_CONC, 10) || 4;
+const CONC = parseInt(process.env.SIM_CONC, 10) || 2; // prod tem rate limit no web-chat; conc alta -> 429
 const MAX_TURNOS = 14;
+const _sleep = (ms) => new Promise(r => setTimeout(r, ms));
 
 // ── Personas: pool diverso. estilo e dificuldade variam de propósito. ───────────────
 // aceita: 'logo' (aceita reunião fácil), 'apos_valor' (só depois de ver a conta),
@@ -106,14 +107,21 @@ async function proximaMsgCliente(p, historico) {
 }
 
 async function sofiaResponde(sessionId, mensagem) {
-    const r = await fetch(`${BASE_URL}/api/web-chat`, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json', 'Origin': 'https://antix-ia.com' },
-        body: JSON.stringify({ sessionId, message: mensagem }),
-    });
-    if (!r.ok) throw new Error(`web-chat HTTP ${r.status}`);
-    const j = await r.json().catch(() => ({}));
-    return (j.reply || j.message || '').toString();
+    // Retry no 429 (rate limit da prod) com backoff — senão a conversa morre no meio.
+    const esperas = [1500, 4000, 8000, 15000];
+    for (let i = 0; ; i++) {
+        const r = await fetch(`${BASE_URL}/api/web-chat`, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json', 'Origin': 'https://antix-ia.com' },
+            body: JSON.stringify({ sessionId, message: mensagem }),
+        });
+        if (r.ok) {
+            const j = await r.json().catch(() => ({}));
+            return (j.reply || j.message || '').toString();
+        }
+        if (r.status === 429 && i < esperas.length) { await _sleep(esperas[i]); continue; }
+        throw new Error(`web-chat HTTP ${r.status}`);
+    }
 }
 
 async function rodarConversa(p) {
@@ -124,7 +132,11 @@ async function rodarConversa(p) {
         let msgCliente;
         try { msgCliente = await proximaMsgCliente(p, historico); }
         catch (e) { historico.push({ quem: 'sistema', txt: `(erro cliente: ${e.message})` }); break; }
-        if (/\[FIM\]/i.test(msgCliente)) { fim = true; break; }
+        if (/\[?\bFIM\b\]?/i.test(msgCliente)) {
+            msgCliente = msgCliente.replace(/\[?\bFIM\b\]?/ig, '').trim();
+            if (!msgCliente) { fim = true; break; }
+            fim = true; // manda a última fala e encerra
+        }
         historico.push({ quem: 'cliente', txt: msgCliente });
         let resp;
         try { resp = await sofiaResponde(sessionId, msgCliente); }
