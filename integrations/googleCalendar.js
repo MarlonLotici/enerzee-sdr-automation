@@ -166,6 +166,10 @@ async function listarHorariosLivres(userId, calendarId, opts = {}) {
         });
         const busy = fb.data.calendars?.[calendarId || 'primary']?.busy || [];
         ocupados = busy.map((b) => ({ inicio: b.start, fim: b.end }));
+        // 🔎 Diagnóstico (bug real: IA ofereceu "segunda" com quarta/quinta/sexta livres de
+        // verdade) — loga os blocos ocupados que o Google devolveu, pra achar se é um evento de
+        // dia inteiro/recorrente bloqueando a semana sem o operador perceber.
+        if (ocupados.length) console.log(`📅 [GCAL] ${calendarId || 'primary'}: ${ocupados.length} bloco(s) ocupado(s) em [${timeMin}, ${timeMax}]:`, JSON.stringify(ocupados).slice(0, 500));
     } catch (e) {
         // NÃO engolir devolvendo [] — isso se disfarçava de "agenda cheia" e loopava a resposta
         // de fallback. Lança pra o orquestrador tratar (erro de escopo/token ≠ agenda sem vaga).
