@@ -39,3 +39,14 @@ test('_coagir sana lixo e respeita "?" como pergunta aberta', () => {
     assert.equal(c.concordou_com_valor, false);       // só true booleano conta
     assert.equal(c.pergunta_aberta, true);            // termina em "?"
 });
+
+// 🌡️ Instinto sênior: lead ESFRIANDO não leva empurrão de reunião (recua pra re-aquecer).
+test('temperatura esfriando/frio NÃO propõe reunião mesmo com sinal de avanço (recua)', () => {
+    // "ta" seco pós-pitch: LLM às vezes lê como avanço — a temperatura segura o empurrão.
+    assert.equal(decidirAcao({ intencao_agora: 'sinal_de_avanco', momento: 'solucao', concordou_com_valor: true, temperatura: 'esfriando' }), 'qualificar');
+    assert.equal(decidirAcao({ intencao_agora: 'sinal_de_avanco', momento: 'convite', temperatura: 'frio' }), 'qualificar');
+    // lead QUENTE com avanço → agenda normal (não trava à toa)
+    assert.equal(decidirAcao({ intencao_agora: 'sinal_de_avanco', momento: 'solucao', concordou_com_valor: true, temperatura: 'quente' }), 'propor_reuniao');
+    // pedido EXPLÍCITO vence a temperatura (quer marcar = marca)
+    assert.equal(decidirAcao({ intencao_agora: 'pedido_agendar', momento: 'convite', temperatura: 'esfriando' }), 'agendar');
+});

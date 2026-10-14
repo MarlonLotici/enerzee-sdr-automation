@@ -6437,6 +6437,8 @@ module.exports = {
         else if (acao === 'tratar_objecao') modoDir = `\n\n⚡ MODO AGORA = OBJEÇÃO: o cliente resistiu ("${String(texto).slice(0, 80)}"). Acolha de verdade, mostre o outro lado com empatia e um dado concreto, e NÃO ofereça horário nesta mensagem.`;
         else if (acao === 'qualificar') modoDir = `\n\n⚡ MODO AGORA = QUALIFICAR: reaja ao que ele disse (escuta ativa) e dê o PRÓXIMO passo do SPIN. Faltam números? pergunte. Já tem quantos perde + ticket? faça a CONTA em R$ e apresente a solução. NÃO ofereça horário ainda.`;
         if (tri.dor_tipo === 'time_comercial_caro') modoDir += `\n⚠️ A dor dele é CUSTO de equipe (não perda de cliente). Faça a conta pela ECONOMIA: do que ele gasta hoje${tri.tem_numeros?.gasto_atual_mes ? ` (~R$${tri.tem_numeros.gasto_atual_mes}/mês)` : ''}, a IA costuma cortar 50-70%. NÃO pergunte "quantos clientes você perde".`;
+        // 🌡️ Instinto de vendedor sênior: lead esfriando → NÃO insistir. Re-aquecer com leveza.
+        if (tri.temperatura === 'esfriando' || tri.temperatura === 'frio') modoDir += `\n🌡️ O cliente parece estar ESFRIANDO (resposta seca/evasiva). NÃO empurre reunião nem seja insistente. Acolha com leveza, tire a pressão ("sem compromisso", "no seu tempo") e faça UMA pergunta leve que reacenda o interesse, ou pergunte com honestidade o que ele achou. Recuar um passo aqui é mais esperto que forçar.`;
 
         const respostaRaw = await closerAgent.gerarRespostaCloser(historicoIA, lead, promptWeb + modoDir, intencao, {
             instanceType: 'antix', bookingAtivo: true, agendaConectada: true, calendlyLink: '',
