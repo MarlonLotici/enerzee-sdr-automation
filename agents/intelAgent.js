@@ -48,7 +48,9 @@ Uma única frase curta. Sem tópicos, sem explicação, sem inventar.
     `.trim();
 
     try {
-        const res = await chamarLLM({ messages: [{ role: 'user', content: prompt }], model: MODELOS.rapido, maxTokens: 80 });
+        // cerebro, não rapido (2026-10-14): MODELOS.rapido (DeepSeek) é modelo de raciocínio e
+        // devolvia VAZIO neste call → sempre caía no fallback genérico, perdendo sinal tático real.
+        const res = await chamarLLM({ messages: [{ role: 'user', content: prompt }], model: MODELOS.cerebro, maxTokens: 150 });
         return (res || '').trim() || `Sem dados adicionais. Seguir Constituição padrão.`;
     } catch (e) {
         console.error("❌ Erro no Intel Agent:", e.message);

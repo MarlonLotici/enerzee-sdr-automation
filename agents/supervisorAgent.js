@@ -67,10 +67,13 @@ Responda SOMENTE um JSON:
 {"intencao_real": "...", "ok": true|false, "problemas": ["chave1","chave2"]}
 "ok" = true e "problemas":[] quando o rascunho está adequado (coerente com o lead e no passo certo do roteiro). "ok" = false quando houver pelo menos um problema grave.`;
 
-        // Juiz = modelo rápido por padrão (classificação barata). SUPERVISOR_MODELO=cerebro sobe o
-        // poder de análise (pega incoerência de contexto mais sutil) ao custo de + latência/token.
-        const modeloJuiz = process.env.SUPERVISOR_MODELO === 'cerebro' ? MODELOS.cerebro : MODELOS.rapido;
-        const raw = (await chamarLLM({ messages: [{ role: 'user', content: prompt }], model: modeloJuiz, maxTokens: 260 }) || '').trim();
+        // cerebro por padrão (2026-10-14): o modelo rápido (MODELOS.rapido = DeepSeek, trocado na
+        // descontinuação do antigo pelo Together) é modelo de raciocínio e devolvia VAZIO neste
+        // call (maxTokens 260) — o supervisor ficava SEMPRE em fail-open, nunca pegando erro real
+        // (confirmado em teste: aprovou um rascunho de 1º contato oferecendo horário sem qualificar
+        // nada). SUPERVISOR_MODELO=rapido existe só como opt-out de custo, não é mais o default.
+        const modeloJuiz = process.env.SUPERVISOR_MODELO === 'rapido' ? MODELOS.rapido : MODELOS.cerebro;
+        const raw = (await chamarLLM({ messages: [{ role: 'user', content: prompt }], model: modeloJuiz, maxTokens: 350 }) || '').trim();
         const parsed = _parseJsonRobusto(raw);
         if (!parsed || typeof parsed.ok !== 'boolean') return { ok: true, problemas: [] }; // fail-open
         const problemas = Array.isArray(parsed.problemas) ? parsed.problemas.filter(p => typeof p === 'string') : [];

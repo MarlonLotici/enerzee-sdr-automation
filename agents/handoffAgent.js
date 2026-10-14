@@ -26,7 +26,10 @@ ${ultimasMsgs.map(m => `[${m.role}]: ${m.content}`).join('\n')}
 Retorne apenas o JSON. Exemplo válido: {"nomeDecisor":"Carlos","telefoneDecisor":"5548999991234"}`;
 
     try {
-        const raw = (await chamarLLM({ messages: [{ role: 'user', content: prompt }], model: MODELOS.rapido, maxTokens: 60 }) || '').trim() || '{}';
+        // cerebro, não rapido (2026-10-14): MODELOS.rapido (DeepSeek) é modelo de raciocínio e
+        // devolvia VAZIO neste call → sempre caía no fallback genérico "Responsável"/null, perdendo
+        // nome/telefone reais que o lead informou. gpt-oss resolve com folga e sai mais barato.
+        const raw = (await chamarLLM({ messages: [{ role: 'user', content: prompt }], model: MODELOS.cerebro, maxTokens: 150 }) || '').trim() || '{}';
         const parsed = JSON.parse(raw);
 
         return {
@@ -52,7 +55,9 @@ async function gerarResumoHandoff(historico) {
     Seja técnico e direto. Este texto será injetado no cérebro da IA para ela não se perder. NUNCA gere fala simulada.`;
 
     try {
-        const res = await chamarLLM({ system: prompt, messages: ultimasMsgs, model: MODELOS.rapido, maxTokens: 100 });
+        // cerebro, não rapido (2026-10-14): mesmo motivo — DeepSeek devolvia vazio, perdendo o
+        // resumo que orienta a IA depois do humano devolver a conversa.
+        const res = await chamarLLM({ system: prompt, messages: ultimasMsgs, model: MODELOS.cerebro, maxTokens: 150 });
         return res || "";
     } catch (error) {
         console.error("❌ Erro no Handoff Agent:", error.message);

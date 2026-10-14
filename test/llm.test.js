@@ -68,10 +68,13 @@ test('_limiteBudget: usa env quando válido, senão o default alto de segurança
     delete process.env.BUDGET_LLM_CEREBRO_DIA;
 });
 
-test('_reasoningEffortPara: só o gpt-oss recebe reasoning_effort (default low)', () => {
+test('_reasoningEffortPara: gpt-oss e deepseek recebem reasoning_effort (default low); Qwen não', () => {
     delete process.env.LLM_REASONING_EFFORT;
     assert.equal(_reasoningEffortPara('openai/gpt-oss-120b'), 'low');
-    assert.equal(_reasoningEffortPara('deepseek-ai/DeepSeek-V4-Flash-0731'), undefined);
+    // deepseek-ai/DeepSeek-V4-Flash-0731 (descontinuado 2026-10-22) foi substituído por
+    // DeepSeek-V4.1-Flash — ambos são modelos de raciocínio e agora recebem reasoning_effort
+    // (sem isso, devolviam VAZIO em maxTokens apertado — achado real na migração).
+    assert.equal(_reasoningEffortPara('deepseek-ai/DeepSeek-V4.1-Flash'), 'low');
     assert.equal(_reasoningEffortPara('Qwen/Qwen3.5-9B'), undefined);
     process.env.LLM_REASONING_EFFORT = 'medium';
     assert.equal(_reasoningEffortPara('openai/gpt-oss-120b'), 'medium'); // env sobrescreve

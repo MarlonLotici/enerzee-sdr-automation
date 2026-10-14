@@ -19,7 +19,10 @@ Retorne SOMENTE um JSON válido com exatamente estas 3 chaves. Sem markdown, sem
 Exemplo de retorno válido:
 {"equipamentos":"freezers, câmaras frias, iluminação LED","dor_principal":"freezer rodando 24h eleva muito a conta de luz","angulo_venda":"com solar você zera o custo do freezer que nunca desliga"}`;
 
-    const raw = (await chamarLLM({ messages: [{ role: 'user', content: prompt }], model: MODELOS.rapido, maxTokens: 120 }) || '').trim() || '{}';
+    // cerebro, não rapido (2026-10-14): MODELOS.rapido (DeepSeek) é modelo de raciocínio e
+    // devolvia VAZIO neste call → SEMPRE lançava erro "campos incompletos" (nenhum nicho novo
+    // era aprendido, nicheCache.js engolia o erro e retornava null silenciosamente).
+    const raw = (await chamarLLM({ messages: [{ role: 'user', content: prompt }], model: MODELOS.cerebro, maxTokens: 200 }) || '').trim() || '{}';
 
     let parsed;
     try {

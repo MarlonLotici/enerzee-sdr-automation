@@ -17,7 +17,11 @@ async function analisarPerfil(ultimaMsg) {
     `;
 
     try {
-        const res = await chamarLLM({ messages: [{ role: 'user', content: prompt }], model: MODELOS.rapido, maxTokens: 60 });
+        // cerebro, não rapido (2026-10-14): MODELOS.rapido (DeepSeek) é modelo de raciocínio e
+        // devolvia VAZIO mesmo em maxTokens generosos (até 350) pra essa tarefa de geração de
+        // texto curto — caía SEMPRE no fallback genérico. gpt-oss (cerebro) resolve com folga
+        // bem menor e ainda sai MAIS BARATO por token de saída que o DeepSeek novo.
+        const res = await chamarLLM({ messages: [{ role: 'user', content: prompt }], model: MODELOS.cerebro, maxTokens: 200 });
         return (res || '').trim() || "Mantenha o tom profissional e direto.";
     } catch (e) {
         console.error("❌ Erro no Profiler Agent:", e.message);

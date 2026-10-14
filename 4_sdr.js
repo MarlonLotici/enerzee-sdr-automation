@@ -2090,10 +2090,13 @@ async function extrairDataISO(textoData) {
     try {
         const agora = new Date(Date.now() - 3 * 60 * 60 * 1000); // BRT
         const hoje  = agora.toISOString().split('T')[0];
+        // cerebro, não rapido (2026-10-14): MODELOS.rapido (DeepSeek) é modelo de raciocínio e
+        // devolvia VAZIO com maxTokens 25 (todo o budget ia pro "pensamento", 0 pro conteúdo) →
+        // extrairDataISO sempre retornava null. gpt-oss resolve a partir de ~100.
         const iso = (await chamarLLM({
             messages: [{ role: 'user', content: `Converta a expressão de data/hora "${textoData}" para ISO 8601 no fuso UTC-3 (BRT). Hoje é ${hoje}. Responda APENAS com a string ISO (ex: 2026-06-24T15:00:00-03:00), sem nenhum texto adicional.` }],
-            model: MODELOS.rapido,
-            maxTokens: 25,
+            model: MODELOS.cerebro,
+            maxTokens: 120,
         }) || '').trim();
         if (!iso) return null;
         const d = new Date(iso);
@@ -3040,10 +3043,12 @@ async function gerarResumoHandoff(historicoRecente) {
         const msgs = (historicoRecente || []).slice(-12)
             .map(m => `${m.role === 'user' ? 'Lead' : 'IA'}: ${m.content}`)
             .join('\n');
+        // cerebro, não rapido (2026-10-14): MODELOS.rapido (DeepSeek) devolvia VAZIO neste call →
+        // sempre caía em "Resumo indisponível.", perdendo o contexto pro consultor humano.
         const res = await chamarLLM({
             messages: [{ role: 'user', content: `Analise o histórico de conversa de energia solar abaixo e gere um resumo executivo de no máximo 2 frases para o consultor humano assumir o chat. Foque em: 1. Perfil do negócio (o que é, porte), 2. Dor/Dados coletados (valor da conta se houver), 3. Motivo do travamento/handoff. Seja direto, sem introduções.\n\n${msgs}` }],
-            model: MODELOS.rapido,
-            maxTokens: 100,
+            model: MODELOS.cerebro,
+            maxTokens: 200,
         });
         return (res || '').trim() || 'Resumo indisponível.';
     } catch (err) {
@@ -3521,13 +3526,16 @@ if (lead.opening_template && lead.opening_template.length > 15 && lead.opening_t
                 .replace(/\$\{capitalDesc\}/g,         capitalDesc)
                 .replace(/\$\{descontoEstimado\}/g,    descontoEstimado)
                 .replace(/\$\{nicheCtx\}/g,            nicheCtx ? '\nContexto do setor: ' + nicheCtx : '');
+            // cerebro, não rapido (2026-10-14): MODELOS.rapido (DeepSeek) devolvia VAZIO neste call
+            // → sempre caía no spintax fixo (fallback já existente, continua valendo se der timeout).
+            // gpt-oss "pensa" mais (~4.6s observado) → timeout da corrida subiu de 3.5s pra 6s.
             const llmPromise = chamarLLM({
                 messages: [{ role: 'user', content: llmPromptFinal }],
-                model: MODELOS.rapido,
-                maxTokens: 80,
+                model: MODELOS.cerebro,
+                maxTokens: 250,
             });
             const timeoutPromise = new Promise((_, reject) =>
-                setTimeout(() => reject(new Error('timeout')), 3500));
+                setTimeout(() => reject(new Error('timeout')), 6000));
             const llmTexto = (await Promise.race([llmPromise, timeoutPromise]) || '').trim().replace(/^["'`]|["'`]$/g, '');
             if (llmTexto && llmTexto.length > 10) {
                 textoFinal = llmTexto;
