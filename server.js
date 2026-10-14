@@ -1186,6 +1186,81 @@ app.post('/api/web-chat', webChatLimiter, express.json(), async (req, res) => {
     }
 });
 
+// 📊 TRACKING DO FUNIL DO SITE (público): o widget/site dispara eventos (pageview, chat_aberto,
+// primeira_msg...) pra sabermos ONDE o lead some — o topo do funil que o backend não via.
+// Fail-open: nunca quebra o site; se o insert falhar, responde 204 do mesmo jeito. Rate-limited.
+const trackLimiter = rateLimit({
+    windowMs: 60 * 1000, max: 60,   // generoso: 1 visitante dispara vários eventos
+    standardHeaders: true, legacyHeaders: false, message: { ok: false },
+});
+app.post('/api/track', trackLimiter, express.json(), async (req, res) => {
+    try {
+        const b = req.body || {};
+        const EVENTOS = ['pageview', 'chat_aberto', 'primeira_msg', 'qualificou', 'viu_horarios', 'agendou'];
+        const event = String(b.event || '').slice(0, 40);
+        if (!EVENTOS.includes(event)) return res.status(204).end();  // ignora evento desconhecido, sem erro
+        const row = {
+            session_id: b.sessionId ? String(b.sessionId).slice(0, 80) : null,
+            event,
+            path: b.path ? String(b.path).slice(0, 300) : null,
+            referrer: b.referrer ? String(b.referrer).slice(0, 300) : null,
+            utm_source: b.utm_source ? String(b.utm_source).slice(0, 80) : null,
+            utm_campaign: b.utm_campaign ? String(b.utm_campaign).slice(0, 120) : null,
+            user_agent: (req.headers['user-agent'] || '').slice(0, 300),
+            meta: (b.meta && typeof b.meta === 'object') ? b.meta : {},
+        };
+        supabase.from('site_events').insert([row]).then(() => {}, () => {});  // fire-and-forget
+        return res.status(204).end();
+    } catch { return res.status(204).end(); }
+});
+
+// 📊 FUNIL DO SITE (autenticado): junta o topo (site_events: pageview/chat_aberto/primeira_msg)
+// com o fundo (leads: qualificou/viu horários/agendou) e devolve as contagens + taxas. Mostra
+// ONDE o lead some — do anúncio até o agendamento. Filtra os leads de teste (QA do operador).
+const _RE_TESTE_WEB = /simtest|josiane|count_|e2e_|carlos_debug|patricia_|probe_|buildcheck|recov|smoke|triraw|ping_|ping2_|adal_|luis_|_fix_|_fix2|_dyn_|verif_|spin_|aceite_|horaex_|quinta_|math_|lucas_|josi_/i;
+app.get('/api/metrics/funil', autenticarMiddleware, async (req, res) => {
+    try {
+        const dias = Math.min(Math.max(parseInt(req.query.dias, 10) || 7, 1), 90);
+        const desde = new Date(Date.now() - dias * 864e5).toISOString();
+        const uniq = (arr) => new Set(arr.filter(Boolean)).size;
+
+        // Topo — eventos do site (pode vir vazio até o site novo deployar; aí só o fundo aparece)
+        const { data: evs } = await supabase.from('site_events')
+            .select('event, session_id').gte('created_at', desde).then(r => r, () => ({ data: [] }));
+        const ev = evs || [];
+        const pageviews   = ev.filter(e => e.event === 'pageview').length;
+        const chatAberto  = uniq(ev.filter(e => e.event === 'chat_aberto').map(e => e.session_id));
+
+        // Fundo — leads reais do site (exclui QA do operador)
+        const { data: leads } = await supabase.from('leads')
+            .select('whatsapp_id, current_stage, slots_propostos, gcal_event_id')
+            .eq('first_touch_channel', 'web').gte('created_at', desde).then(r => r, () => ({ data: [] }));
+        const reais = (leads || []).filter(l => !_RE_TESTE_WEB.test(l.whatsapp_id || ''));
+        const conversas   = reais.length;                                                   // mandou 1ª msg (lead criado)
+        const qualificou  = reais.filter(l => (l.current_stage || 0) >= 2).length;           // passou da acolhida
+        const viuHorarios = reais.filter(l => (Array.isArray(l.slots_propostos) && l.slots_propostos.length) || l.gcal_event_id).length;
+        const agendou     = reais.filter(l => !!l.gcal_event_id).length;                     // evento real criado
+
+        const pct = (a, b) => (b > 0 ? Math.round((a / b) * 100) : null);
+        return res.json({
+            dias,
+            funil: [
+                { etapa: 'Visitou o site',   valor: pageviews,   conv: null },
+                { etapa: 'Abriu o chat',     valor: chatAberto,  conv: pct(chatAberto, pageviews) },
+                { etapa: 'Mandou 1ª msg',    valor: conversas,   conv: pct(conversas, chatAberto || pageviews) },
+                { etapa: 'Qualificou',       valor: qualificou,  conv: pct(qualificou, conversas) },
+                { etapa: 'Viu horários',     valor: viuHorarios, conv: pct(viuHorarios, conversas) },
+                { etapa: 'Agendou ✅',        valor: agendou,     conv: pct(agendou, conversas) },
+            ],
+            // taxa anúncio→agendamento (a métrica que importa pro pago), quando há tráfego medido
+            visita_para_agendou: pct(agendou, pageviews),
+        });
+    } catch (err) {
+        console.error('[METRICS] funil falhou:', err.message);
+        return res.status(500).json({ error: 'erro' });
+    }
+});
+
 // Entrega o Frontend (Sempre depois das rotas de API)
 app.get(/.*/, (req, res) => {
     res.sendFile(path.join(__dirname, 'frontend', 'dist', 'index.html'));
