@@ -6368,7 +6368,16 @@ module.exports = {
         // em dúvida/objeção/qualificação a agenda fica TRAVADA (mata o "pular pro horário").
         const tri = await triar({ historico, ultimaMsg: texto });
         const acao = decidirAcao(tri, lead);
-        const liberaAgenda = (acao === 'propor_reuniao' || acao === 'agendar');
+        // 🐛 BUG real (achado em teste ponta a ponta pós-deploy): depois que a Sofia já OFERECEU
+        // horários, o lead responde só o e-mail/nome ("josiane@x.com") — sem palavra de agendar.
+        // A triagem lê isso como outra coisa (não é pedido_agendar nem avanço) e travava o gate,
+        // nunca deixando orquestrarAgendamento rodar a FASE CONFIRMAÇÃO interna dele (que detecta
+        // o e-mail e EFETIVA o evento real). O closer então inventava "vou puxar os horários" sem
+        // nunca entregar — travava o agendamento no último passo. Uma vez em andamento (slots já
+        // propostos), as próximas mensagens são CONTINUAÇÃO do fluxo, não nova classificação —
+        // libera a agenda independente da leitura da triagem.
+        const jaEmAndamento = Array.isArray(lead.slots_propostos) && lead.slots_propostos.length > 0;
+        const liberaAgenda = jaEmAndamento || (acao === 'propor_reuniao' || acao === 'agendar');
 
         // Limpa tags internas + mata link falso/Calendly. Trava pura em lib/webGuardrails.js (stripWeb).
 
