@@ -286,6 +286,9 @@ const { calcularBackoffReconexao } = require('./lib/reconexao');
 const { stripWeb, enxugarWeb } = require('./lib/webGuardrails');
 // 📅 Decisão pura de agendamento (não agenda com "oi") — lib/agendaDecisao.js.
 const { deveProporAgendamento, aceitouConviteDeReuniao, prometeuVerAgenda, ehSaudacaoPura, querAgendar: querAgendarDecisao } = require('./lib/agendaDecisao');
+// 🧠 Triagem inteligente (escuta ativa): lê o momento da conversa e decide o modo (tira-dúvida,
+// objeção, qualificar, propor reunião, agendar) — lib/triagem.js. Só libera agenda quando faz sentido.
+const { triar, decidirAcao } = require('./lib/triagem');
 
 // ============================================================================
 // 🗄️ PERSISTÊNCIA DA GAVETA (nunca perder inbound num restart/deploy)
@@ -6360,11 +6363,20 @@ module.exports = {
         const intencao = await routerAgent.classificarMensagem(texto).catch(() => 'DUVIDA');
         const instanceData = { user_id: USER_ID, product_type: 'antix', agent_name: 'Sofia', company_name: 'Antix', name: 'Sofia (site)' };
 
+        // 🧠 TRIAGEM (escuta ativa): lê o momento da conversa e o que o lead quer AGORA. É daqui que
+        // sai a decisão de modo. Agendamento só é LIBERADO quando a ação é propor_reuniao/agendar —
+        // em dúvida/objeção/qualificação a agenda fica TRAVADA (mata o "pular pro horário").
+        const tri = await triar({ historico, ultimaMsg: texto });
+        const acao = decidirAcao(tri, lead);
+        const liberaAgenda = (acao === 'propor_reuniao' || acao === 'agendar');
+
         // Limpa tags internas + mata link falso/Calendly. Trava pura em lib/webGuardrails.js (stripWeb).
 
         // 📅 AGENDAMENTO REAL: a Sofia consulta a Google Agenda da Antix e propõe/cria horários
-        // REAIS — igual ao WhatsApp (nada de link falso). Só dispara quando há intenção de marcar.
-        const agend = await orquestrarAgendamento(lead, texto, instanceData, USER_ID, intencao, historico).catch(() => ({ tratado: false }));
+        // REAIS — igual ao WhatsApp (nada de link falso). Só dispara quando a triagem liberou.
+        const agend = liberaAgenda
+            ? await orquestrarAgendamento(lead, texto, instanceData, USER_ID, intencao, historico, { forcarOferta: acao === 'propor_reuniao' }).catch(() => ({ tratado: false }))
+            : { tratado: false };
         if (agend?.tratado && agend.resposta) {
             const rA = semTravessao(stripWeb(agend.resposta)) || 'Deixa eu ver os horários certinho aqui e já te falo 🙌';
             await db.saveMessage(waId, 'assistant', rA, null, USER_ID, 'web').catch(() => {});
@@ -6418,7 +6430,15 @@ module.exports = {
 - Se a pessoa PERGUNTAR algo sobre a reunião ("vamos falar sobre X?", "como é?", "quanto dura?"), RESPONDA a pergunta primeiro — nunca pule pro horário por cima dela.
 - PROIBIDO inventar horário ou link. NUNCA liste horários você mesma (nada de "Horário 1: 10h..."). Quando ela ACEITAR, diga em UMA linha curta que já vai ver os horários — o sistema mostra os reais na sequência. Nunca prometa "vou ver os horários" e pare sem entregar.`;
 
-        const respostaRaw = await closerAgent.gerarRespostaCloser(historicoIA, lead, promptWeb, intencao, {
+        // ⚡ DIRETIVA DE MODO (vinda da triagem): diz ao closer o que fazer AGORA. É o que faz a IA
+        // OUVIR em vez de empurrar agenda. Em dúvida/objeção/qualificação, proíbe oferecer horário.
+        let modoDir = '';
+        if (acao === 'tira_duvida') modoDir = `\n\n⚡ MODO AGORA = TIRA-DÚVIDA: o cliente fez uma PERGUNTA/dúvida ("${String(texto).slice(0, 80)}"). RESPONDA ela AGORA, completa, simples e direta. É PROIBIDO oferecer horário ou dizer que vai ver a agenda nesta mensagem. Só depois de responder é que a conversa segue.`;
+        else if (acao === 'tratar_objecao') modoDir = `\n\n⚡ MODO AGORA = OBJEÇÃO: o cliente resistiu ("${String(texto).slice(0, 80)}"). Acolha de verdade, mostre o outro lado com empatia e um dado concreto, e NÃO ofereça horário nesta mensagem.`;
+        else if (acao === 'qualificar') modoDir = `\n\n⚡ MODO AGORA = QUALIFICAR: reaja ao que ele disse (escuta ativa) e dê o PRÓXIMO passo do SPIN. Faltam números? pergunte. Já tem quantos perde + ticket? faça a CONTA em R$ e apresente a solução. NÃO ofereça horário ainda.`;
+        if (tri.dor_tipo === 'time_comercial_caro') modoDir += `\n⚠️ A dor dele é CUSTO de equipe (não perda de cliente). Faça a conta pela ECONOMIA: do que ele gasta hoje${tri.tem_numeros?.gasto_atual_mes ? ` (~R$${tri.tem_numeros.gasto_atual_mes}/mês)` : ''}, a IA costuma cortar 50-70%. NÃO pergunte "quantos clientes você perde".`;
+
+        const respostaRaw = await closerAgent.gerarRespostaCloser(historicoIA, lead, promptWeb + modoDir, intencao, {
             instanceType: 'antix', bookingAtivo: true, agendaConectada: true, calendlyLink: '',
             primeiroContato: !historico.some(m => m.role === 'assistant'),
         }).catch(() => null);
@@ -6428,9 +6448,11 @@ module.exports = {
         if (mEst) { const s = parseInt(mEst[1], 10); if (s >= 0 && s <= 5 && s !== (lead.current_stage || 0)) await supabase.from('leads').update({ current_stage: s }).eq('id', lead.id).then(() => {}, () => {}); }
 
         // 🛑 ANTI-STALL: se o closer prometeu "deixa eu ver os horários" e PARARIA (o lead ia esperar
-        // uma msg que nunca chega, achando que travou), interceptamos e entregamos os horários REAIS
-        // agora mesmo — na mesma resposta. É o bug "promessa vazia" visto em teste real.
-        if (prometeuVerAgenda([{ role: 'assistant', content: String(respostaRaw || '') }])) {
+        // uma msg que nunca chega, achando que travou), interceptamos e entregamos os horários REAIS.
+        // GATE da triagem: só entrega slots se a agenda está LIBERADA (propor_reuniao/agendar). Se o
+        // closer prometeu agenda no meio de uma dúvida/qualificação, NÃO despeja horário — era o furo
+        // que fazia a IA pular (anti-stall furando o gate). Nesse caso a resposta normal segue abaixo.
+        if (liberaAgenda && prometeuVerAgenda([{ role: 'assistant', content: String(respostaRaw || '') }])) {
             const forcado = await orquestrarAgendamento(lead, texto, instanceData, USER_ID, intencao, historico, { forcarOferta: true }).catch(() => null);
             if (forcado?.tratado && forcado.resposta) {
                 const rF = semTravessao(stripWeb(forcado.resposta)) || 'Deixa eu ver os horários certinho e já te falo 🙌';
