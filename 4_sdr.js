@@ -289,6 +289,9 @@ const { deveProporAgendamento, aceitouConviteDeReuniao, prometeuVerAgenda, ehSau
 // 🧠 Triagem inteligente (escuta ativa): lê o momento da conversa e decide o modo (tira-dúvida,
 // objeção, qualificar, propor reunião, agendar) — lib/triagem.js. Só libera agenda quando faz sentido.
 const { triar, decidirAcao } = require('./lib/triagem');
+// 📈 Meta Conversions API (server-side): manda Lead/Schedule pro Meta otimizar o anúncio pra quem
+// AGENDA, não pra quem clica. Inerte sem META_PIXEL_ID/META_CAPI_TOKEN — lib/metaCapi.js.
+const metaCapi = require('./lib/metaCapi');
 
 // ============================================================================
 // 🗄️ PERSISTÊNCIA DA GAVETA (nunca perder inbound num restart/deploy)
@@ -4665,6 +4668,20 @@ async function orquestrarAgendamento(lead, ultimaMsg, instanceData, userId, inte
             internal_notes: `Reunião ${remarcou ? 'remarcada' : 'criada'} na Google Agenda (${slot.label}) em ${new Date().toLocaleString('pt-BR')}.`,
         }).eq('id', lead.id);
         console.log(`✅ [AGENDAMENTO] ${lead.name}: evento ${remarcou ? 'remarcado' : 'criado'} (${slot.label}) ${ev.meetLink || ''}`);
+        // 📈 META CAPI — dispara "Schedule" (só em agendamento NOVO) pro Meta aprender quem é lead BOM.
+        // Fire-and-forget (não atrasa a resposta). Inerte sem credenciais. Valor = ticket estimado do
+        // lead (opts.valorLead) ou o default configurável — é o sinal pro Meta otimizar por quem fecha.
+        if (!remarcou && opts.adAttrib) {
+            const valorLead = (typeof opts.valorLead === 'number' && opts.valorLead > 0)
+                ? opts.valorLead : (parseFloat(process.env.META_SCHEDULE_VALUE) || 450);
+            metaCapi.enviarEvento({
+                eventName: 'Schedule', eventId: `sched:${lead.id || lead.whatsapp_id}`,
+                email: lead.email, telefone: lead.phone,
+                fbp: opts.adAttrib.fbp, fbc: opts.adAttrib.fbc, ip: opts.adAttrib.ip, ua: opts.adAttrib.ua,
+                value: valorLead, currency: 'BRL',
+                eventSourceUrl: 'https://antix-ia.com', actionSource: 'website',
+            }).catch(() => {});
+        }
         const avisoEmail = lead.email ? ' (também mandei o convite no seu email 📩)' : '';
         const linkTxt = ev.meetLink ? `\n[QUEBRA]\nSegue o link da nossa reunião: ${ev.meetLink}${avisoEmail}` : '';
         // REVEAL do Antix no fluxo de agenda real: preserva o "efeito UAU" (antes só saía no
@@ -6307,7 +6324,7 @@ module.exports = {
     // Canal SÍNCRONO (request/response HTTP), reusa router + closer + resolverPromptCompleto.
     // Protegido no server.js (rate-limit + CORS). Cria um lead 'web' pra aparecer no pipeline e
     // permitir handoff pro WhatsApp. NÃO usa Baileys/booking — o agendamento fecha no WhatsApp.
-    responderWebChat: async ({ sessionId, message, visitorName } = {}) => {
+    responderWebChat: async ({ sessionId, message, visitorName, adAttrib = {} } = {}) => {
         const USER_ID = process.env.WEB_CHAT_USER_ID || 'f437f090-5fa0-4a94-b4aa-8c22998c9cf6'; // Antix
         // Chip do Antix — os leads web ganham esse instance_id pra APARECEREM na aba Conversas
         // (a lista filtra pelo chip; lead sem chip some quando um chip está selecionado).
@@ -6353,6 +6370,16 @@ module.exports = {
 
         await db.saveMessage(waId, 'user', texto, null, USER_ID, 'web').catch(() => {});
 
+        // 📈 META CAPI — "Lead" no 1º contato real (engajou). Fire-and-forget, inerte sem credenciais.
+        // Schedule (mais forte) sai depois, no efetivar. Match keys vêm do clique no anúncio (adAttrib).
+        if (leadNovo) {
+            metaCapi.enviarEvento({
+                eventName: 'Lead', eventId: `lead:${lead.id || waId}`,
+                fbp: adAttrib.fbp, fbc: adAttrib.fbc, ip: adAttrib.ip, ua: adAttrib.ua,
+                eventSourceUrl: 'https://antix-ia.com', actionSource: 'website',
+            }).catch(() => {});
+        }
+
         // 🏷️ IDENTIFICAÇÃO (tracking): captura o nome pra o lead não ficar "Visitante do site".
         if (!lead.name || lead.name === 'Visitante do site') {
             let nome = extrairNomeDeclarado(texto);           // "meu nome é X" / "sou o X"
@@ -6392,7 +6419,7 @@ module.exports = {
         // 📅 AGENDAMENTO REAL: a Sofia consulta a Google Agenda da Antix e propõe/cria horários
         // REAIS — igual ao WhatsApp (nada de link falso). Só dispara quando a triagem liberou.
         const agend = liberaAgenda
-            ? await orquestrarAgendamento(lead, texto, instanceData, USER_ID, intencao, historico, { forcarOferta: acao === 'propor_reuniao' }).catch(() => ({ tratado: false }))
+            ? await orquestrarAgendamento(lead, texto, instanceData, USER_ID, intencao, historico, { forcarOferta: acao === 'propor_reuniao', adAttrib, valorLead: tri.tem_numeros?.ticket }).catch(() => ({ tratado: false }))
             : { tratado: false };
         if (agend?.tratado && agend.resposta) {
             const rA = semTravessao(stripWeb(agend.resposta)) || 'Deixa eu ver os horários certinho aqui e já te falo 🙌';
@@ -6472,7 +6499,7 @@ module.exports = {
         // closer prometeu agenda no meio de uma dúvida/qualificação, NÃO despeja horário — era o furo
         // que fazia a IA pular (anti-stall furando o gate). Nesse caso a resposta normal segue abaixo.
         if (liberaAgenda && prometeuVerAgenda([{ role: 'assistant', content: String(respostaRaw || '') }])) {
-            const forcado = await orquestrarAgendamento(lead, texto, instanceData, USER_ID, intencao, historico, { forcarOferta: true }).catch(() => null);
+            const forcado = await orquestrarAgendamento(lead, texto, instanceData, USER_ID, intencao, historico, { forcarOferta: true, adAttrib, valorLead: tri.tem_numeros?.ticket }).catch(() => null);
             if (forcado?.tratado && forcado.resposta) {
                 const rF = semTravessao(stripWeb(forcado.resposta)) || 'Deixa eu ver os horários certinho e já te falo 🙌';
                 await db.saveMessage(waId, 'assistant', rF, null, USER_ID, 'web').catch(() => {});

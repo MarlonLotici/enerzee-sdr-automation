@@ -1176,8 +1176,12 @@ app.post('/api/call-lead', autenticarMiddleware, async (req, res) => {
 app.post('/api/web-chat', webChatLimiter, express.json(), async (req, res) => {
     try {
         if (!sdr?.responderWebChat) return res.status(503).json({ error: 'IA indisponível no momento.' });
-        const { sessionId, message, visitorName } = req.body || {};
-        const r = await sdr.responderWebChat({ sessionId, message, visitorName });
+        const { sessionId, message, visitorName, fbp, fbc } = req.body || {};
+        // 📈 Match keys do Meta (CAPI): fbp/fbc vêm do widget (clique no anúncio); IP real atrás do
+        // proxy do Railway via X-Forwarded-For. Sem trust proxy, req.ip viria errado.
+        const ip = (req.headers['x-forwarded-for'] || '').split(',')[0].trim() || req.ip || null;
+        const adAttrib = { fbp, fbc, ip, ua: req.headers['user-agent'] || null };
+        const r = await sdr.responderWebChat({ sessionId, message, visitorName, adAttrib });
         if (!r?.ok) return res.status(400).json({ error: r?.motivo || 'falha' });
         return res.json({ reply: r.reply, handoff: !!r.handoff });
     } catch (err) {
