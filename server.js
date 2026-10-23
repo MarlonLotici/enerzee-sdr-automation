@@ -561,7 +561,7 @@ app.post('/webhook/calendly', webhookLimiter, express.json(), async (req, res) =
             for (const jid of jids) {
                 const { data } = await supabase
                     .from('leads')
-                    .select('id, name, whatsapp_id, instance_id, dono, niche')
+                    .select('id, name, whatsapp_id, instance_id, dono, niche, user_id')
                     .eq('whatsapp_id', jid)
                     .maybeSingle();
                 if (data) { lead = data; break; }
@@ -572,7 +572,7 @@ app.post('/webhook/calendly', webhookLimiter, express.json(), async (req, res) =
         if (!lead && emailConvidado) {
             const { data } = await supabase
                 .from('leads')
-                .select('id, name, whatsapp_id, instance_id, dono, niche')
+                .select('id, name, whatsapp_id, instance_id, dono, niche, user_id')
                 .eq('email', emailConvidado)
                 .maybeSingle();
             if (data) lead = data;
@@ -599,15 +599,19 @@ app.post('/webhook/calendly', webhookLimiter, express.json(), async (req, res) =
 
         // 4. Alertas: Discord canal comercial + Socket.io para HandoffQueue do frontend
         alertaCalendly({ leadName: lead.dono || lead.name, empresa: lead.name, niche: lead.niche, dataEvento, nomeEvento }).catch(() => {});
-        io.emit('handoff_detected', {
-            leadId:    lead.id,
-            name:      lead.dono || lead.name,
-            business:  lead.name,
-            niche:     lead.niche || '—',
-            reason:    `Reunião confirmada: ${nomeEvento}`,
-            instanceId: lead.instance_id,
-            pausadoEm: new Date().toISOString(),
-        });
+        if (lead.user_id) {
+            io.to(`user:${lead.user_id}`).emit('handoff_detected', {
+                leadId:    lead.id,
+                name:      lead.dono || lead.name,
+                business:  lead.name,
+                niche:     lead.niche || '—',
+                reason:    `Reunião confirmada: ${nomeEvento}`,
+                instanceId: lead.instance_id,
+                pausadoEm: new Date().toISOString(),
+            });
+        } else {
+            console.warn(`⚠️ [CALENDLY] handoff_detected não emitido via Socket.io: lead ${lead.id} (${lead.name}) está sem user_id.`);
+        }
 
         // 5. Acorda o SDR para enviar o feedback humanizado ao lead
         sdrEvents.emit('AGENDAMENTO_CONFIRMADO', { lead, dataEvento, instanceId: lead.instance_id });

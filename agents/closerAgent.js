@@ -10,7 +10,7 @@ const { alertaDegradacaoIA } = require('../notifier');
  * @param {string} intencao           - 'COMPRA' | 'DUVIDA' | 'LIXO' | 'REPASSE'
  * @param {Object} opcoes             - { calendlyLink, instanceType, modo }
  *   instanceType: 'solar' | 'antix' | 'lince' | qualquer string
- *   Default: 'solar' (backward-compatible)
+ *   Default: 'generico' (vocabulário solar só quando instanceType === 'solar')
  *   modo: 'texto' (WhatsApp, default) | 'voz' (ligação telefônica ao vivo).
  *   Em 'voz' toda a lógica de funil/estágios permanece idêntica — muda apenas
  *   a camada de formatação: fala corrida sem [QUEBRA], sem links lidos em voz

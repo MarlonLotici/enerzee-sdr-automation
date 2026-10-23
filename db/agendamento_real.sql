@@ -18,7 +18,7 @@ ALTER TABLE public.leads ADD COLUMN IF NOT EXISTS gcal_event_id     text;   -- i
 ALTER TABLE public.leads ADD COLUMN IF NOT EXISTS gcal_meet_link    text;   -- link do Google Meet
 ALTER TABLE public.leads ADD COLUMN IF NOT EXISTS slots_propostos   jsonb;  -- [{inicioISO,fimISO,label}] oferecidos, aguardando confirmação
 ALTER TABLE public.leads ADD COLUMN IF NOT EXISTS slot_calendar_id  text;   -- calendário usado na proposta
--- Lembrete 24h reutiliza a coluna reminder_sent já existente; aqui só o de 1h antes:
+-- Lembrete 24h usa a coluna reminder_24h_sent (boolean) já existente; aqui só o de 1h antes:
 ALTER TABLE public.leads ADD COLUMN IF NOT EXISTS lembrete_1h_enviado  boolean DEFAULT false;
 -- calendly_event_at (data/hora do evento) provavelmente já existe da feature de confirmação;
 -- IF NOT EXISTS cobre caso não exista:

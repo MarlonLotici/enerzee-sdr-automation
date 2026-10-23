@@ -97,7 +97,14 @@ const MAPA_DESCONTO_REGIONAL = {
 };
 
 // 🎯 FIX #11: Contexto por nicho — injeta vocabulário do setor no prompt
-function gerarContextoNicho(niche, productType = 'solar') {
+// Produtos cuja venda gira em torno da CONTA DE LUZ (solar, energia por assinatura...): só eles
+// pedem/leem fatura. Qualquer outro tenant (Antix, vistoria, consultoria, genérico) nunca vê isso.
+function produtoUsaFaturaEnergia(productType) {
+    return /solar|energia/i.test(String(productType || ''));
+}
+
+// Sem default 'solar': product_type ausente NÃO pode virar contexto de energia (vazava pra todo tenant).
+function gerarContextoNicho(niche, productType = null) {
     if (!niche) return '';
     // ⚡ Este contexto é TODO sobre consumo de ENERGIA (herança da Enerzee/solar). Pra tenants
     // não-solar (Antix, genérico) ele é ruído — faria a Sofia falar de "ar condicionado/freezer"
@@ -2049,13 +2056,10 @@ async function enviarAudioTTS(sock, remoteJid, texto, lead, instanceId, voz = nu
         // REGRA: nenhum substituto pode conter pontos ('.') — senão o replace de pontos os processa de novo
         let textoHumanizado = texto
             .replace(/\.{2,}/g, '. ')              // 1. Reticências → ponto único (sem multiplicar)
-            .replace(/energia/gi, 'energia né,')   // 2. Vícios de linguagem (sem pontos internos)
-            .replace(/fatura/gi, 'fatura tipo,')
-            .replace(/economizar/gi, 'dar uma economizada')
-            .replace(/\?/g, '? ')                  // 3. Pontuação → só espaço (edge-tts entonação natural)
+            .replace(/\?/g, '? ')                  // 2. Pontuação → só espaço (entonação natural)
             .replace(/!/g, '! ')
-            .replace(/\./g, ', ')                  // 4. Ponto → vírgula (pausa suave — SEM pontos no substituto)
-            .replace(/,\s*,/g, ',')                // 5. Limpa duplas vírgulas eventuais
+            .replace(/\./g, ', ')                  // 3. Ponto → vírgula (pausa suave — SEM pontos no substituto)
+            .replace(/,\s*,/g, ',')                // 4. Limpa duplas vírgulas eventuais
             .trim();
 
         await sock.sendPresenceUpdate('recording', remoteJid);
@@ -2803,7 +2807,10 @@ if (fromMe) {
    // --- 3. PROCESSAMENTO DE MÍDIA INTELIGENTE ---
     if (messageType === 'audioMessage' || messageType === 'imageMessage' || messageType === 'documentMessage') {
         console.log(`📄 [MÍDIA] Analisando arquivo enviado por ${lead.name}...`);
-        
+        // Leitura de fatura de luz (imagem/PDF) só existe pra produtos de energia. Nos demais
+        // tenants, foto/PDF não dispara análise nem pedido de "fatura" (era hardcoded pra todos).
+        const usaFatura = produtoUsaFaturaEnergia((await getRegrasEmCache(instanceId))?.product_type);
+
         try {
             // 🛡️ PASSO 4: BARREIRA ANTI-CRASH
             // Lemos o tamanho do arquivo nos metadados antes de iniciar o download
@@ -2814,7 +2821,9 @@ if (fromMe) {
                 console.log(`⚠️ [BARREIRA] Arquivo de ${lead.name} é muito grande (${(fileSize / 1024 / 1024).toFixed(2)}MB). Abortando download.`);
                 
                 if (!lead.is_paused) {
-                    const msgErroCarga = "Opa, meu sistema não conseguiu carregar esse arquivo por causa do tamanho rs. Consegue me mandar um print da primeira página da fatura? Fica mais fácil de eu ler aqui.";
+                    const msgErroCarga = usaFatura
+                        ? "Opa, meu sistema não conseguiu carregar esse arquivo por causa do tamanho rs. Consegue me mandar um print da primeira página da fatura? Fica mais fácil de eu ler aqui."
+                        : "Opa, não consegui abrir esse arquivo aqui, ficou pesado demais rs. Consegue me resumir por texto o que é?";
                     await baileysTransport.enviar(sock, remoteJid, { text: msgErroCarga });
                     await db.saveMessage(lead.whatsapp_id, 'assistant', msgErroCarga, instanceId);
                 }
@@ -2843,10 +2852,10 @@ if (fromMe) {
         console.log(`🎭 [MÍDIA] Imagem muito pequena (${fileSize} bytes) — provavelmente sticker/emoji. Ignorando.`);
         return;
     }
-    analise = await executarLeituraIA(buffer);
+    if (usaFatura) analise = await executarLeituraIA(buffer);
 }
 
-            else if (messageType === 'documentMessage' && msg.message.documentMessage.mimetype === 'application/pdf') {
+            else if (usaFatura && messageType === 'documentMessage' && msg.message.documentMessage.mimetype === 'application/pdf') {
                 console.log(`📄 [SDR] Lendo PDF enviado por ${lead.name}...`);
                 const data = await pdf(buffer);
                 
@@ -2888,7 +2897,7 @@ if (fromMe) {
                     const estagioAtual = lead.current_stage || 0;
                     // Só pede fatura se já estamos no estágio 2+ (lead já foi questionado sobre energia)
                     // Nos estágios 0-1, foto de cardápio/produto/catálogo é normal — ignorar silenciosamente
-                    if (estagioAtual >= 2) {
+                    if (usaFatura && estagioAtual >= 2) {
                         const chaveAviso = `${lead.id}_foto`;
                         if (!cacheAvisosMidia.has(chaveAviso)) {
                             cacheAvisosMidia.set(chaveAviso, Date.now());
@@ -2898,7 +2907,7 @@ if (fromMe) {
                             await db.saveMessage(lead.whatsapp_id, 'assistant', msgFoto, instanceId);
                         }
                     } else {
-                        console.log(`📸 [FOTO] Lead ${lead.name} no estágio ${estagioAtual} enviou foto — contexto não é fatura. Ignorando.`);
+                        console.log(`📸 [FOTO] Lead ${lead.name} (estágio ${estagioAtual}, fatura=${usaFatura}) enviou mídia — sem pedido de fatura. Ignorando.`);
                     }
                 }
                 return;
@@ -3054,7 +3063,7 @@ async function gerarResumoHandoff(historicoRecente) {
         // cerebro, não rapido (2026-10-14): MODELOS.rapido (DeepSeek) devolvia VAZIO neste call →
         // sempre caía em "Resumo indisponível.", perdendo o contexto pro consultor humano.
         const res = await chamarLLM({
-            messages: [{ role: 'user', content: `Analise o histórico de conversa de energia solar abaixo e gere um resumo executivo de no máximo 2 frases para o consultor humano assumir o chat. Foque em: 1. Perfil do negócio (o que é, porte), 2. Dor/Dados coletados (valor da conta se houver), 3. Motivo do travamento/handoff. Seja direto, sem introduções.\n\n${msgs}` }],
+            messages: [{ role: 'user', content: `Analise o histórico de conversa comercial abaixo e gere um resumo executivo de no máximo 2 frases para o consultor humano assumir o chat. Foque em: 1. Perfil do negócio (o que é, porte), 2. Dor/Dados coletados (valor da conta se houver), 3. Motivo do travamento/handoff. Seja direto, sem introduções.\n\n${msgs}` }],
             model: MODELOS.cerebro,
             maxTokens: 200,
         });
@@ -3070,16 +3079,20 @@ async function emitirEventoHandoff(lead, motivo, historico) {
     console.log(`📥 [HANDOFF] Disparando resumo e alerta para o lead ${lead.name}`);
     const resumoIA = await gerarResumoHandoff(historico);
     if (ioSocket) {
-        ioSocket.emit('handoff_detected', {
-            leadId:     lead.id,
-            name:       lead.name,
-            business:   lead.name,
-            niche:      lead.niche  || '—',
-            reason:     motivo,
-            resumoIA,
-            instanceId: lead.instance_id,
-            pausadoEm:  new Date().toISOString(),
-        });
+        if (lead.user_id) {
+            ioSocket.to(`user:${lead.user_id}`).emit('handoff_detected', {
+                leadId:     lead.id,
+                name:       lead.name,
+                business:   lead.name,
+                niche:      lead.niche  || '—',
+                reason:     motivo,
+                resumoIA,
+                instanceId: lead.instance_id,
+                pausadoEm:  new Date().toISOString(),
+            });
+        } else {
+            console.warn(`⚠️ [HANDOFF] handoff_detected não emitido via Socket.io: lead ${lead.id} (${lead.name}) está sem user_id.`);
+        }
     }
     await alertaHandoff({
         leadId:    lead.id,
@@ -3518,13 +3531,13 @@ if (lead.opening_template && lead.opening_template.length > 15 && lead.opening_t
                 : lead.capital_social_numeric >= 150000 ? 'médio (R$ 150k-500k)'
                 : 'pequeno (< R$ 150k)';
             const descontoEstimado = MAPA_DESCONTO_REGIONAL[ufLead] ? `${Math.round(MAPA_DESCONTO_REGIONAL[ufLead] * 100)}` : '12-18';
-            const nicheCtx = gerarContextoNicho(lead.niche || '');
+            const nicheCtx = gerarContextoNicho(lead.niche || '', instanceData?.product_type);
 
             // Prompt LLM: lido do Supabase (opening_templates.llm_prompt) — editável por tenant sem deploy.
             // Variáveis disponíveis: ${nomeEmpresa}, ${nomeDono}, ${nicho},
             // ${bairroLead}, ${concessionariaLocal}, ${capitalDesc}, ${descontoEstimado}, ${nicheCtx}
             const _llmTpl = tplsInstancia?.llm_prompt ||
-                'Aja como um especialista em redução de custos operacionais. Crie uma ÚNICA mensagem curta de WhatsApp para iniciar conversa com o decisor da empresa alvo.\n\nEmpresa: ${nomeEmpresa}\nDono: ${nomeDono}\nBairro: ${bairroLead}\n\nRegras ABSOLUTAS:\n1. Inicie EXATAMENTE com: "Opa ${nomeDono}, tudo bem?" (ou "bom dia/boa tarde").\n2. NUNCA diga seu nome, não diga "sou eu", não diga de onde você é.\n3. Vá direto ao assunto: faça um comentário curto sobre a empresa no bairro ${bairroLead} e pergunte se ele é a pessoa que cuida dos custos fixos.\n4. Máximo de 20 palavras.\n5. SEM emojis, SEM mencionar energia solar.\nRetorne APENAS o texto da mensagem.';
+                'Aja como um especialista em redução de custos operacionais. Crie uma ÚNICA mensagem curta de WhatsApp para iniciar conversa com o decisor da empresa alvo.\n\nEmpresa: ${nomeEmpresa}\nDono: ${nomeDono}\nBairro: ${bairroLead}\n\nRegras ABSOLUTAS:\n1. Inicie EXATAMENTE com: "Opa ${nomeDono}, tudo bem?" (ou "bom dia/boa tarde").\n2. NUNCA diga seu nome, não diga "sou eu", não diga de onde você é.\n3. Vá direto ao assunto: faça um comentário curto sobre a empresa no bairro ${bairroLead} e pergunte se ele é a pessoa que cuida dos custos fixos.\n4. Máximo de 20 palavras.\n5. SEM emojis, SEM citar produto ou serviço específico.\nRetorne APENAS o texto da mensagem.';
             const llmPromptFinal = _llmTpl
                 .replace(/\$\{nomeEmpresa\}/g,        nomeEmpresa)
                 .replace(/\$\{nomeDono\}/g,            primeiroNomeDono || 'não identificado')
@@ -4260,15 +4273,18 @@ await delay(jitterAntiBan);
 
             // status: o webhook do Calendly grava 'booked' (server.js), não 'closed' — filtrar só
             // 'closed' fazia o lembrete NUNCA disparar. Aceita ambos por segurança.
-            const { data: leadsReuniao } = await supabase
+            const { data: leadsReuniao, error: errLeadsReuniao } = await supabase
                 .from('leads')
                 .select('id, name, whatsapp_id, instance_id, dono, calendly_event_at')
                 .in('status', ['booked', 'closed'])
                 .eq('calendly_booked', true)
-                .is('reminder_sent', null)
+                .not('reminder_24h_sent', 'is', true)
                 .gte('calendly_event_at', vinteQuatroHorasISO)
                 .lte('calendly_event_at', vinteCincoHorasISO)
                 .limit(3);
+            if (errLeadsReuniao) {
+                console.error(`❌ [LEMBRETE] Erro ao buscar leads para lembrete 24h: ${errLeadsReuniao.message}`);
+            }
 
             if (leadsReuniao && leadsReuniao.length > 0) {
                 for (const lr of leadsReuniao) {
@@ -4285,7 +4301,7 @@ await delay(jitterAntiBan);
 
                     await enviarMensagemIA(instanciaL.sock, lr.whatsapp_id, { text: msgLembrete }, lr.instance_id);
                     await db.saveMessage(lr.whatsapp_id, 'assistant', msgLembrete, lr.instance_id);
-                    await supabase.from('leads').update({ reminder_sent: new Date().toISOString() }).eq('id', lr.id);
+                    await supabase.from('leads').update({ reminder_24h_sent: true }).eq('id', lr.id);
                     console.log(`🔔 [LEMBRETE] Enviado para ${lr.name} — reunião às ${horaF}`);
                     await delay(Math.floor(Math.random() * 30000) + 30000);
                 }
@@ -4662,16 +4678,19 @@ async function orquestrarAgendamento(lead, ultimaMsg, instanceData, userId, inte
         }
         if (!ev?.eventId) throw new Error('Google não retornou eventId');
         const remarcou = !!lead.gcal_event_id;
-        await supabase.from('leads').update({
+        const { error: errSalvar } = await supabase.from('leads').update({
             // is_paused=false: o lead continua RESPONSIVO (modo concierge trata) após agendar. O
             // disparo proativo NÃO volta por causa disso — o VIGIA/fila filtram por status='contact',
             // e booked nunca é cutucado. Antes era true e silenciava o pós-venda via inbound.
             status: 'booked', calendly_booked: true, current_stage: 5, is_paused: false,
             gcal_event_id: ev.eventId, gcal_meet_link: ev.meetLink || null,
             calendly_event_at: slot.inicioISO, slots_propostos: null, slot_calendar_id: null,
-            reminder_sent: null, lembrete_1h_enviado: false, reminder_10m_sent: false,
+            reminder_24h_sent: false, lembrete_1h_enviado: false, reminder_10m_sent: false,
             internal_notes: `Reunião ${remarcou ? 'remarcada' : 'criada'} na Google Agenda (${slot.label}) em ${new Date().toLocaleString('pt-BR')}.`,
         }).eq('id', lead.id);
+        if (errSalvar) {
+            console.error(`❌ [AGENDAMENTO] Evento criado na agenda mas FALHOU salvar no banco (lead ${lead.id}): ${errSalvar.message}`);
+        }
         console.log(`✅ [AGENDAMENTO] ${lead.name}: evento ${remarcou ? 'remarcado' : 'criado'} (${slot.label}) ${ev.meetLink || ''}`);
         // 📈 META CAPI — dispara "Schedule" (só em agendamento NOVO) pro Meta aprender quem é lead BOM.
         // Fire-and-forget (não atrasa a resposta). Inerte sem credenciais. Valor = ticket estimado do
@@ -4756,12 +4775,15 @@ async function orquestrarAgendamento(lead, ultimaMsg, instanceData, userId, inte
                 try { await gcal.cancelarEvento(userId, lead.gcal_calendar_id || calId, lead.gcal_event_id); }
                 catch (e) { console.error(`❌ [CANCELAMENTO] Falha ao deletar evento de ${lead.name}:`, e.message); }
             }
-            await supabase.from('leads').update({
+            const { error: errSalvar } = await supabase.from('leads').update({
                 status: 'contact', calendly_booked: false, current_stage: 2, is_paused: false, manual_pause: false,
                 gcal_event_id: null, gcal_meet_link: null, calendly_event_at: null, slots_propostos: null, slot_calendar_id: null,
-                reminder_sent: null, lembrete_1h_enviado: false, reminder_10m_sent: false,
+                reminder_24h_sent: false, lembrete_1h_enviado: false, reminder_10m_sent: false,
                 internal_notes: `Reunião CANCELADA pelo lead (${quando}) em ${new Date().toLocaleString('pt-BR')}.`,
             }).eq('id', lead.id);
+            if (errSalvar) {
+                console.error(`❌ [CANCELAMENTO] Evento apagado na agenda mas FALHOU salvar no banco (lead ${lead.id}): ${errSalvar.message}`);
+            }
             console.log(`🗑️ [CANCELAMENTO] ${lead.name}: evento apagado e lead liberado.`);
             return ok(`Prontinho${_nome ? ', ' + _nome : ''}! Cancelei ${quando}. Se quiser remarcar mais pra frente, é só me chamar. 🙂`);
         };
@@ -5042,7 +5064,11 @@ if (funilEncerrado) {
                 : profilerAgent.analisarPerfil(ultimaMsg)
         ];
 
-        const [intencao, raioXDoLead, perfilEmocional] = await Promise.all(promessas);
+        let [intencao, raioXDoLead, perfilEmocional] = await Promise.all(promessas);
+        if (intencao === 'SOLAR' && instanceData?.product_type !== 'solar') {
+            console.log(`🔄 [ROTEADOR] Intenção SOLAR ignorada (product_type=${instanceData?.product_type || 'indefinido'}) → DUVIDA`);
+            intencao = 'DUVIDA';
+        }
 
         if (msgCurta) {
             console.log(`⚡ [SKIP] Mensagem curta ("${ultimaMsg.substring(0, 30)}"). Intel + Profiler pulados.`);
@@ -6418,8 +6444,12 @@ module.exports = {
             }
         }
 
-        const intencao = await routerAgent.classificarMensagem(texto).catch(() => 'DUVIDA');
+        let intencao = await routerAgent.classificarMensagem(texto).catch(() => 'DUVIDA');
         const instanceData = { user_id: USER_ID, product_type: 'antix', agent_name: 'Sofia', company_name: 'Antix', name: 'Sofia (site)' };
+        if (intencao === 'SOLAR' && instanceData?.product_type !== 'solar') {
+            console.log(`🔄 [WEB-CHAT] Intenção SOLAR ignorada (product_type=${instanceData?.product_type}) → DUVIDA`);
+            intencao = 'DUVIDA';
+        }
 
         // 🧠 TRIAGEM (escuta ativa): lê o momento da conversa e o que o lead quer AGORA. É daqui que
         // sai a decisão de modo. Agendamento só é LIBERADO quando a ação é propor_reuniao/agendar —
