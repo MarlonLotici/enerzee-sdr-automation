@@ -4,7 +4,7 @@ const { chamarLLM, MODELOS } = require('../lib/llm');
 /**
  * Agente especialista em quebra de objeções (The Tank).
  * @param {Array} historico - O histórico de mensagens podado.
- * @param {string} promptBaseResolvido - A Constituição com os dados do lead (nicho, economia, etc).
+ * @param {string} promptBaseResolvido - A Constituição do tenant (única fonte de argumentos) + dados do lead.
  * @param {number|string} estagioAtual - A fase atual do funil no banco de dados (CRUCIAL para a soldadura).
  */
 async function quebrarObjecao(historico, promptBaseResolvido, estagioAtual) {
@@ -25,16 +25,14 @@ NÃO TENTE AGENDAR A REUNIÃO NESTA MENSAGEM. A venda pausa até a objeção ser
 
 TÁTICA OBRIGATÓRIA (3 PASSOS):
 1. AMORTECER: Concorde com a perspetiva dele. Faça-o sentir que não o está a contrariar. 
-   (Ex: "Totalmente compreensível ter esse cuidado.", "Faz sentido, tempo é corrido mesmo.")
+   (Ex: "Faz sentido ter esse cuidado.", "Faz sentido, tempo é corrido mesmo.")
 2. ISOLAR/REDIRECIONAR: Mostre o ângulo cego de forma consultiva ou faça uma concessão.
    (Ex: "A questão é que...", "Mas tira-me uma dúvida...")
 3. PERGUNTA DE CONTROLO: Termine com uma pergunta investigativa e suave para devolver a bola para ele.
 
-[SITUAÇÕES SIMULADAS E COMO AGIR]:
-- Se "Já tenho proposta de outra empresa": Elogie a iniciativa, mas pergunte se a concorrente mostrou a simulação oficial da ANEEL ou só uma estimativa de Excel.
-- Se "Mande por email / Mande PDF": Diga que manda sim, mas que o PDF fica genérico porque o valor exato só aparece cruzando os dados do medidor dele no sistema. Pergunte se a conta costuma ser alta para ver se vale a pena o trabalho.
-- Se "É golpe? / Qual a pegadinha?": Concorde que o mercado tem muita coisa estranha. Reforce a lei 14.300 e a ANEEL.
-- Se "Não tenho tempo": Isole. "Tranquilo. Se eu te provar a economia em 2 minutos por mensagem mesmo, vale a tua atenção?"
+[ARGUMENTOS]:
+- Use SOMENTE argumentos, provas e respostas a objeções que estejam na CONSTITUIÇÃO acima.
+- Se a Constituição não traz resposta para essa objeção, NÃO invente dado, lei, certificação ou número: amorteça, entenda melhor o receio dele e devolva com uma pergunta.
 
 [REGRAS DE OURO DA SOLDADURA - PENA DE FALHA CRÍTICA]:
 1. Tamanho: Máximo absoluto de 2 balões curtos separados por [QUEBRA].
@@ -62,7 +60,7 @@ TÁTICA OBRIGATÓRIA (3 PASSOS):
         console.error("❌ Erro Crítico no Objection Agent (The Tank):", error.message);
         
         // Em caso de falha da API, devolve um fallback humano para não deixar o cliente no vácuo
-        return `Entendo perfeitamente o teu ponto. Mas deixa-me perguntar de outra forma: considerando os custos fixos da empresa hoje, faz sentido avaliarmos uma redução se isso não te custar nada agora? [ESTAGIO:${estagioSeguro}] [CLIMA:NEUTRO]`;
+        return `Faz sentido o seu cuidado. Me conta, o que te deixou com o pé atrás? [ESTAGIO:${estagioSeguro}] [CLIMA:NEUTRO]`;
     }
 }
 

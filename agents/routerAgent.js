@@ -51,19 +51,7 @@ async function classificarMensagem(ultimaMensagemLead) {
         return 'ENGANO';
     }
 
-    // 🛡️ NÍVEL 2c: Detecção de Já Tem Solar / Geração Ativa (Regex — custo zero, latência zero)
-    const padraoSolar = (
-        /\bjá\s+(ten[hm]o?s?|tem[oa]s?)\s+(placa|painel|sistema\s+solar|energia\s+solar|usina|geração|fotovoltai)/i.test(ultimaMensagemLead) ||
-        /\b(placa|painel|sistema)\s+solar\s+(instalad|colocad|funcionando|ativo)/i.test(ultimaMensagemLead) ||
-        /\bgeração\s+(própria|ativa|distribuída|solar)\b/i.test(ultimaMensagemLead) ||
-        /\bjá\s+(somos?|sou)\s+(cliente|assinante|parceiro)\s+(da\s+usina|de\s+energia\s+solar|do\s+consórcio)/i.test(ultimaMensagemLead) ||
-        /\bjá\s+(compensamos?|geramos?|produzimos?)\s+energ/i.test(ultimaMensagemLead) ||
-        /\btemos?\s+(noss[ao]\s+)?(própri[ao]\s+)?(usina|geração|painel|placa)\b/i.test(ultimaMensagemLead)
-    );
-    if (padraoSolar) {
-        console.log("☀️ [ROTEADOR] Lead já tem solar/geração ativa. Bypass para SOLAR.");
-        return 'SOLAR';
-    }
+    // (Removido: bypass "já tem solar" → SOLAR. Regra de nicho; desqualificação agora é do prompt.)
 
     // 🛡️ NÍVEL 2d: Deteção de Repasse Direto (Regex — custo zero, latência zero)
 
@@ -125,8 +113,8 @@ A sua ÚNICA função é ler a mensagem do cliente e devolver ESTRITAMENTE UMA d
 2. CONTINUAR
 - O lead confirmou uma informação ("sim", "sou eu", "correto", "exato", "👍").
 - O lead mandou uma saudação ("opa", "bom dia", "pode falar").
-- O lead respondeu positivamente a uma pergunta de qualificação ("a conta dá uns 1000 reais", "gasto muito").
-- O lead fez perguntas genuínas ("como funciona?", "quem é vc?", "de onde tirou meu número?", "tem obra?").
+- O lead respondeu positivamente a uma pergunta de qualificação ("sim, atendemos bastante", "somos uns 10 aqui").
+- O lead fez perguntas genuínas ("como funciona?", "quem é vc?", "de onde tirou meu número?", "quanto tempo leva?").
 - Esta é a intenção padrão para manter a conversa a fluir no funil.
 
 3. REPASSE
@@ -136,8 +124,7 @@ A sua ÚNICA função é ler a mensagem do cliente e devolver ESTRITAMENTE UMA d
 - ⚠️ CRÍTICO: Se o lead disse que VAI passar um contato (futuro), isso também é REPASSE — não confunda com CONTINUAR.
 
 4. OBJECAO
-- O lead resiste ativamente à abordagem ("tá caro", "sem tempo", "é golpe?", "não quero", "manda por email e eu leio depois").
-- ⚠️ NÃO use OBJECAO para "já tenho solar/painel/geração" — esse caso é tratado antes desta análise.
+- O lead resiste ativamente à abordagem ("tá caro", "sem tempo", "é golpe?", "não quero", "manda por email e eu leio depois", "já tenho isso").
 
 5. ENCERRAMENTO
 - O lead despede-se cordialmente sem intenção de continuar ("obrigado", "boa semana", "valeu", "fica com Deus").

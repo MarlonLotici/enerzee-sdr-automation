@@ -1,6 +1,5 @@
 // agents/closerAgent.js
 const { chamarLLM, MODELOS } = require('../lib/llm');
-const { getNicheData } = require('../nicheCache');
 const { alertaDegradacaoIA } = require('../notifier');
 
 /**
@@ -9,8 +8,8 @@ const { alertaDegradacaoIA } = require('../notifier');
  * @param {string} promptPersonalidade - Constituição já resolvida (variáveis substituídas)
  * @param {string} intencao           - 'COMPRA' | 'DUVIDA' | 'LIXO' | 'REPASSE'
  * @param {Object} opcoes             - { calendlyLink, instanceType, modo }
- *   instanceType: 'solar' | 'antix' | 'lince' | qualquer string
- *   Default: 'generico' (vocabulário solar só quando instanceType === 'solar')
+ *   instanceType: 'antix' | qualquer string (default 'generico'). Nenhuma regra de nicho
+ *   é injetada aqui — o conteúdo do setor vem só da Constituição (prompt do tenant).
  *   modo: 'texto' (WhatsApp, default) | 'voz' (ligação telefônica ao vivo).
  *   Em 'voz' toda a lógica de funil/estágios permanece idêntica — muda apenas
  *   a camada de formatação: fala corrida sem [QUEBRA], sem links lidos em voz
@@ -27,14 +26,9 @@ async function gerarRespostaCloser(historico, lead, promptPersonalidade, intenca
     // agendamento real é a fonte da verdade. Calendly só sobra pra quem não conectou agenda.
     const calendlyLink    = (bookingAtivo || agendaConectada) ? '' : (opcoes.calendlyLink || '');
     const instanceType    = opcoes.instanceType   || 'generico';
-    const isSolar        = instanceType === 'solar';
     const isAntix        = instanceType === 'antix';
     const isVoz          = opcoes.modo === 'voz';
     const primeiroContato = opcoes.primeiroContato === true; // 1ª resposta a um lead que procurou primeiro
-
-    // Resolve inteligência de nicho dinamicamente — só para produto solar
-    // getNicheData faz Redis → Supabase → LLM (aprende on-the-fly se necessário)
-    const dadosNicho = isSolar ? await getNicheData(lead?.niche).catch(() => null) : null;
 
     // ─────────────────────────────────────────────────────────────────────────
     // DETECÇÃO DE STAND-BY: houve intervenção humana no histórico?
@@ -88,7 +82,7 @@ AÇÃO OBRIGATÓRIA (exatamente nesta ordem):
 ⚠️ NÃO peça documentos, faturas ou informações adicionais.
 `;
         } else if (calendlyLink) {
-            // Solar e demais produtos: fechamento padrão COM link de agenda configurado.
+            // Demais produtos: fechamento padrão COM link de agenda configurado.
             overrideTatico = `
 =======================================================
 ⚡ MODO OPERACIONAL: SINAL DE COMPRA DETECTADO
@@ -100,7 +94,6 @@ AÇÃO OBRIGATÓRIA:
 - Envie o link: ${calendlyLink}
 - Adicione [ESTAGIO:4] no final.
 - NÃO explique novamente o benefício. NÃO faça rapport. APENAS trave o horário.
-${isSolar ? '- Peça para ele ter uma fatura de luz em mãos na hora da call.' : ''}
 `;
         } else {
             // SEM link de agenda configurado → PROIBIDO fingir agendamento.
@@ -177,27 +170,9 @@ PROIBIDO:
 - Saltar direto para o CTA sem qualificar a dor do lead.
 `;
 
-        // Bloco adicional exclusivo para produto solar
-        const blocoNicho = dadosNicho
-            ? `  * Nicho: ${lead?.niche || 'empresa'}
-  * Equipamentos típicos: ${dadosNicho.equipamentos}
-  * Dor principal: ${dadosNicho.dor_principal}
-  * Ângulo de abertura: ${dadosNicho.angulo_venda}`
-            : `  * Mercado/Sorveteria: freezers ou câmaras frias ligados 24h.
-  * Pousada/Hotel: ar-condicionado dos quartos.
-  * Oficina/Indústria: compressores, elevadores, motores.`;
-
-        const blocoSolar = isSolar ? `
-⚠️ REGRA SOLAR — DESQUALIFICAÇÃO RÁPIDA: Se o lead mencionar EXPLICITAMENTE um valor de conta de luz abaixo de R$300/mês, encerre: "Faz sentido — esse benefício compensa pra contas acima de R$300. Valeu pelo papo!" e adicione [ESTAGIO:ENCERRADO].
-
-⚠️ REGRA SOLAR — DEDUZA O MAQUINÁRIO (ESTÁGIO 1): Faça UMA pergunta sobre os equipamentos pesados deste nicho:
-${blocoNicho}
-  * SÓ DEPOIS do lead admitir equipamentos pesados (ESTÁGIO 2), use a DOR para pedir o valor da fatura.
-
-PROIBIDO SOLAR: Usar "ANEEL", "compensação", "geração distribuída" antes do lead pedir.
-` : '';
-
-        overrideTatico = blocoBase + blocoSolar;
+        // Sem regra de nicho aqui: desqualificação, perguntas de qualificação e vocabulário do setor
+        // vêm SÓ da Constituição (prompt do tenant).
+        overrideTatico = blocoBase;
 
     // ─────────────────────────────────────────────────────────────────────────
     // MODO LIXO

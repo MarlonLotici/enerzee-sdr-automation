@@ -22,18 +22,14 @@ function _parseJsonRobusto(txt) {
 async function gerarAuditoria(historico, lead, productType = 'generico') {
     if (!historico || historico.length < 2) return null;
 
-    const isSolar = productType === 'solar';
-
     const transcricao = historico
         .map(m => `[${m.role === 'assistant' ? 'IA' : 'LEAD'}]: ${m.content}`)
         .join('\n');
 
-    const descPerdidoSolar = isSolar
-        ? 'PERDIDO_SOLAR: lead já possui energia solar instalada'
-        : 'PERDIDO_SOLAR: lead já possui solução equivalente ao produto ofertado';
-    const descPerdidoCaro = isSolar
-        ? 'PERDIDO_CARO: lead reclamou de preço ou conta de energia abaixo de R$300'
-        : 'PERDIDO_CARO: lead reclamou de preço ou orçamento acima do disponível';
+    // Chave "PERDIDO_SOLAR" mantida por compatibilidade (painel/dados já gravados), mas o
+    // significado é genérico — sem regra de nicho no código.
+    const descPerdidoSolar = 'PERDIDO_SOLAR: lead já possui solução equivalente ao produto ofertado';
+    const descPerdidoCaro = 'PERDIDO_CARO: lead reclamou de preço ou ficou fora do perfil/orçamento definido no prompt';
 
     const prompt = `Você é um gerente de vendas sênior avaliando uma conversa do SDR de IA da Antix Flow.
 Leia a conversa abaixo e retorne SOMENTE um JSON válido, sem markdown, sem texto extra.
@@ -64,7 +60,7 @@ CAMPOS DO JSON:
 - "resumo_executivo": string de 1 frase resumindo o resultado da conversa para o gestor.
 
 Exemplo de saída válida:
-{"desfecho":"PERDIDO_CARO","nota_ia":7,"erro_critico_ia":"A IA perguntou o valor da conta antes de qualificar o equipamento.","resumo_executivo":"Lead descartado por conta abaixo do mínimo após qualificação incompleta."}`;
+{"desfecho":"PERDIDO_CARO","nota_ia":7,"erro_critico_ia":"A IA falou de preço antes de entender a necessidade do lead.","resumo_executivo":"Lead saiu por preço após qualificação incompleta."}`;
 
     try {
         // Modelo CÉREBRO: julgar uma conversa + emitir JSON estrito é tarefa de raciocínio.

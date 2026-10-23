@@ -1,7 +1,8 @@
 ﻿/**
  * 
  * 4_sdr.js - MÓDULO DE VENDAS NEURAL V12 (BAILEYS MULTI-TENANCY)
- * INTEGRAL: Vision, PDF, Regras Regionais Enerzee, Anti-Ban e Horários.
+ * Multi-tenant: regras de negócio/nicho vivem SÓ no prompt de cada tenant. Aqui: transporte,
+ * anti-ban, horários, agenda e orquestração.
  */
 // 🚀 FIX V13: Declaração global para injeção dinâmica (Bypass do erro ESM)
 let makeWASocket, useMultiFileAuthState, DisconnectReason, delay, fetchLatestBaileysVersion, makeCacheableSignalKeyStore, downloadMediaMessage, generateMessageID, Browsers;
@@ -32,7 +33,6 @@ const fs = require('fs');
 const axios = require('axios');
 const { HttpsProxyAgent } = require('https-proxy-agent');
 const Groq = require('groq-sdk');
-const pdf = require('pdf-parse');
 const db = require('./database');
 const emailService = require('./emailService');
 const budgetGuard = require('./budgetGuard');
@@ -53,7 +53,6 @@ const handoffAgent = require('./agents/handoffAgent');
 const motoresEmExecucao = new Set(); // 🛡️ Impede que o mesmo chip ligue dois loops infinitos
 const { useRedisAuthState, clearRedisSession, saveOwnerToRedis, getOwnerFromRedis } = require('./auth_redis_adapter');
 const { enviarAlerta, alertaThrottled, alertaHandoff, alertaCalendly, alertaChipOffline, cancelarDebounceChip } = require('./notifier');
-const { getNicheData, inicializarCache } = require('./nicheCache');
 const instanciasEncerrandoManualmente = new Set(); // 🛑 Flag para silenciar alertas no Discord ao remover chip
 
 // ============================================================================
@@ -82,49 +81,11 @@ process.on('unhandledRejection', (reason, promise) => {
     console.error(`  heap: ${Math.round(mem.heapUsed / 1024 / 1024)}MB | uptime: ${Math.round(process.uptime())}s`);
 });
 
-const MAPA_CONCESSIONARIAS = {
-    'MT': 'Energisa', 'MS': 'Energisa', 'SC': 'Celesc', 'PR': 'Copel',
-    'RS': 'RGE/Ceee', 'BA': 'Coelba', 'PE': 'Neoenergia', 'MG': 'Cemig',
-    'CE': 'Enel', 'PA': 'Equatorial', 'GO': 'Equatorial', 'RJ': 'Light/Enel', 'SP': 'Enel/CPFL'
-};
-// 🎯 FIX #12: Percentuais REAIS por estado (substitui o 20% fixo do prompt)
-const MAPA_DESCONTO_REGIONAL = {
-    'PE': 0.25, 'BA': 0.25, 'CE': 0.25, 'MG': 0.25,
-    'MT': 0.15, 'MS': 0.15, 'GO': 0.15, 'PA': 0.15,
-    'PR': 0.16,
-    'SC': 0.12, 'RS': 0.12,
-    'SP': 0.15, 'RJ': 0.15
-};
-
-// 🎯 FIX #11: Contexto por nicho — injeta vocabulário do setor no prompt
-// Produtos cuja venda gira em torno da CONTA DE LUZ (solar, energia por assinatura...): só eles
-// pedem/leem fatura. Qualquer outro tenant (Antix, vistoria, consultoria, genérico) nunca vê isso.
-function produtoUsaFaturaEnergia(productType) {
-    return /solar|energia/i.test(String(productType || ''));
-}
-
-// Sem default 'solar': product_type ausente NÃO pode virar contexto de energia (vazava pra todo tenant).
-function gerarContextoNicho(niche, productType = null) {
-    if (!niche) return '';
-    // ⚡ Este contexto é TODO sobre consumo de ENERGIA (herança da Enerzee/solar). Pra tenants
-    // não-solar (Antix, genérico) ele é ruído — faria a Sofia falar de "ar condicionado/freezer"
-    // ao vender IA de atendimento. Só injeta pra product_type='solar'.
-    if (productType !== 'solar') return '';
-    const n = niche.toLowerCase();
-    if (n.includes('restaurante') || n.includes('alimenta') || n.includes('padaria') || n.includes('lanchonete'))
-        return '\nCONTEXTO DE NICHO: Empresa do ramo alimentício. Mencione custos de câmara fria, forno elétrico, coifa. Use "o gasto com energia na cozinha industrial".';
-    if (n.includes('oficina') || n.includes('auto') || n.includes('mecânic'))
-        return '\nCONTEXTO DE NICHO: Oficina mecânica/auto center. Mencione compressor, elevador, ar comprimido. Use "equipamento pesado puxa muita energia".';
-    if (n.includes('salão') || n.includes('beleza') || n.includes('estétic') || n.includes('barbearia'))
-        return '\nCONTEXTO DE NICHO: Salão de beleza/estética. Mencione secador, chapinha, ar condicionado. Use "ar condicionado ligado o dia todo".';
-    if (n.includes('mercado') || n.includes('super') || n.includes('minimercado'))
-        return '\nCONTEXTO DE NICHO: Supermercado/mercado. Mencione freezers, câmaras frias, iluminação. Use "freezer funcionando 24h consome muito".';
-    if (n.includes('hotel') || n.includes('pousada') || n.includes('hosped'))
-        return '\nCONTEXTO DE NICHO: Hotelaria/pousada. Mencione ar condicionado dos quartos, lavanderia, iluminação. Use "com vários quartos climatizados".';
-    if (n.includes('farmácia') || n.includes('drogaria'))
-        return '\nCONTEXTO DE NICHO: Farmácia. Mencione refrigeração de medicamentos, ar condicionado, iluminação. Use "refrigeração obrigatória consome bastante".';
-    return `\nCONTEXTO DE NICHO: Empresa do ramo de ${niche}. Adapte a linguagem ao setor quando possível.`;
-}
+// ⚠️ SEM REGRA DE NICHO NO CÓDIGO: concessionárias, % de desconto, "conta de luz estimada",
+// vocabulário de setor etc. foram REMOVIDOS daqui. A verdade única de cada tenant é o PRÓPRIO
+// prompt (tenant_prompts / instances.system_prompt). O código só entrega dados do lead.
+const PLACEHOLDERS_REMOVIDOS = ['concessionariaLocal', 'ancoraConta', 'percentualTexto', 'nicheContext',
+    'contextoBairro', 'economiaMensal', 'economiaAnual', 'descontoEstimado', 'nicheCtx'];
 
 function identificarArtigo(nome) {
     if (!nome) return "do responsável pela";
@@ -182,30 +143,6 @@ function resolverSpintax(texto) {
     });
 }
 
-// 🎯 NOVA FUNÇÃO: Chute de conta baseado em Capital Social e Nicho
-function calcularAncoraDinamica(lead) {
-    const capital = lead.capital_social_numeric || 0;
-    const nicho = (lead.niche || "").toLowerCase();
-    
-    // Lista de nichos que são "Vilões de Energia" (Refrigeração/Motores)
-    const nichosPesados = ['acougue', 'açougue', 'mercado', 'supermercado', 'padaria', 'panificadora', 'sorveteria', 'industria', 'frigorifico', 'conveniencia', 'lavanderia', 'marcenaria'];
-    const ePesado = nichosPesados.some(n => nicho.includes(n));
-
-    // NÍVEL 1: Gigantes (Capital > 500k)
-    if (capital >= 500000) return "R$ 10.000";
-
-    // NÍVEL 2: Médio-Grande (Capital 150k - 500k)
-    if (capital >= 150000) return ePesado ? "R$ 5.000" : "R$ 3.000";
-
-    // NÍVEL 3: Estrutura Operacional (Capital 50k - 150k)
-    if (capital >= 50000) return ePesado ? "R$ 2.500" : "R$ 1.500";
-
-    // NÍVEL 4: Pequeno Varejo / ME (Capital < 50k)
-    if (ePesado) return "R$ 1.200";
-
-    // PADRÃO (Escritórios, lojas secas, etc)
-    return "R$ 700";
-}
 // 🕒 CONFIGURAÇÃO DE CICLO DE TRABALHO (Fadiga)
 const HORAS_DE_TRABALHO = 2; // X horas disparando
 const MINUTOS_DE_DESCANSO = 40; // X minutos parado em repouso
@@ -257,7 +194,6 @@ const gavetaDeMensagens = new Map(); // 🧠 OUVIDO PACIENTE: Gaveta temporária
 const gavetaOficialTimers = new Map(); // 🗄️ GAVETA (Cloud API): key `${instanceId}:${jid}` → timer de debounce do disparo
 const mensagensJaProcessadas = new Map(); // 🛡️ DEDUP: Previne reprocessamento de msg.key.id do Baileys
 const cacheRegrasInstancia = new Map(); // 🧠 Memória de curto prazo para regras
-const cacheAvisosMidia = new Map(); // 🛡️ TTL 5min — previne race condition em flood de fotos/catálogos
 let sdrEventsGlobal = null; // 🛡️ Adicione esta linha aqui no topo
 
 // ============================================================================
@@ -1060,44 +996,12 @@ async function resolverPromptCompleto(promptBase, contextoLead, instanceData, hi
     const nomeEmpresa = empresaConfiavel ? limparNomeEmpresa(empresaConfiavel) : 'sua empresa';
 
     const bairroLead = contextoLead.bairro || "sua região";
-    // 🎯 LIMPEZA ESTÉTICA: Corta nomes compostos (ex: "Enel/CPFL" vira apenas "Enel")
-const concessionariaLocal = (MAPA_CONCESSIONARIAS[contextoLead.estado] || 'concessionária de energia').split('/')[0];
     // --- 3. Estratégia tática ---
-    const ancoraConta = calcularAncoraDinamica(contextoLead);
     const isBigFish = (contextoLead.capital_social_numeric > 500000);
     const perfilComportamental = isBigFish
         ? "ARQUÉTIPO: O BANQUEIRO DE INVESTIMENTOS. Tom: Direto, focado em redução de OPEX e Zero CAPEX."
         : "ARQUÉTIPO: O CONSULTOR PARCEIRO. Tom: Educativo, focado em 'sobrar dinheiro no caixa'.";
 
-    // ✅ FIX: Declara a percentagem ANTES de a usar nos cálculos
-    const percentualReal = MAPA_DESCONTO_REGIONAL[contextoLead.estado] || 0.15; 
-    const percentualTexto = String(Math.round(percentualReal * 100));
-
-    // 🧮 Tenta extrair o valor real da conta mencionado pelo lead no histórico
-    // Padrões: "pago 1500", "conta de 800 reais", "R$ 1.200", "uns 900", "1800 por mês" etc.
-    const valorRealDaConta = (() => {
-        const mensagensLead = historico
-            .filter(m => m.role === 'user')
-            .map(m => m.content)
-            .join(' ');
-        const regex = /(?:pago?|conta[^.]*?(?:é|fica|gira|vem|chega)|fatura[^.]*?(?:é|fica|gira|vem|chega)|média[^.]*?(?:é|fica)|(?:uns?|umas?|cerca de|em torno de|tipo|algo como))\s*R?\$?\s*([\d.,]+)|R\$\s*([\d.,]+)/gi;
-        const matches = [...mensagensLead.matchAll(regex)];
-        if (!matches.length) return null;
-        const ultimo = matches[matches.length - 1];
-        const raw = (ultimo[1] || ultimo[2] || '').replace(/\./g, '').replace(',', '.');
-        const valor = parseFloat(raw);
-        return (valor >= 100 && valor <= 100000) ? valor : null;
-    })();
-
-    // Usa o valor real se disponível, senão cai na âncora por capital social
-    const valorAncoraNumerico = valorRealDaConta || parseInt(ancoraConta.replace(/\D/g, '')) || 700;
-    const economiaMensal = Math.round(valorAncoraNumerico * percentualReal);
-    const economiaAnual = economiaMensal * 12;
-    const economiaMensalFormatada = `R$ ${economiaMensal.toLocaleString('pt-BR')}`;
-    const economiaAnualFormatada = `R$ ${economiaAnual.toLocaleString('pt-BR')}`;
-    if (valorRealDaConta) console.log(`💡 [ECONOMIA REAL] Lead informou conta de R$${valorRealDaConta} → economia ${percentualTexto}%: ${economiaMensalFormatada}/mês, ${economiaAnualFormatada}/ano`);
-    
-    const nicheContext = gerarContextoNicho(contextoLead.niche, instanceData?.product_type); // energia só p/ solar; outros tenants → vazio
     const estagioAtual = String(contextoLead.current_stage || 0);
 
     // --- 4. Reversão de objeção ---
@@ -1108,22 +1012,6 @@ const concessionariaLocal = (MAPA_CONCESSIONARIAS[contextoLead.estado] || 'conce
     // --- 5. Saudação dinâmica ---
     const horaAtual = new Date(new Date().toLocaleString("en-US", { timeZone: "America/Sao_Paulo" })).getHours();
     const saudacaoTempo = horaAtual < 12 ? "Bom dia" : horaAtual < 18 ? "Boa tarde" : "Boa noite";
-
-    // --- 6. Contexto de bairro (prova social) ---
-    let contextoBairro = `Mapeamos empresas similares à sua aqui no ${bairroLead} pagando tarifa cheia na ${concessionariaLocal} sem necessidade.`;
-    try {
-        const { count: leadsNoBairro } = await supabase
-            .from('leads')
-            .select('*', { count: 'exact', head: true })
-            .eq('bairro', contextoLead.bairro);
-
-        if (leadsNoBairro > 1) {
-            contextoBairro = `A gente está fazendo um trabalho forte aí no ${bairroLead}. Já mapeamos outras ${leadsNoBairro} empresas da região.`;
-        }
-    } catch (e) {
-        // Se a query falhar, usa o fallback — não trava o fluxo
-        console.warn("⚠️ [RESOLVER] Falha ao contar leads do bairro, usando fallback.");
-    }
 
     // --- 7. Ancoragem de contexto (invisível, só pra conversas longas) ---
     const ancoragemContexto = gerarAncoragemContexto(contextoLead, estagioAtual, historico);
@@ -1180,27 +1068,29 @@ const concessionariaLocal = (MAPA_CONCESSIONARIAS[contextoLead.estado] || 'conce
                 : 'https://antix.com.br/agendar'));
 
     // --- Constituição do agente (regras customizadas do cliente, com variáveis resolvidas) ---
-    const constituicaoResolvida = promptBase
+    let constituicaoResolvida = promptBase
         .replaceAll('${agentName}', agentName)
         .replaceAll('${companyName}', companyName)
         .replaceAll('${nomeLead}', nomeLead)
         .replaceAll('${nomeEmpresa}', nomeEmpresa)
         .replaceAll('${bairroLead}', bairroLead)
-        .replaceAll('${concessionariaLocal}', concessionariaLocal)
-        .replaceAll('${ancoraConta}', ancoraConta)
         .replaceAll('${perfilComportamental}', perfilComportamental)
-        .replaceAll('${percentualTexto}', percentualTexto)
         .replaceAll('${reversaoJaTentada}', reversaoJaTentada)
         .replaceAll('${estagioAtual}', estagioAtual)
-        .replaceAll('${nicheContext}', nicheContext)
-        .replaceAll('${contextoBairro}', contextoBairro)
         .replaceAll('${saudacaoTempo}', saudacaoTempo)
         .replaceAll('${ancoragemContexto}', ancoragemContexto)
         .replaceAll('${raioXDoLead}', raioXDoLead)
         .replaceAll('${perfilEmocional}', perfilEmocional)
-        .replaceAll('${economiaMensal}', economiaMensalFormatada)
-        .replaceAll('${economiaAnual}', economiaAnualFormatada)
         .replaceAll('${calendlyLink}', calendlyResolvido);
+
+    // Placeholders de nicho (energia) que o código NÃO calcula mais — os números/argumentos agora
+    // vivem no texto do prompt. Prompt antigo que ainda os cite: some do texto (nunca chega
+    // "${ancoraConta}" literal pro lead) e avisa no log pra o tenant reescrever o trecho.
+    const removidosNoPrompt = PLACEHOLDERS_REMOVIDOS.filter(p => constituicaoResolvida.includes('${' + p + '}'));
+    if (removidosNoPrompt.length) {
+        for (const p of removidosNoPrompt) constituicaoResolvida = constituicaoResolvida.replaceAll('${' + p + '}', '');
+        console.warn(`⚠️ [PROMPT] Tenant ${String(instanceData?.user_id || '').slice(0, 8)} usa placeholders removidos (${removidosNoPrompt.join(', ')}) — reescreva esses trechos no prompt.`);
+    }
 
     // --- 10. Acolhida de primeiro contato inbound ---
     // Se não há NENHUMA mensagem 'assistant' no histórico, é porque a IA nunca abriu essa
@@ -1344,43 +1234,6 @@ async function gerarRespostaIA(historico, contextoLead, instanceData) {
 }
 
 
-// ============================================================================
-// 🕵️ EXTRAÇÃO DE DADOS (VISION E PDF) - SEM SIMPLIFICAÇÃO
-// ============================================================================
-
-async function executarLeituraIA(buffer) {
-    try {
-        const rawResponse = await chamarLLM({
-            messages: [{ role: 'user', content: `Você é um motor de extração de dados.
-                        Analise a imagem e identifique se é uma conta de energia.
-                        Se não for, retorne: {"error": "invalid_media"}.
-                        Se for, extraia EXATAMENTE neste formato JSON, convertendo valores para números puros:
-                        {
-                          "concessionaria": "nome da empresa",
-                          "valor_total": 0.00,
-                          "consumo_kwh": 0,
-                          "estado": "UF",
-                          "mes_referencia": "MM/AAAA"
-                        }` }],
-            imagens: [{ media_type: 'image/jpeg', dataBase64: buffer.toString('base64') }],
-            model: MODELOS.visao,
-            maxTokens: 500,
-        });
-        const match = rawResponse.match(/\{[\s\S]*\}/);
-        if (!match) return { error: "parse_error" };
-
-        const analise = JSON.parse(match[0]);
-
-        // PROTEÇÃO: Garante que consumo e valor sejam números para o cálculo não falhar
-        analise.consumo_kwh = Number(String(analise.consumo_kwh).replace(/[^\d.]/g, ''));
-        analise.valor_total = Number(String(analise.valor_total).replace(/[^\d.]/g, ''));
-
-        return analise;
-    } catch (e) {
-        return { error: "critical_failure" };
-    }
-}
-
 async function transcreverAudioIA(buffer) {
     const tempPath = `./temp_audio_${Date.now()}_${Math.floor(Math.random() * 10000)}.ogg`;
     try {
@@ -1398,13 +1251,6 @@ async function transcreverAudioIA(buffer) {
     } finally {
         if (fs.existsSync(tempPath)) fs.unlinkSync(tempPath);
     }
-}
-
-function calcularEconomiaRegional(analise) {
-    const estadosTop = ['PE', 'BA', 'CE', 'MT', 'GO', 'MG', 'SP'];
-    let perc = estadosTop.includes(analise.estado) ? 0.25 : 0.15;
-    if (analise.estado === 'PR') perc = 0.16;
-    return { descontoReais: (analise.valor_total * perc).toFixed(2) };
 }
 
 // ============================================================================
@@ -1847,7 +1693,7 @@ async function startInstance(instanceId, instanceName, preloadedUserId = null) {
             const messageType = evento.tipo;
             const isMedia = ['audioMessage', 'imageMessage', 'documentMessage', 'contactMessage', 'contactsArrayMessage'].includes(messageType);
 
-            // ⚡ VIA RÁPIDA: Se for VOCÊ digitando ou se o cliente mandou ÁUDIO/CONTA DE LUZ, processa na hora!
+            // ⚡ VIA RÁPIDA: Se for VOCÊ digitando ou se o cliente mandou mídia (áudio/arquivo), processa na hora!
             if (isFromMe || isMedia) {
                 console.log(`⚡ [VIA RÁPIDA] Processando mídia ou intervenção humana imediatamente...`);
                 await processarMensagem(sock, msg, instanceId);
@@ -2327,7 +2173,7 @@ if (matchClima) updates.sentiment = matchClima[1].toLowerCase();
     const leadEnviouAudio = ultimaMsgUser?.content?.startsWith('(Áudio)');
     const audiosJaEnviados = historico.filter(m => m.content?.includes('[AUDIO_TTS]')).length;
     const temCalendly = textoLimpo.includes('calendly.com');
-    // Nos estágios 2-3 (revelação da economia) o áudio reforça o impacto emocional.
+    // Nos estágios 2-3 (meio do funil, quando o valor é apresentado) o áudio reforça o impacto emocional.
     // Checa tanto o estágio atual (lead.current_stage) quanto o que a IA declarou nessa resposta
     // (matchEstagio), pois lead.current_stage ainda reflete o estágio ANTERIOR nessa chamada.
     const estagioNaResposta = matchEstagio ? parseInt(matchEstagio[1]) : (lead.current_stage || 0);
@@ -2806,10 +2652,9 @@ if (fromMe) {
     }
    // --- 3. PROCESSAMENTO DE MÍDIA INTELIGENTE ---
     if (messageType === 'audioMessage' || messageType === 'imageMessage' || messageType === 'documentMessage') {
-        console.log(`📄 [MÍDIA] Analisando arquivo enviado por ${lead.name}...`);
-        // Leitura de fatura de luz (imagem/PDF) só existe pra produtos de energia. Nos demais
-        // tenants, foto/PDF não dispara análise nem pedido de "fatura" (era hardcoded pra todos).
-        const usaFatura = produtoUsaFaturaEnergia((await getRegrasEmCache(instanceId))?.product_type);
+        console.log(`📄 [MÍDIA] Arquivo recebido de ${lead.name} (${messageType})...`);
+        // Áudio é transcrito e segue como texto. Imagem/PDF NÃO são interpretados pelo código
+        // (a antiga leitura de "fatura de luz" era regra de nicho hardcoded — removida).
 
         try {
             // 🛡️ PASSO 4: BARREIRA ANTI-CRASH
@@ -2821,20 +2666,16 @@ if (fromMe) {
                 console.log(`⚠️ [BARREIRA] Arquivo de ${lead.name} é muito grande (${(fileSize / 1024 / 1024).toFixed(2)}MB). Abortando download.`);
                 
                 if (!lead.is_paused) {
-                    const msgErroCarga = usaFatura
-                        ? "Opa, meu sistema não conseguiu carregar esse arquivo por causa do tamanho rs. Consegue me mandar um print da primeira página da fatura? Fica mais fácil de eu ler aqui."
-                        : "Opa, não consegui abrir esse arquivo aqui, ficou pesado demais rs. Consegue me resumir por texto o que é?";
+                    const msgErroCarga = "Opa, não consegui abrir esse arquivo aqui, ficou pesado demais rs. Consegue me resumir por texto o que é?";
                     await baileysTransport.enviar(sock, remoteJid, { text: msgErroCarga });
                     await db.saveMessage(lead.whatsapp_id, 'assistant', msgErroCarga, instanceId);
                 }
                 return; // Mata o processamento aqui e economiza sua CPU/Banda
             }
 
-            // Se for menor que 15MB, o download segue normalmente
-            const buffer = await downloadMediaMessage(msg, 'buffer', {}, { logger: pino({ level: 'silent' }) });
-            let analise = null;
-
             if (messageType === 'audioMessage') {
+                // Se for menor que 15MB, o download segue normalmente
+                const buffer = await downloadMediaMessage(msg, 'buffer', {}, { logger: pino({ level: 'silent' }) });
                 console.log(`🎤 [SDR] Ouvindo áudio de ${lead.name}...`);
                 textoTranscrevido = await transcreverAudioIA(buffer);
                 
@@ -2845,71 +2686,10 @@ if (fromMe) {
                     if (lead.is_paused) return; 
                 }
             } 
-            else if (messageType === 'imageMessage') {
-    // Ignora stickers e imagens muito pequenas (emojis, figurinhas)
-    const fileSize = msg.message.imageMessage?.fileLength || 0;
-    if (fileSize < 5000) {
-        console.log(`🎭 [MÍDIA] Imagem muito pequena (${fileSize} bytes) — provavelmente sticker/emoji. Ignorando.`);
-        return;
-    }
-    if (usaFatura) analise = await executarLeituraIA(buffer);
-}
-
-            else if (usaFatura && messageType === 'documentMessage' && msg.message.documentMessage.mimetype === 'application/pdf') {
-                console.log(`📄 [SDR] Lendo PDF enviado por ${lead.name}...`);
-                const data = await pdf(buffer);
-                
-                const promptPDF = `Você é um extrator de dados de alta precisão. O texto abaixo foi extraído de um arquivo PDF. 
-                Sua tarefa:
-                1. Identifique se o texto pertence a uma CONTA DE ENERGIA ELÉTRICA (fatura de luz).
-                2. Se NÃO for uma conta de energia (ex: currículo, boleto de carro, receita), retorne ESTRITAMENTE o JSON: {"error": "invalid_media"}
-                3. Se FOR uma conta de energia, extraia os dados ESTRITAMENTE neste formato JSON (números puros sem vírgula de milhar): 
-                {"concessionaria": "nome da empresa", "valor_total": 0.00, "consumo_kwh": 0, "estado": "UF"}
-                
-                Texto extraído do PDF:
-                ${data.text}`;
-
-                const _pdfRaw = await chamarLLM({
-                    messages: [{ role: 'user', content: promptPDF }],
-                    model: MODELOS.rapido,
-                    maxTokens: 300,
-                });
-                const match = (_pdfRaw || '').match(/\{[\s\S]*\}/);
-                analise = match ? JSON.parse(match[0]) : null;
-            }
-
-            if (analise && analise.consumo_kwh > 0) {
-                const economia = calcularEconomiaRegional(analise);
-                const estudo = `📊 *ESTUDO PRELIMINAR* ⚡\nUnidade: ${lead.name}\nRedução Estimada: R$ ${economia.descontoReais}/mês\n\nConsegue falar agora rapidinho?`;
-                enviarAlerta("⚡ FATURA ANALISADA", `Lead: ${lead.name}\nEconomia: R$ ${economia.descontoReais}/mês`, 3066993);
-                await supabase.from('leads').update({ 
-                    status: 'waiting_analysis',
-                    last_analysis_data: analise 
-                }).eq('whatsapp_id', lead.whatsapp_id);
-
-                if (!lead.is_paused) {
-                    await baileysTransport.enviar(sock, remoteJid, { text: estudo });
-                    await db.saveMessage(lead.whatsapp_id, 'assistant', estudo, instanceId);
-                }
-                return;
-            } else if (messageType !== 'audioMessage') {
-                if (!lead.is_paused) {
-                    const estagioAtual = lead.current_stage || 0;
-                    // Só pede fatura se já estamos no estágio 2+ (lead já foi questionado sobre energia)
-                    // Nos estágios 0-1, foto de cardápio/produto/catálogo é normal — ignorar silenciosamente
-                    if (usaFatura && estagioAtual >= 2) {
-                        const chaveAviso = `${lead.id}_foto`;
-                        if (!cacheAvisosMidia.has(chaveAviso)) {
-                            cacheAvisosMidia.set(chaveAviso, Date.now());
-                            setTimeout(() => cacheAvisosMidia.delete(chaveAviso), 5 * 60 * 1000);
-                            const msgFoto = "Opa, essa foto parece ser de outra coisa rs. Consegue mandar uma nítida da fatura aberta? Pode ser print do PDF também.";
-                            await baileysTransport.enviar(sock, remoteJid, { text: msgFoto });
-                            await db.saveMessage(lead.whatsapp_id, 'assistant', msgFoto, instanceId);
-                        }
-                    } else {
-                        console.log(`📸 [FOTO] Lead ${lead.name} (estágio ${estagioAtual}, fatura=${usaFatura}) enviou mídia — sem pedido de fatura. Ignorando.`);
-                    }
-                }
+            else {
+                // Imagem / documento: o código não interpreta (sem leitura de "fatura" ou similar).
+                // O lead segue a conversa por texto; o prompt do tenant decide o que pedir.
+                console.log(`📎 [MÍDIA] ${lead.name} enviou ${messageType} — não interpretado pelo código. Ignorando.`);
                 return;
             }
         } catch (err) {
@@ -3450,10 +3230,6 @@ await instancia.sock.sendPresenceUpdate('paused', cleanJid);
 // Se lead.dono for "Catatau Comércio LTDA", retorna null → saudação genérica
 const primeiroNomeDono = extrairNomeHumano(lead.dono);
 
-const ufLead = lead.estado || null;
-// 🎯 LIMPEZA ESTÉTICA PARA ABERTURA: Corta nomes compostos para soar natural
-const concessionariaLocal = (MAPA_CONCESSIONARIAS[ufLead] || 'concessionária de energia').split('/')[0];
-
 const nomeEmpresa = limparNomeEmpresa(lead.name);
 
 // ── BALÃO ÚNICO: curiosidade + qualificação casual numa só mensagem ──
@@ -3474,7 +3250,7 @@ const substituirVarsAbertura = (tpl) => resolverSpintax(tpl
     .replace(/\$\{nomeMinhaEmpresa\}/g, nomeMinhaEmpresa)
     .replace(/\$\{nomeDono\}/g, primeiroNomeDono || 'você')
     .replace(/\$\{nomeEmpresa\}/g, nomeEmpresa)
-    .replace(/\$\{concessionariaLocal\}/g, concessionariaLocal)
+    .replace(/\$\{concessionariaLocal\}/g, '') // removido (regra de nicho) — some do template
     .replace(/\$\{bairroLead\}/g, bairroLead)
     .replace(/\$\{origem\}/g, lead.origin_company_name || '')
     .replace(/\s*--\s*/g, ', ') // remove em-dash do template antes de enviar
@@ -3511,15 +3287,8 @@ if (lead.opening_template && lead.opening_template.length > 15 && lead.opening_t
         textoFinal = tplsPadrao[Math.floor(Math.random() * tplsPadrao.length)];
         console.log(`📋 [SPINTAX] Abertura via template para ${lead.name}: "${textoFinal}"`);
     } else {
-        // Sem template padrao configurado: usa LLM com fallbacks hardcoded
-        // isSolar: mesma expressão usada em resolverPromptCompleto (linha ~1071) — tenants
-        // fora do nicho solar não podem herdar vocabulário de "conta de energia/luz" aqui.
-        const isSolarFallback = instanceData?.product_type === 'solar';
-        const spintaxFallback = isSolarFallback ? [
-            `${saudacao}, vi algo sobre a conta de energia da ${nomeEmpresa} que achei que valia te passar. Vc cuida dessa parte de contas fixas aí?`,
-            `${saudacao}, dei uma olhada no cadastro da ${nomeEmpresa} e tem uma coisa sobre a conta de luz da ${concessionariaLocal} que achei que valia te avisar. Tô falando com quem cuida disso?`,
-            `${saudacao}, mapeamos empresas da região que podem estar pagando a mais na ${concessionariaLocal}. A ${nomeEmpresa} apareceu na lista. Vc é quem cuida dessa parte?`
-        ] : [
+        // Sem template padrao configurado: usa LLM com fallbacks neutros (sem nicho)
+        const spintaxFallback = [
             `${saudacao}, vi algo sobre a ${nomeEmpresa} que achei que valia te passar. Vc cuida dessa parte de contas fixas aí?`,
             `${saudacao}, dei uma olhada no cadastro da ${nomeEmpresa} e tem uma coisa que achei que valia te avisar. Tô falando com quem cuida disso?`,
             `${saudacao}, mapeamos empresas da região com uma oportunidade parecida. A ${nomeEmpresa} apareceu na lista. Vc é quem cuida dessa parte?`
@@ -3530,12 +3299,9 @@ if (lead.opening_template && lead.opening_template.length > 15 && lead.opening_t
                 : lead.capital_social_numeric >= 500000 ? 'grande (R$ 500k+)'
                 : lead.capital_social_numeric >= 150000 ? 'médio (R$ 150k-500k)'
                 : 'pequeno (< R$ 150k)';
-            const descontoEstimado = MAPA_DESCONTO_REGIONAL[ufLead] ? `${Math.round(MAPA_DESCONTO_REGIONAL[ufLead] * 100)}` : '12-18';
-            const nicheCtx = gerarContextoNicho(lead.niche || '', instanceData?.product_type);
-
             // Prompt LLM: lido do Supabase (opening_templates.llm_prompt) — editável por tenant sem deploy.
-            // Variáveis disponíveis: ${nomeEmpresa}, ${nomeDono}, ${nicho},
-            // ${bairroLead}, ${concessionariaLocal}, ${capitalDesc}, ${descontoEstimado}, ${nicheCtx}
+            // Variáveis disponíveis: ${nomeEmpresa}, ${nomeDono}, ${nicho}, ${bairroLead}, ${capitalDesc}
+            // (${concessionariaLocal}/${descontoEstimado}/${nicheCtx} foram removidas — somem do texto)
             const _llmTpl = tplsInstancia?.llm_prompt ||
                 'Aja como um especialista em redução de custos operacionais. Crie uma ÚNICA mensagem curta de WhatsApp para iniciar conversa com o decisor da empresa alvo.\n\nEmpresa: ${nomeEmpresa}\nDono: ${nomeDono}\nBairro: ${bairroLead}\n\nRegras ABSOLUTAS:\n1. Inicie EXATAMENTE com: "Opa ${nomeDono}, tudo bem?" (ou "bom dia/boa tarde").\n2. NUNCA diga seu nome, não diga "sou eu", não diga de onde você é.\n3. Vá direto ao assunto: faça um comentário curto sobre a empresa no bairro ${bairroLead} e pergunte se ele é a pessoa que cuida dos custos fixos.\n4. Máximo de 20 palavras.\n5. SEM emojis, SEM citar produto ou serviço específico.\nRetorne APENAS o texto da mensagem.';
             const llmPromptFinal = _llmTpl
@@ -3543,10 +3309,8 @@ if (lead.opening_template && lead.opening_template.length > 15 && lead.opening_t
                 .replace(/\$\{nomeDono\}/g,            primeiroNomeDono || 'não identificado')
                 .replace(/\$\{nicho\}/g,               lead.niche || 'comércio')
                 .replace(/\$\{bairroLead\}/g,          bairroLead)
-                .replace(/\$\{concessionariaLocal\}/g, concessionariaLocal)
                 .replace(/\$\{capitalDesc\}/g,         capitalDesc)
-                .replace(/\$\{descontoEstimado\}/g,    descontoEstimado)
-                .replace(/\$\{nicheCtx\}/g,            nicheCtx ? '\nContexto do setor: ' + nicheCtx : '');
+                .replace(/\$\{(concessionariaLocal|descontoEstimado|nicheCtx)\}/g, '');
             // cerebro, não rapido (2026-10-14): MODELOS.rapido (DeepSeek) devolvia VAZIO neste call
             // → sempre caía no spintax fixo (fallback já existente, continua valendo se der timeout).
             // gpt-oss "pensa" mais (~4.6s observado) → timeout da corrida subiu de 3.5s pra 6s.
@@ -5065,11 +4829,6 @@ if (funilEncerrado) {
         ];
 
         let [intencao, raioXDoLead, perfilEmocional] = await Promise.all(promessas);
-        if (intencao === 'SOLAR' && instanceData?.product_type !== 'solar') {
-            console.log(`🔄 [ROTEADOR] Intenção SOLAR ignorada (product_type=${instanceData?.product_type || 'indefinido'}) → DUVIDA`);
-            intencao = 'DUVIDA';
-        }
-
         if (msgCurta) {
             console.log(`⚡ [SKIP] Mensagem curta ("${ultimaMsg.substring(0, 30)}"). Intel + Profiler pulados.`);
         }
@@ -5229,15 +4988,6 @@ if (!promptResolvido) {
         internal_notes: `Número errado/engano detectado em ${new Date().toLocaleString('pt-BR')}.`
     }).eq('id', lead.id);
     resposta = 'Puxa, desculpas pelo incômodo! O cadastro devia estar desatualizado. Um abraço e boa semana!';
-
-} else if (intencao === 'SOLAR') {
-    console.log(`☀️ [WORKER-IA] Lead já tem solar: ${lead.name}. Aplicando KNOCK-OUT.`);
-    await supabase.from('leads').update({
-        status: 'invalid',
-        is_paused: true,
-        internal_notes: `Lead já tem geração solar ativa. Encerrado em ${new Date().toLocaleString('pt-BR')}.`
-    }).eq('id', lead.id);
-    resposta = 'Entendi! Como vocês já têm geração ativa, a ANEEL não permite acumular dois benefícios. Parabéns pela gestão energética!';
 
 } else if (lead.status === 'booked') {
     // 🤝 MODO CONCIERGE: lead JÁ agendou = convertido. As ações de agenda (remarcar/cancelar/
@@ -5754,9 +5504,6 @@ module.exports = {
 
         ioSocket = io;
         sdrEventsGlobal = sdrEvents;
-
-        // Aquece o cache Redis com os nichos já aprendidos antes do SDR ligar
-        await inicializarCache();
 
          // 🎯 BUG #2 FIX: Destravar leads que ficaram presos como "reservado" após crash/restart
         const { data: travados } = await supabase.from('leads').select('id').eq('status', 'reservado');
@@ -6446,11 +6193,6 @@ module.exports = {
 
         let intencao = await routerAgent.classificarMensagem(texto).catch(() => 'DUVIDA');
         const instanceData = { user_id: USER_ID, product_type: 'antix', agent_name: 'Sofia', company_name: 'Antix', name: 'Sofia (site)' };
-        if (intencao === 'SOLAR' && instanceData?.product_type !== 'solar') {
-            console.log(`🔄 [WEB-CHAT] Intenção SOLAR ignorada (product_type=${instanceData?.product_type}) → DUVIDA`);
-            intencao = 'DUVIDA';
-        }
-
         // 🧠 TRIAGEM (escuta ativa): lê o momento da conversa e o que o lead quer AGORA. É daqui que
         // sai a decisão de modo. Agendamento só é LIBERADO quando a ação é propor_reuniao/agendar —
         // em dúvida/objeção/qualificação a agenda fica TRAVADA (mata o "pular pro horário").
