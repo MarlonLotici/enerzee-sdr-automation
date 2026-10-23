@@ -71,6 +71,7 @@ async function gerarAudioTTS(texto, voz = null, { tom = 'neutro' } = {}) {
         await execFilePromise(FFMPEG_BIN, [
             '-i', tempMp3,
             '-c:a', 'libopus',
+            '-ac', '1',                 // mono: exigido p/ mensagem de voz na Cloud API (e ok no Baileys)
             '-b:a', '64k',
             '-vbr', 'on',
             '-compression_level', '10',

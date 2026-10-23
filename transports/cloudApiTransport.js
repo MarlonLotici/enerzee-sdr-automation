@@ -22,6 +22,7 @@
  *   normalizarInbound(webhookBody) -> ObjetoNormalizado | null   (mesma forma do Baileys)
  *   enviarTexto(config, jid, texto) -> { id, raw }
  *   enviarTemplate(config, jid, nome, idioma, componentes) -> { id, raw }
+ *   enviarAudio(config, jid, buffer, mimeType) -> { id, raw }   (upload + mensagem de voz)
  */
 
 const DEFAULT_BASE_URL = 'https://graph.facebook.com/v20.0';
@@ -78,6 +79,50 @@ async function enviarTemplate(config, jid, nomeTemplate, idioma = 'pt_BR', compo
         type: 'template',
         template,
     });
+}
+
+// Sobe um binário pra Meta e devolve o media id (POST /{phone_number_id}/media, multipart).
+// O cloud_base_url já inclui o phone_number_id, então é só `${base}/media`.
+async function uploadMidia(config, buffer, mimeType, nomeArquivo = 'audio.ogg') {
+    const apiKey = _apiKey(config);
+    if (!apiKey) throw new Error('Cloud API (Meta) sem access token configurado (cloud_api_key).');
+    const form = new FormData();
+    form.append('messaging_product', 'whatsapp');
+    form.append('type', mimeType);
+    form.append('file', new Blob([buffer], { type: mimeType }), nomeArquivo);
+    const resp = await fetch(`${_base(config)}/media`, {
+        method: 'POST',
+        headers: { 'Authorization': `Bearer ${apiKey}` }, // sem Content-Type: o fetch põe o boundary
+        body: form,
+    });
+    let data = {};
+    try { data = await resp.json(); } catch { /* corpo vazio/não-json */ }
+    if (!resp.ok || !data?.id) {
+        const msg = data?.error?.message || resp.statusText || 'sem media id';
+        throw new Error(`Cloud API upload ${resp.status}: ${msg}`);
+    }
+    return data.id;
+}
+
+// Áudio como MENSAGEM DE VOZ (onda + play, igual gravado no app): .ogg/OPUS + voice:true.
+// Se a Meta recusar o parâmetro `voice` (recurso que já esteve em allowlist), reenvia como
+// áudio comum — o lead recebe o áudio de qualquer jeito, só sem o visual de voice note.
+async function enviarAudio(config, jid, buffer, mimeType = 'audio/ogg') {
+    const mediaId = await uploadMidia(config, buffer, mimeType);
+    const payload = (voice) => ({
+        messaging_product: 'whatsapp',
+        recipient_type: 'individual',
+        to: _soDigitos(jid),
+        type: 'audio',
+        audio: voice ? { id: mediaId, voice: true } : { id: mediaId },
+    });
+    try {
+        return await _post(config, payload(true));
+    } catch (err) {
+        if (!/voice|param/i.test(err.message)) throw err;
+        console.warn(`⚠️ [CLOUD-API] Meta recusou voice:true (${err.message}) — reenviando como áudio comum.`);
+        return _post(config, payload(false));
+    }
 }
 
 // Converte o webhook (formato Meta Cloud API) no MESMO objeto normalizado do
@@ -152,6 +197,8 @@ async function baixarMidia(config, mediaId) {
 module.exports = {
     enviarTexto,
     enviarTemplate,
+    enviarAudio,
+    uploadMidia,
     baixarMidia,
     marcarComoLido,
     normalizarInbound,

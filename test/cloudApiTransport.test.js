@@ -75,6 +75,84 @@ test('enviarTemplate: inclui components quando fornecidos', async () => {
     assert.deepEqual(body.template.components, comps);
 });
 
+// Mock com fila de respostas (upload → mensagem → ...), na ordem das chamadas.
+function mockFetchSeq(respostas) {
+    const calls = [];
+    global.fetch = async (url, opts) => {
+        const r = respostas[calls.length] || respostas[respostas.length - 1];
+        calls.push({ url, opts });
+        return { ok: r.ok, status: r.ok ? 200 : 400, statusText: r.ok ? 'OK' : 'Bad Request', json: async () => r.body };
+    };
+    return calls;
+}
+
+test('enviarAudio: sobe o .ogg em /media e manda type=audio com voice:true', async () => {
+    const calls = mockFetchSeq([
+        { ok: true, body: { id: 'MEDIA_123' } },
+        { ok: true, body: { messages: [{ id: 'wamid.AUD' }] } },
+    ]);
+    const out = await transport.enviarAudio(CFG, '5511999998888@s.whatsapp.net', Buffer.from('OggS-fake'), 'audio/ogg');
+
+    assert.equal(calls.length, 2);
+    // 1) upload multipart no /media do phone_number_id, com Bearer e SEM Content-Type manual
+    assert.equal(calls[0].url, 'https://graph.facebook.com/v20.0/123456789012345/media');
+    assert.equal(calls[0].opts.headers['Authorization'], 'Bearer META_TOKEN_XYZ');
+    assert.ok(!('Content-Type' in calls[0].opts.headers), 'boundary do multipart fica com o fetch');
+    const form = calls[0].opts.body;
+    assert.ok(form instanceof FormData);
+    assert.equal(form.get('messaging_product'), 'whatsapp');
+    assert.equal(form.get('type'), 'audio/ogg');
+    assert.equal(form.get('file').type, 'audio/ogg');
+    assert.equal(form.get('file').size, Buffer.from('OggS-fake').length);
+    // 2) mensagem de voz apontando pro media id
+    assert.equal(calls[1].url, 'https://graph.facebook.com/v20.0/123456789012345/messages');
+    const body = JSON.parse(calls[1].opts.body);
+    assert.equal(body.type, 'audio');
+    assert.equal(body.to, '5511999998888');
+    assert.deepEqual(body.audio, { id: 'MEDIA_123', voice: true });
+    assert.equal(out.id, 'wamid.AUD');
+});
+
+test('enviarAudio: Meta recusa voice → reenvia como áudio comum (sem voice)', async () => {
+    const calls = mockFetchSeq([
+        { ok: true, body: { id: 'MEDIA_9' } },
+        { ok: false, body: { error: { message: '(#100) Invalid parameter', code: 100 } } },
+        { ok: true, body: { messages: [{ id: 'wamid.FALLBACK' }] } },
+    ]);
+    const out = await transport.enviarAudio(CFG, '5511999998888', Buffer.from('x'));
+    assert.equal(calls.length, 3);
+    assert.deepEqual(JSON.parse(calls[2].opts.body).audio, { id: 'MEDIA_9' });
+    assert.equal(out.id, 'wamid.FALLBACK');
+});
+
+test('enviarAudio: erro que não é de parâmetro (ex.: janela 24h) NÃO reenvia — propaga', async () => {
+    const calls = mockFetchSeq([
+        { ok: true, body: { id: 'MEDIA_1' } },
+        { ok: false, body: { error: { message: '(#131047) Re-engagement message', code: 131047 } } },
+    ]);
+    await assert.rejects(() => transport.enviarAudio(CFG, '5511999998888', Buffer.from('x')), /131047/);
+    assert.equal(calls.length, 2);
+});
+
+test('enviarAudio: upload falhou → erro claro e nenhuma mensagem é enviada', async () => {
+    const calls = mockFetchSeq([{ ok: false, body: { error: { message: 'Unsupported file type' } } }]);
+    await assert.rejects(() => transport.enviarAudio(CFG, '5511999998888', Buffer.from('x')), /upload.*Unsupported file type/);
+    assert.equal(calls.length, 1);
+});
+
+test('enviarAudio: sem access token → erro antes de tocar a rede', async () => {
+    const calls = mockFetchSeq([{ ok: true, body: {} }]);
+    const tokenEnv = [process.env.WA_TOKEN, process.env.CLOUD_API_KEY];
+    delete process.env.WA_TOKEN; delete process.env.CLOUD_API_KEY;
+    try {
+        await assert.rejects(() => transport.enviarAudio({ baseUrl: CFG.baseUrl }, '5511999998888', Buffer.from('x')), /access token/i);
+        assert.equal(calls.length, 0);
+    } finally {
+        if (tokenEnv[0] !== undefined) process.env.WA_TOKEN = tokenEnv[0];
+        if (tokenEnv[1] !== undefined) process.env.CLOUD_API_KEY = tokenEnv[1];
+    }
+});
+
 test('normalizarInbound: resposta de BOTÃO usa o título do botão como texto', () => {
     const body = { entry: [{ changes: [{ value: {
         contacts: [{ profile: { name: 'Cliente' } }],

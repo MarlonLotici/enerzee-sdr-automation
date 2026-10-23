@@ -1844,7 +1844,7 @@ async function enviarMensagemIA(sock, jid, content, instanceId = null, timeoutAc
             const _texto = (content && typeof content === 'object') ? (content.text ?? '') : String(content ?? '');
             const _r = await cloudApiTransport.enviarTexto({ apiKey: _regras.cloud_api_key, baseUrl: _regras.cloud_base_url }, jid, _texto);
             ultimoEnvioTimestamp.set(jid, Date.now());
-            console.log(`🌐 [CLOUD-API] Enviado para ${jid.split('@')[0]} via 360dialog (msgId: ${_r.id || 'n/a'}).`);
+            console.log(`🌐 [CLOUD-API] Enviado para ${jid.split('@')[0]} via Meta (msgId: ${_r.id || 'n/a'}).`);
             return { key: { id: _r.id || `cloud_${Date.now()}` } }; // formato compatível: callers checam sentMsg?.key?.id
         }
     }
@@ -1908,7 +1908,11 @@ async function enviarAudioTTS(sock, remoteJid, texto, lead, instanceId, voz = nu
             .replace(/,\s*,/g, ',')                // 4. Limpa duplas vírgulas eventuais
             .trim();
 
-        await sock.sendPresenceUpdate('recording', remoteJid);
+        // Chip OFICIAL (Cloud API da Meta): sem socket/presença "gravando"; o áudio sobe por HTTP.
+        const regras = await getRegrasEmCache(instanceId);
+        const oficial = regras?.whatsapp_provider === 'official';
+
+        if (!oficial) await sock.sendPresenceUpdate('recording', remoteJid);
 
         // 2. ENVIAR O TEXTO JÁ HUMANIZADO
         // Note que agora passamos 'textoHumanizado' e não mais o 'texto' original
@@ -1923,11 +1927,18 @@ async function enviarAudioTTS(sock, remoteJid, texto, lead, instanceId, voz = nu
             delay(duracaoFalaEstimadaMs)
         ]);
 
-        await baileysTransport.enviar(sock, remoteJid, {
-            audio: buffer,
-            mimetype: 'audio/ogg; codecs=opus',
-            ptt: true
-        });
+        if (oficial) {
+            const r = await cloudApiTransport.enviarAudio(
+                { apiKey: regras.cloud_api_key, baseUrl: regras.cloud_base_url }, remoteJid, buffer, 'audio/ogg');
+            ultimoEnvioTimestamp.set(remoteJid, Date.now());
+            console.log(`🌐 [CLOUD-API] Áudio enviado para ${remoteJid.split('@')[0]} (msgId: ${r.id || 'n/a'}).`);
+        } else {
+            await baileysTransport.enviar(sock, remoteJid, {
+                audio: buffer,
+                mimetype: 'audio/ogg; codecs=opus',
+                ptt: true
+            });
+        }
 
         await db.saveMessage(lead.whatsapp_id, 'assistant', `[AUDIO_TTS] ${texto}`, instanceId);
         return true;
@@ -2180,11 +2191,12 @@ if (matchClima) updates.sentiment = matchClima[1].toLowerCase();
     const estagioEmocional = (lead.current_stage >= 2 && lead.current_stage <= 3) ||
                               (estagioNaResposta >= 2 && estagioNaResposta <= 3);
     // Estágio 2/3 → sempre áudio (máx 2 por conversa). Outros: lead enviou áudio OU 25% aleatório.
-    // !!sock: instâncias oficiais (Cloud API) não têm socket nem áudio nativo → sempre texto.
+    // Canal com áudio: chip Baileys (tem sock) OU chip oficial (Cloud API sobe o .ogg por HTTP).
     // Só tenta TTS se a chave do ElevenLabs existir — senão a IA tentava mandar áudio, falhava
     // toda vez e caía no fallback de texto (erro no log + ~1s desperdiçado por mensagem).
     const ttsDisponivel = !!process.env.ELEVENLABS_API_KEY;
-    const usarTTS = ttsDisponivel && !!sock && audiosJaEnviados < 2 && !temCalendly && (leadEnviouAudio || estagioEmocional || Math.random() < 0.25);
+    const canalComAudio = !!sock || (await getRegrasEmCache(instanceId))?.whatsapp_provider === 'official';
+    const usarTTS = ttsDisponivel && canalComAudio && audiosJaEnviados < 2 && !temCalendly && (leadEnviouAudio || estagioEmocional || Math.random() < 0.25);
     // 🎭 Tom do áudio espelha o lead (sério / descontraído / empático...) — ver lib/tomVoz.js
     const tomVoz = usarTTS
         ? detectarTomVoz({ clima: matchClima?.[1], textoLead: ultimaMsgUser?.content?.replace(/^\(Áudio\)\s*/, '') })
