@@ -80,6 +80,17 @@ const db = {
             console.error(`[DB] Erro ao puxar regras da instância ${instanceId}:`, error.message);
             return null;
         }
+
+        // 🎙️ Voz do tenant (ElevenLabs voice_id). Consulta SEPARADA e tolerante: se a coluna ainda
+        // não existir no banco (migração db/add_tts_voice.sql não rodada), o erro aqui NÃO pode
+        // derrubar as regras inteiras do chip — só cai na voz padrão (ELEVENLABS_VOICE_ID).
+        if (data) {
+            try {
+                const { data: v, error: errV } = await supabase
+                    .from('instances').select('tts_voice').eq('id', instanceId).maybeSingle();
+                if (!errV && v?.tts_voice) data.tts_voice = String(v.tts_voice).trim();
+            } catch { /* coluna ausente: segue com a voz padrão */ }
+        }
         return data;
     },
 

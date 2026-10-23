@@ -39,6 +39,7 @@ const budgetGuard = require('./budgetGuard');
 const { getTransport, baileysTransport, cloudApiTransport } = require('./transports');
 const { useSupabaseAuthState } = require('./auth_adapter');
 const { gerarAudioTTS } = require('./ttsElevenLabs');
+const { detectarTomVoz } = require('./lib/tomVoz');
 const { createClient } = require('@supabase/supabase-js');
 const routerAgent = require('./agents/routerAgent'); // faz a distribuição entre os agentes dependendo da necessidade 
 const closerAgent = require('./agents/closerAgent'); //é o closer que assume a conversa
@@ -2038,9 +2039,9 @@ async function enviarMensagemIA(sock, jid, content, instanceId = null, timeoutAc
 }
 
 
-async function enviarAudioTTS(sock, remoteJid, texto, lead, instanceId, voz = null) {
+async function enviarAudioTTS(sock, remoteJid, texto, lead, instanceId, voz = null, tom = 'neutro') {
     try {
-        console.log(`🎙️ [TTS] Gerando áudio humanizado para ${lead.name}...`);
+        console.log(`🎙️ [TTS] Gerando áudio humanizado para ${lead.name} (tom: ${tom})...`);
         
         // 1. HUMANIZAÇÃO DO TEXTO (O Pulo do Gato)
         // Adicionamos pontuações que forçam a IA a fazer pausas naturais de quem está pensando.
@@ -2068,7 +2069,7 @@ async function enviarAudioTTS(sock, remoteJid, texto, lead, instanceId, voz = nu
         const palavras = textoHumanizado.split(/\s+/).filter(Boolean).length;
         const duracaoFalaEstimadaMs = Math.min(Math.max((palavras / 2.4) * 1000, 1200), 14000);
         const [buffer] = await Promise.all([
-            gerarAudioTTS(textoHumanizado, voz || undefined),
+            gerarAudioTTS(textoHumanizado, voz || undefined, { tom }),
             delay(duracaoFalaEstimadaMs)
         ]);
 
@@ -2334,7 +2335,11 @@ if (matchClima) updates.sentiment = matchClima[1].toLowerCase();
     // toda vez e caía no fallback de texto (erro no log + ~1s desperdiçado por mensagem).
     const ttsDisponivel = !!process.env.ELEVENLABS_API_KEY;
     const usarTTS = ttsDisponivel && !!sock && audiosJaEnviados < 2 && !temCalendly && (leadEnviouAudio || estagioEmocional || Math.random() < 0.25);
-    console.log(`🎙️ [TTS-DECISAO] usarTTS=${usarTTS} | audiosJá=${audiosJaEnviados} | calendly=${temCalendly} | leadAudio=${leadEnviouAudio} | emocional=${estagioEmocional} | estágio=${estagioNaResposta}`);
+    // 🎭 Tom do áudio espelha o lead (sério / descontraído / empático...) — ver lib/tomVoz.js
+    const tomVoz = usarTTS
+        ? detectarTomVoz({ clima: matchClima?.[1], textoLead: ultimaMsgUser?.content?.replace(/^\(Áudio\)\s*/, '') })
+        : 'neutro';
+    console.log(`🎙️ [TTS-DECISAO] usarTTS=${usarTTS} | tom=${tomVoz} | audiosJá=${audiosJaEnviados} | calendly=${temCalendly} | leadAudio=${leadEnviouAudio} | emocional=${estagioEmocional} | estágio=${estagioNaResposta}`);
 
     for (let i = 0; i < mensagensSplit.length; i++) {
         const trecho = mensagensSplit[i];
@@ -2343,7 +2348,7 @@ if (matchClima) updates.sentiment = matchClima[1].toLowerCase();
             // 🎙️ Último balão como áudio (quando aplicável)
             if (usarTTS && isUltimoBalao) {
                 console.log(`🎙️ [TTS] Enviando último balão como áudio para ${lead.name}...`);
-                const audioOk = await enviarAudioTTS(sock, remoteJid, trecho, lead, instanceId, ttsVoz);
+                const audioOk = await enviarAudioTTS(sock, remoteJid, trecho, lead, instanceId, ttsVoz, tomVoz);
                 if (audioOk) continue;
                 console.log(`⚠️ [TTS FALLBACK] Áudio falhou. Enviando como texto para ${lead.name} não ficar no vácuo.`);
             }

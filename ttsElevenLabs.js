@@ -5,6 +5,7 @@ const os   = require('os');
 const util = require('util');
 const axios = require('axios');
 const execFilePromise = util.promisify(execFile);
+const { configVozParaTom, aplicarTagEmocao } = require('./lib/tomVoz');
 
 const FFMPEG_BIN = process.env.FFMPEG_PATH || 'ffmpeg';
 const API_KEY    = process.env.ELEVENLABS_API_KEY;
@@ -14,7 +15,12 @@ const API_KEY    = process.env.ELEVENLABS_API_KEY;
 const VOZ_PADRAO = process.env.ELEVENLABS_VOICE_ID || '21m00Tcm4TlvDq8ikWAM';
 const MODELO     = process.env.ELEVENLABS_MODEL_ID || 'eleven_multilingual_v2';
 
-async function gerarAudioTTS(texto, voz = null) {
+/**
+ * @param {string} texto
+ * @param {string|null} voz  voice_id (tenant) — a voz NUNCA muda por tom, só a entonação
+ * @param {{ tom?: string }} opcoes  tom de lib/tomVoz.js (serio/descontraido/empatico/...)
+ */
+async function gerarAudioTTS(texto, voz = null, { tom = 'neutro' } = {}) {
     if (!API_KEY) throw new Error('[TTS] ELEVENLABS_API_KEY não configurada.');
 
     const vozFinal = voz || VOZ_PADRAO;
@@ -37,9 +43,9 @@ async function gerarAudioTTS(texto, voz = null) {
         const response = await axios.post(
             `https://api.elevenlabs.io/v1/text-to-speech/${vozFinal}`,
             {
-                text: textoParaAudio,
+                text: aplicarTagEmocao(textoParaAudio, tom, MODELO),
                 model_id: MODELO,
-                voice_settings: { stability: 0.5, similarity_boost: 0.75, speed: 1.0 }
+                voice_settings: configVozParaTom(tom, MODELO)
             },
             {
                 headers: {
@@ -79,7 +85,7 @@ async function gerarAudioTTS(texto, voz = null) {
         fs.unlinkSync(tempMp3);
         fs.unlinkSync(tempOgg);
 
-        console.log(`✅ [TTS] ElevenLabs → OGG: ${buffer.length} bytes | voz: ${vozFinal}`);
+        console.log(`✅ [TTS] ElevenLabs → OGG: ${buffer.length} bytes | voz: ${vozFinal} | tom: ${tom}`);
         return buffer;
 
     } catch (error) {
