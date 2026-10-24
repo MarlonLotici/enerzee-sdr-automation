@@ -153,6 +153,25 @@ test('enviarAudio: sem access token → erro antes de tocar a rede', async () =>
     }
 });
 
+test('listarTemplates: só APROVADOS, com texto do corpo, nº de variáveis e botões', async () => {
+    const calls = mockFetchSeq([{ ok: true, body: { data: [
+        { name: 'volta_cliente', language: 'pt_BR', status: 'APPROVED', category: 'MARKETING', components: [
+            { type: 'BODY', text: 'Oi {{1}}, seu {{2}} te espera!' },
+            { type: 'BUTTONS', buttons: [{ type: 'QUICK_REPLY', text: 'Quero' }, { type: 'QUICK_REPLY', text: 'Parar' }] },
+        ] },
+        { name: 'rascunho', language: 'pt_BR', status: 'PENDING', components: [] },
+    ] } }]);
+    const t = await transport.listarTemplates(CFG, '998877');
+    assert.equal(calls[0].url, 'https://graph.facebook.com/v20.0/998877/message_templates?status=APPROVED&limit=200&fields=name,language,status,category,components');
+    assert.equal(calls[0].opts.headers.Authorization, 'Bearer META_TOKEN_XYZ');
+    assert.deepEqual(t, [{ nome: 'volta_cliente', idioma: 'pt_BR', categoria: 'MARKETING', texto: 'Oi {{1}}, seu {{2}} te espera!', qtdVariaveis: 2, botoes: ['Quero', 'Parar'] }]);
+});
+
+test('listarTemplates: sem waba_id → erro claro', async () => {
+    mockFetchSeq([{ ok: true, body: {} }]);
+    await assert.rejects(() => transport.listarTemplates(CFG, ''), /waba_id/);
+});
+
 test('normalizarInbound: resposta de BOTÃO usa o título do botão como texto', () => {
     const body = { entry: [{ changes: [{ value: {
         contacts: [{ profile: { name: 'Cliente' } }],

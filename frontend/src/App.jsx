@@ -15,6 +15,7 @@ import ConversaList from './components/ConversaList'
 import OnboardingBriefing from './components/OnboardingBriefing'
 import Dashboard from "./Dashboard"
 import AuditorDashboard from "./components/AuditorDashboard"
+import Campanhas from "./components/Campanhas"
 import { textoTemperatura, rotuloTemperatura } from './lib/temperatura'
 // --- ÍCONES (FULL SET 2026) ---
 import { 
@@ -22,7 +23,7 @@ import {
     BrainCircuit, Search, Download, X, CheckSquare, Square, Users, StopCircle,
     Map as MapIcon, Loader2, Edit2, Trash2, Crosshair, Zap, Star, ShieldCheck, FileText,
     DollarSign, Briefcase, Building2, ArrowRight, ShieldAlert, Trash, Check, BarChart2, Flame, Cpu, Radio, Settings, LogOut, Menu, ChevronDown,
-    ChevronLeft, ChevronRight, Calendar, XCircle, CheckCircle2, AlertTriangle, PanelLeftClose, PanelLeftOpen
+    ChevronLeft, ChevronRight, Calendar, XCircle, CheckCircle2, AlertTriangle, PanelLeftClose, PanelLeftOpen, Megaphone
 } from 'lucide-react'
 
 // --- MAPAS E SOCKET ---
@@ -76,6 +77,7 @@ const NAV_ITEMS = [
     { key: 'search', icon: Radio, label: 'Radar', color: '#F59E0B' },
     { key: 'crm', icon: LayoutDashboard, label: 'Pipeline', color: '#F59E0B' },
     { key: 'connections', icon: MessageSquare, label: 'WhatsApp', color: '#F59E0B' },
+    { key: 'campanhas', icon: Megaphone, label: 'Campanhas', color: '#F59E0B' },
     { key: 'dashboard', icon: BarChart2, label: 'Analytics', color: '#F59E0B' },
     { key: 'briefing', icon: FileText, label: 'Briefing', color: '#F59E0B' },
 ]
@@ -1503,6 +1505,7 @@ return (
                 {activeTab === 'search' ? <Radio className="h-4 w-4 text-amber-400" /> :
                  activeTab === 'crm' ? <LayoutDashboard className="h-4 w-4 text-amber-400" /> :
                  activeTab === 'connections' ? <MessageSquare className="h-4 w-4 text-amber-400" /> :
+                 activeTab === 'campanhas' ? <Megaphone className="h-4 w-4 text-amber-400" /> :
                  <BarChart2 className="h-4 w-4 text-amber-400" />}
             </div>
             <div>
@@ -1510,6 +1513,7 @@ return (
     {activeTab === 'search' ? 'Radar' :
      activeTab === 'Pipeline' ? 'Pipeline' :
      activeTab === 'connections' ? 'Central WhatsApp' :
+     activeTab === 'campanhas' ? 'Campanhas' :
      'Analytics'}
 </h2>
 <p className="text-[8px] font-bold uppercase tracking-widest mt-0.5" style={{ color: 'rgba(255,255,255,0.25)' }}>
@@ -2275,6 +2279,10 @@ return (
 </TabsContent>
 
 
+
+                        <TabsContent value="campanhas" className="flex-1 overflow-hidden m-0">
+    <Campanhas />
+</TabsContent>
 
                         <TabsContent value="briefing" className="flex-1 overflow-hidden m-0">
     <div className="h-full flex items-start justify-center p-8 overflow-y-auto">

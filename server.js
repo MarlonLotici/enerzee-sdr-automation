@@ -94,7 +94,10 @@ const PORT = process.env.PORT || 3001;
 // CSP desligado por ora — o CSP default pode bloquear o bundle do Vite; endurecer depois.
 app.use(helmet({ contentSecurityPolicy: false }));
 app.use(cors({ origin: corsOriginCheck }));
-app.use(express.json());
+// JSON global (limite padrão 100kb). A importação de base manda milhares de linhas → tem parser
+// próprio com limite maior na rota, e por isso fica fora do global (senão o global já devolve 413).
+const _jsonPadrao = express.json();
+app.use((req, res, next) => (req.path === '/api/bases/import' ? next() : _jsonPadrao(req, res, next)));
 // Camada de Segurança: Verifica o Token do Supabase
 const autenticarMiddleware = async (req, res, next) => {
     const token = req.headers.authorization?.split(' ')[1];
@@ -957,6 +960,231 @@ app.put('/api/tenant-prompts', autenticarMiddleware, express.json(), async (req,
     } catch (err) {
         res.status(500).json({ error: err.message });
     }
+});
+
+// ============================================================================
+// 📣 CAMPANHAS DE REAQUECIMENTO DE BASE (WhatsApp API oficial)
+// Importa a base do cliente, lista templates aprovados, cria/inicia/pausa campanhas e mostra o
+// funil. O envio em si roda no motor (lib/campanhaMotor.js, ligado no 4_sdr.js).
+// ============================================================================
+const regrasCampanha = require('./lib/campanhas');
+const { cloudApiTransport } = require('./transports');
+
+async function campanhaDoUsuario(campanhaId, userId) {
+    if (!campanhaId || !userId) return null;
+    const { data } = await supabase.from('campanhas').select('*').eq('id', campanhaId).eq('user_id', userId).maybeSingle();
+    return data || null;
+}
+const _motorCampanhas = () => {
+    if (!sdr?.campanhas) throw new Error('Motor ainda inicializando, tente em alguns segundos.');
+    return sdr.campanhas;
+};
+
+// Chips da conta aptos a campanha (API oficial) + se a WABA já está configurada.
+app.get('/api/campanhas/chips', autenticarMiddleware, async (req, res) => {
+    try {
+        const { data, error } = await supabase.from('instances')
+            .select('id, name, agent_name, whatsapp_provider, waba_id').eq('user_id', req.user.id);
+        if (error) throw new Error(error.message);
+        res.json({ ok: true, chips: (data || []).map(c => ({
+            id: c.id, nome: c.name || c.agent_name || c.id.slice(0, 8),
+            oficial: c.whatsapp_provider === 'official', wabaConfigurada: !!c.waba_id,
+        })) });
+    } catch (err) { res.status(500).json({ error: err.message }); }
+});
+
+// Grava o id da WABA do chip (necessário pra listar os templates aprovados).
+app.post('/api/instance/:instanceId/waba', autenticarMiddleware, async (req, res) => {
+    const { instanceId } = req.params;
+    if (!(await ehDonoDaInstancia(instanceId, req.user.id))) return res.status(403).json({ error: 'Acesso negado.' });
+    const wabaId = String(req.body?.wabaId || '').replace(/\D/g, '');
+    if (!wabaId) return res.status(400).json({ error: 'Informe o WABA ID (só números).' });
+    const { error } = await supabase.from('instances').update({ waba_id: wabaId }).eq('id', instanceId);
+    if (error) return res.status(500).json({ error: error.message });
+    res.json({ ok: true });
+});
+
+// Templates APROVADOS da WABA deste chip.
+app.get('/api/instance/:instanceId/templates', autenticarMiddleware, async (req, res) => {
+    const { instanceId } = req.params;
+    if (!(await ehDonoDaInstancia(instanceId, req.user.id))) return res.status(403).json({ error: 'Acesso negado.' });
+    try {
+        const { data: inst } = await supabase.from('instances')
+            .select('cloud_api_key, cloud_base_url, waba_id, whatsapp_provider').eq('id', instanceId).maybeSingle();
+        if (inst?.whatsapp_provider !== 'official') return res.status(400).json({ error: 'Este chip não está na API oficial da Meta.' });
+        if (!inst?.waba_id) return res.status(400).json({ error: 'Configure o WABA ID deste chip primeiro.', precisaWaba: true });
+        const templates = await cloudApiTransport.listarTemplates({ apiKey: inst.cloud_api_key, baseUrl: inst.cloud_base_url }, inst.waba_id);
+        res.json({ ok: true, templates });
+    } catch (err) { res.status(502).json({ error: err.message }); }
+});
+
+// Importação da base (linhas já mapeadas no navegador). Lotes de até 5000 linhas por chamada.
+app.post('/api/bases/import', autenticarMiddleware, express.json({ limit: '8mb' }), async (req, res) => {
+    try {
+        const { instanceId, lote, consentimento, linhas } = req.body || {};
+        if (!(await ehDonoDaInstancia(instanceId, req.user.id))) return res.status(403).json({ error: 'Acesso negado.' });
+        if (!consentimento) return res.status(400).json({ error: 'Confirme a base legal (LGPD) para contatar estes clientes.' });
+        const nomeLote = String(lote || '').trim().slice(0, 60);
+        if (!nomeLote) return res.status(400).json({ error: 'Dê um nome para este lote (ex.: "clientes-inativos-2025").' });
+        if (!Array.isArray(linhas) || linhas.length === 0) return res.status(400).json({ error: 'Nenhuma linha recebida.' });
+        if (linhas.length > 5000) return res.status(400).json({ error: 'Máximo 5000 linhas por envio (o painel divide em lotes).' });
+
+        const { validos, invalidos, duplicados } = regrasCampanha.prepararImportacao(linhas);
+        const userId = req.user.id;
+        let novos = 0, atualizados = 0, optoutMantidos = 0;
+
+        for (let i = 0; i < validos.length; i += 300) {
+            const fatia = validos.slice(i, i + 300);
+            const { data: existentes, error: errSel } = await supabase.from('leads')
+                .select('id, whatsapp_id, instance_id, dados_cliente, opt_out')
+                .eq('user_id', userId).in('whatsapp_id', fatia.map(v => v.whatsapp_id));
+            if (errSel) throw new Error(errSel.message);
+            const porJid = new Map((existentes || []).map(e => [e.whatsapp_id, e]));
+
+            const inserir = [];
+            for (const v of fatia) {
+                const ex = porJid.get(v.whatsapp_id);
+                if (ex) {
+                    if (ex.opt_out) optoutMantidos++;
+                    const patch = {
+                        dados_cliente: { ...(ex.dados_cliente || {}), ...v.dados },
+                        base_lote: nomeLote, base_consentimento: String(consentimento).slice(0, 120),
+                    };
+                    if (!ex.instance_id) patch.instance_id = instanceId; // não "rouba" lead de outro chip
+                    const { error } = await supabase.from('leads').update(patch).eq('id', ex.id);
+                    if (!error) atualizados++;
+                } else {
+                    inserir.push({
+                        whatsapp_id: v.whatsapp_id, user_id: userId, instance_id: instanceId,
+                        name: v.nome || v.dados.empresa || 'Cliente da base', dono: v.nome,
+                        phone: v.phone, email: v.email,
+                        origin: 'base_import', status: 'base',
+                        dados_cliente: v.dados, base_lote: nomeLote,
+                        base_consentimento: String(consentimento).slice(0, 120),
+                        first_touch_channel: 'base_import', first_touch_at: new Date().toISOString(),
+                    });
+                }
+            }
+            if (inserir.length) {
+                const { data: ins, error: errIns } = await supabase.from('leads')
+                    .upsert(inserir, { onConflict: 'whatsapp_id,user_id', ignoreDuplicates: true }).select('id');
+                if (errIns) throw new Error(errIns.message);
+                novos += (ins || []).length;
+            }
+        }
+        console.log(`📥 [BASE] ${req.user.email}: lote "${nomeLote}" → ${novos} novos, ${atualizados} atualizados, ${invalidos.length} inválidos.`);
+        res.json({ ok: true, lote: nomeLote, novos, atualizados, invalidos: invalidos.length, linhasInvalidas: invalidos.slice(0, 50), duplicados, optoutMantidos });
+    } catch (err) {
+        console.error('❌ [BASE] Importação falhou:', err.message);
+        res.status(500).json({ error: err.message });
+    }
+});
+
+// Lotes importados da conta (com contagem) — pra escolher o público da campanha.
+app.get('/api/bases/lotes', autenticarMiddleware, async (req, res) => {
+    try {
+        const contagem = {};
+        for (let de = 0; de < 200000; de += 1000) {
+            const { data, error } = await supabase.from('leads').select('base_lote, instance_id')
+                .eq('user_id', req.user.id).not('base_lote', 'is', null).order('id').range(de, de + 999);
+            if (error) throw new Error(error.message);
+            for (const l of data || []) {
+                const k = `${l.instance_id}|${l.base_lote}`;
+                contagem[k] = contagem[k] || { lote: l.base_lote, instanceId: l.instance_id, total: 0 };
+                contagem[k].total++;
+            }
+            if (!data || data.length < 1000) break;
+        }
+        res.json({ ok: true, lotes: Object.values(contagem) });
+    } catch (err) { res.status(500).json({ error: err.message }); }
+});
+
+app.get('/api/campanhas', autenticarMiddleware, async (req, res) => {
+    const { data, error } = await supabase.from('campanhas').select('*')
+        .eq('user_id', req.user.id).order('criada_em', { ascending: false }).limit(100);
+    if (error) return res.status(500).json({ error: error.message });
+    res.json({ ok: true, campanhas: data || [] });
+});
+
+app.post('/api/campanhas', autenticarMiddleware, async (req, res) => {
+    const b = req.body || {};
+    const erro = regrasCampanha.validarCampanha(b);
+    if (erro) return res.status(400).json({ error: erro });
+    if (!(await ehDonoDaInstancia(b.instance_id, req.user.id))) return res.status(403).json({ error: 'Acesso negado.' });
+    const linha = {
+        user_id: req.user.id, instance_id: b.instance_id,
+        nome: String(b.nome).trim().slice(0, 120), objetivo: b.objetivo || 'reativacao',
+        filtro_segmento: b.filtro_segmento && typeof b.filtro_segmento === 'object' ? b.filtro_segmento : {},
+        templates: b.templates.map(t => ({
+            nome: String(t.nome).trim(), idioma: t.idioma || 'pt_BR', texto: String(t.texto || ''),
+            variaveis: (t.variaveis || []).map(v => ({ campo: String(v?.campo || ''), padrao: String(v?.padrao || '') })),
+            esperaDias: Math.max(1, Math.min(30, Number(t.esperaDias) || 2)),
+        })),
+        prompt_campanha: String(b.prompt_campanha || '').trim() || null,
+        janela_inicio: Number(b.janela_inicio ?? 9), janela_fim: Number(b.janela_fim ?? 19),
+        limite_diario: Number(b.limite_diario ?? 100),
+        frequencia_dias: Math.max(0, Number(b.frequencia_dias ?? 30)),
+        status: 'rascunho',
+    };
+    const { data, error } = await supabase.from('campanhas').insert(linha).select('*').single();
+    if (error) return res.status(500).json({ error: error.message });
+    res.json({ ok: true, campanha: data });
+});
+
+app.post('/api/campanhas/:campanhaId/iniciar', autenticarMiddleware, async (req, res) => {
+    try {
+        if (!(await campanhaDoUsuario(req.params.campanhaId, req.user.id))) return res.status(404).json({ error: 'Campanha não encontrada.' });
+        const r = await _motorCampanhas().iniciarCampanha(req.params.campanhaId, req.user.id);
+        res.json(r);
+    } catch (err) { res.status(400).json({ error: err.message }); }
+});
+
+app.post('/api/campanhas/:campanhaId/pausar', autenticarMiddleware, async (req, res) => {
+    try {
+        if (!(await campanhaDoUsuario(req.params.campanhaId, req.user.id))) return res.status(404).json({ error: 'Campanha não encontrada.' });
+        res.json(await _motorCampanhas().pausarPeloUsuario(req.params.campanhaId, req.user.id));
+    } catch (err) { res.status(400).json({ error: err.message }); }
+});
+
+app.delete('/api/campanhas/:campanhaId', autenticarMiddleware, async (req, res) => {
+    const c = await campanhaDoUsuario(req.params.campanhaId, req.user.id);
+    if (!c) return res.status(404).json({ error: 'Campanha não encontrada.' });
+    if (c.status !== 'rascunho') return res.status(400).json({ error: 'Só rascunhos podem ser excluídos (pause a campanha em vez disso).' });
+    const { error } = await supabase.from('campanhas').delete().eq('id', c.id).eq('user_id', req.user.id);
+    if (error) return res.status(500).json({ error: error.message });
+    res.json({ ok: true });
+});
+
+app.get('/api/campanhas/:campanhaId/metricas', autenticarMiddleware, async (req, res) => {
+    try {
+        if (!(await campanhaDoUsuario(req.params.campanhaId, req.user.id))) return res.status(404).json({ error: 'Campanha não encontrada.' });
+        res.json({ ok: true, funil: await _motorCampanhas().metricas(req.params.campanhaId) });
+    } catch (err) { res.status(500).json({ error: err.message }); }
+});
+
+// Contatos da campanha (quem respondeu/converteu primeiro) — pra agir rápido nos quentes.
+app.get('/api/campanhas/:campanhaId/contatos', autenticarMiddleware, async (req, res) => {
+    try {
+        if (!(await campanhaDoUsuario(req.params.campanhaId, req.user.id))) return res.status(404).json({ error: 'Campanha não encontrada.' });
+        const { data, error } = await supabase.from('campanha_contatos')
+            .select('id, lead_id, status, passo, erro, ultimo_envio_at, respondeu_at, convertido_at, leads(name, dono, phone)')
+            .eq('campanha_id', req.params.campanhaId)
+            .in('status', ['respondeu', 'convertido', 'optout', 'falhou'])
+            .order('respondeu_at', { ascending: false, nullsFirst: false }).limit(300);
+        if (error) throw new Error(error.message);
+        res.json({ ok: true, contatos: data || [] });
+    } catch (err) { res.status(500).json({ error: err.message }); }
+});
+
+// Conversão marcada pelo time (quando o fechamento aconteceu fora da conversa da IA).
+app.post('/api/campanhas/:campanhaId/convertido', autenticarMiddleware, async (req, res) => {
+    try {
+        const { leadId } = req.body || {};
+        if (!(await campanhaDoUsuario(req.params.campanhaId, req.user.id))) return res.status(404).json({ error: 'Campanha não encontrada.' });
+        if (!(await ehDonoDoLead(leadId, req.user.id))) return res.status(403).json({ error: 'Acesso negado.' });
+        const ok = await _motorCampanhas().marcarConvertido(leadId, req.params.campanhaId);
+        res.json({ ok });
+    } catch (err) { res.status(500).json({ error: err.message }); }
 });
 
 // 📇 Enriquece emails dos leads deste chip via WhatsApp Business Profile (usa o chip conectado).

@@ -177,14 +177,46 @@ async function marcarComoLido(config, messageId) {
     } catch (_) { /* silencioso de propósito */ }
 }
 
+// Raiz da Graph API SEM o phone_number_id (https://host/vXX.0) — usada por mídia e templates.
+function _root(config) {
+    const m = String(_base(config)).match(/^(https?:\/\/[^/]+\/v\d+\.\d+)/);
+    return m ? m[1] : DEFAULT_BASE_URL;
+}
+
+// Templates APROVADOS da WABA (GET /{waba_id}/message_templates), já com o texto do corpo
+// e a quantidade de variáveis {{n}} — é o que o cliente escolhe ao montar a campanha.
+async function listarTemplates(config, wabaId) {
+    const apiKey = _apiKey(config);
+    if (!apiKey) throw new Error('Cloud API (Meta) sem access token configurado (cloud_api_key).');
+    if (!wabaId) throw new Error('waba_id não configurado na instância.');
+    const url = `${_root(config)}/${wabaId}/message_templates?status=APPROVED&limit=200&fields=name,language,status,category,components`;
+    const resp = await fetch(url, { headers: { Authorization: `Bearer ${apiKey}` } });
+    let data = {};
+    try { data = await resp.json(); } catch { /* corpo vazio */ }
+    if (!resp.ok) throw new Error(`Cloud API templates ${resp.status}: ${data?.error?.message || resp.statusText}`);
+    return (data?.data || [])
+        .filter(t => !t.status || t.status === 'APPROVED')
+        .map(t => {
+            const corpo = (t.components || []).find(c => c.type === 'BODY')?.text || '';
+            const nums = [...corpo.matchAll(/\{\{\s*(\d+)\s*\}\}/g)].map(m => Number(m[1]));
+            return {
+                nome: t.name,
+                idioma: t.language,
+                categoria: t.category,
+                texto: corpo,
+                qtdVariaveis: nums.length ? Math.max(...nums) : 0,
+                botoes: ((t.components || []).find(c => c.type === 'BUTTONS')?.buttons || []).map(b => b.text),
+            };
+        });
+}
+
 // Baixa uma mídia recebida (áudio/imagem/doc) da Cloud API.
 // Passo 1: GET {graphRoot}/{mediaId} -> { url, mime_type }  (raiz SEM o phone_number_id)
 // Passo 2: GET {url} com Bearer -> binário.
 async function baixarMidia(config, mediaId) {
     const apiKey = _apiKey(config);
     // cloud_base_url inclui o phone_number_id; a mídia usa só https://host/vXX.0
-    const m = String(_base(config)).match(/^(https?:\/\/[^/]+\/v\d+\.\d+)/);
-    const root = m ? m[1] : DEFAULT_BASE_URL;
+    const root = _root(config);
     const r1 = await fetch(`${root}/${mediaId}`, { headers: { Authorization: `Bearer ${apiKey}` } });
     const meta = await r1.json();
     if (!meta?.url) throw new Error('mídia sem url: ' + JSON.stringify(meta?.error || meta));
@@ -199,6 +231,7 @@ module.exports = {
     enviarTemplate,
     enviarAudio,
     uploadMidia,
+    listarTemplates,
     baixarMidia,
     marcarComoLido,
     normalizarInbound,

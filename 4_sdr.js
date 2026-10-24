@@ -155,6 +155,16 @@ const groq = new Groq({ apiKey: process.env.GROQ_API_KEY }); // mantido SÓ para
 // 🤖 Todo LLM de texto/visão passa pelo adaptador único do Claude (lib/llm.js).
 const { chamarLLM, MODELOS } = require('./lib/llm');
 const { definirTenantLLM } = require('./lib/llmContext');
+// 📣 Campanhas de reaquecimento de base (API oficial) — estado no banco, motor ligado no initMultiTenancy.
+const regrasCampanha = require('./lib/campanhas');
+const motorCampanhas = require('./lib/campanhaMotor').criarMotorCampanhas({
+    supabase,
+    getRegras: (id) => getRegrasEmCache(id),
+    transport: cloudApiTransport,
+    salvarMensagem: (waId, role, content, instanceId) => db.saveMessage(waId, role, content, instanceId),
+    alerta: (titulo, texto) => enviarAlerta(titulo, texto),
+    budget: budgetGuard,
+});
 
 // === INÍCIO CONFIG REDIS & BULLMQ ===
 const { Queue, Worker } = require('bullmq');
@@ -1163,7 +1173,28 @@ Quando já existe histórico e o lead te chama de novo, ele quase nunca quer "co
 [NÃO SEJA INTERROGATÓRIO — textura humana]
 Não faça pergunta atrás de pergunta seca. Em cerca de 1 a cada 3 respostas, ANTES de perguntar, reaja ao que ele disse: um comentário genuíno, uma validação ("faz todo sentido, muita gente trava nisso"), um elogio contextual ("legal que vocês já usam o Instagram pra isso") ou um micro-insight — e SÓ ENTÃO faça a pergunta. Nas outras vezes, pode ir mais direto (não force elogio toda hora, senão soa falso). O objetivo é parecer uma conversa humana, não um formulário.`;
 
-    return constituicaoResolvida + secaoAcolhidaInbound + secaoPerguntarNome + REGRA_ROTEIRO + REGRA_ANTI_INVENCAO;
+    const secaoCampanha = await montarSecaoCampanha(contextoLead).catch(() => '');
+
+    return constituicaoResolvida + secaoAcolhidaInbound + secaoPerguntarNome + secaoCampanha + REGRA_ROTEIRO + REGRA_ANTI_INVENCAO;
+}
+
+// 📣 Lead da BASE que recebeu campanha: injeta o contexto (DADOS) da campanha + os dados do
+// cliente importados. A regra de negócio continua no prompt do tenant; aqui é só o que a IA
+// precisa SABER sobre esta conversa (por que o contato recebeu a mensagem, o que já comprou etc.).
+async function montarSecaoCampanha(lead) {
+    const ctx = await motorCampanhas.contextoDoLead(lead?.id);
+    if (!ctx) return '';
+    const dados = lead?.dados_cliente && typeof lead.dados_cliente === 'object'
+        ? Object.entries(lead.dados_cliente)
+            .filter(([k, v]) => !String(k).startsWith('_') && v !== null && String(v).trim() !== '')
+            .slice(0, 25).map(([k, v]) => `- ${k}: ${String(v).slice(0, 200)}`).join('\n')
+        : '';
+    const objetivo = { reativacao: 'reativar um cliente que estava inativo', upsell: 'oferecer um produto/serviço a mais para quem já é cliente' }[ctx.objetivo] || 'campanha da empresa';
+    return `
+
+[CONTEXTO DESTA CONVERSA — CAMPANHA "${ctx.nome}" (${objetivo})]
+Este contato JÁ É da base de clientes da empresa e recebeu uma mensagem desta campanha (está no histórico). Ele não é um lead frio: trate como cliente que a empresa conhece, sem se reapresentar como se fosse o primeiro contato.
+${ctx.prompt_campanha ? `Orientações da campanha (escritas pela empresa):\n${ctx.prompt_campanha}\n` : ''}${dados ? `Dados do cliente na base:\n${dados}\n` : ''}Quando o cliente CONFIRMAR o objetivo da campanha (fechar, comprar, voltar, agendar), adicione a tag [CONVERTIDO] no final da resposta.`;
 }
 // ============================================================================
 // 🧠 NÚCLEO IA: "THE ARCHITECT" - STATE OF THE ART SDR V3.0 (MULTI-TENANT REAL)
@@ -2014,7 +2045,13 @@ async function filtrarEEnviarResposta(sock, remoteJid, resposta, historico, lead
     }
 
     // ── 1. LIMPEZA TOTAL DE TAGS (À PROVA DE ALUCINAÇÃO) ──
-    const regexTags = /\[\s*(ESTAGIO|ESTÁGIO|CLIMA|RAIO-X|PERFIL|ROBO|CONTADOR|ENGANO|GATEKEEPER|AGENDAMENTO_MANUAL|PAUSA\s*PARA\s*RESPOSTA|REVERSAO_TENTADA|FOLLOW_UP|AGUARDANDO_RETORNO)[^\]]*\]/gi;
+    const regexTags = /\[\s*(ESTAGIO|ESTÁGIO|CLIMA|RAIO-X|PERFIL|ROBO|CONTADOR|ENGANO|GATEKEEPER|AGENDAMENTO_MANUAL|PAUSA\s*PARA\s*RESPOSTA|REVERSAO_TENTADA|FOLLOW_UP|AGUARDANDO_RETORNO|CONVERTIDO)[^\]]*\]/gi;
+    // 📣 Campanha: a IA sinaliza que o cliente confirmou o objetivo (fechou/voltou/comprou).
+    if (/\[\s*CONVERTIDO\s*\]/i.test(resposta) && lead?.id) {
+        motorCampanhas.marcarConvertido(lead.id)
+            .then(ok => ok && console.log(`🏆 [CAMPANHA] ${lead.name} marcado como CONVERTIDO.`))
+            .catch(e => console.warn(`⚠️ [CAMPANHA] Falha ao marcar conversão: ${e.message}`));
+    }
     const matchEstagio = /\[?\s*EST[AÁ]GIO\s*:?\s*(\d)\s*\]?/gi.exec(resposta);
     const matchEncerrado = /\[?\s*EST[AÁ]GIO\s*:?\s*ENCERRADO\s*\]?/gi.test(resposta);
     const matchClima = /\[?\s*CLIMA\s*:?\s*([a-zA-Z_]+)\s*\]?/gi.exec(resposta);
@@ -5495,6 +5532,8 @@ async function verificarFollowUpsVencidos() {
 }
 
 module.exports = {
+    // 📣 Motor de campanhas (rotas do server.js usam: iniciar/pausar/métricas/conversão).
+    campanhas: motorCampanhas,
     // 👇 Recebe a porta de comunicação (io) e o Alarme (sdrEvents)
     initMultiTenancy: async (io, sdrEvents) => {
 
@@ -5516,6 +5555,8 @@ module.exports = {
 
         ioSocket = io;
         sdrEventsGlobal = sdrEvents;
+
+        motorCampanhas.iniciar();
 
          // 🎯 BUG #2 FIX: Destravar leads que ficaram presos como "reservado" após crash/restart
         const { data: travados } = await supabase.from('leads').select('id').eq('status', 'reservado');
@@ -6021,8 +6062,23 @@ module.exports = {
     // repassa o corpo bruto do Meta + o instanceId (da URL). Normaliza, acha/cria o lead e
     // injeta na MESMA fila FilaIA que o Baileys usa — daí a esteira de agentes é idêntica.
     receberInboundOficial: async (instanceId, webhookBody) => {
+        // 📣 Status de entrega (sent/delivered/read/failed) → funil das campanhas (casa pelo wamid).
+        const _statuses = regrasCampanha.extrairStatuses(webhookBody);
+        if (_statuses.length) {
+            motorCampanhas.registrarStatuses(_statuses)
+                .catch(e => console.warn(`⚠️ [CAMPANHA] Falha ao registrar status: ${e.message}`));
+        }
+        // 🚨 Qualidade do número caiu (DOWNGRADE/FLAGGED): pausa as campanhas do chip na hora.
+        const _qualidade = regrasCampanha.extrairAlertaQualidade(webhookBody);
+        if (_qualidade) {
+            const pausadas = await motorCampanhas.pausarCampanhasDaInstancia(instanceId,
+                `Meta sinalizou qualidade ${_qualidade.evento} no número — campanhas pausadas.`).catch(() => []);
+            enviarAlerta(`🚨 Qualidade do número caiu (${_qualidade.evento})`,
+                `Chip ${instanceId.slice(0, 8)}: ${pausadas.length} campanha(s) pausada(s). Limite atual: ${_qualidade.limite || 'n/d'}.`, 15158332).catch(() => {});
+        }
+
         const norm = cloudApiTransport.normalizarInbound(webhookBody);
-        if (!norm) return { ok: false, motivo: 'sem_mensagem' };
+        if (!norm) return { ok: false, motivo: _statuses.length ? 'status' : 'sem_mensagem' };
 
         // 🔁 IDEMPOTÊNCIA — a Cloud API da Meta entrega webhook *at-least-once*: a MESMA mensagem
         // (mesmo wamid) é reenviada em retry/timeout/piscada de rede. Sem esta trava, a reentrega
@@ -6077,9 +6133,14 @@ module.exports = {
             return { ok: false, motivo: 'sem_mensagem_texto' };
         }
 
-        const cleanJid = norm.remoteJid;
-        let { data: lead } = await supabase.from('leads')
-            .select('*').eq('whatsapp_id', cleanJid).eq('instance_id', instanceId).maybeSingle();
+        let cleanJid = norm.remoteJid;
+        // Celular BR: a Meta pode mandar o wa_id SEM o 9º dígito, e a base importada tem COM (ou o
+        // contrário). Procura as 2 formas pra não criar lead duplicado nem perder a resposta da campanha.
+        const { data: _achados } = await supabase.from('leads')
+            .select('*').in('whatsapp_id', regrasCampanha.variantesJidBR(cleanJid)).eq('instance_id', instanceId)
+            .order('created_at', { ascending: true }).limit(2);
+        let lead = (_achados || []).find(l => l.whatsapp_id === cleanJid) || (_achados || [])[0] || null;
+        if (lead) cleanJid = lead.whatsapp_id; // histórico/envio sempre no MESMO id do lead
 
         if (!lead) {
             const { data: novo, error: errNovo } = await supabase.from('leads').insert({
@@ -6104,6 +6165,24 @@ module.exports = {
 
         // Salva a mensagem já (painel em tempo real + histórico completo pra IA).
         await db.saveMessage(cleanJid, 'user', norm.texto, instanceId);
+
+        // 📣 CAMPANHA: opt-out (LGPD) de quem recebeu campanha → nunca mais recebe, e a IA não responde.
+        if (lead.ultima_campanha_at && regrasCampanha.ehOptOut(norm.texto)) {
+            await motorCampanhas.registrarOptOut(lead.id).catch(e => console.warn(`⚠️ [CAMPANHA] opt-out: ${e.message}`));
+            const msgOptOut = 'Combinado, não vou mais te enviar mensagens por aqui. Se precisar de algo, é só chamar. 👍';
+            try {
+                await cloudApiTransport.enviarTexto({ apiKey: instanceData.cloud_api_key, baseUrl: instanceData.cloud_base_url }, cleanJid, msgOptOut);
+                await db.saveMessage(cleanJid, 'assistant', msgOptOut, instanceId);
+            } catch (e) { console.warn(`⚠️ [CAMPANHA] Falha ao confirmar opt-out: ${e.message}`); }
+            console.log(`🚫 [CAMPANHA] ${lead.name} pediu para sair — opt-out registrado.`);
+            return { ok: true, leadId: lead.id, optout: true };
+        }
+        // Respondeu a uma campanha → para a cadência (não manda o próximo template) e segue com a IA.
+        if (lead.ultima_campanha_at) {
+            motorCampanhas.registrarResposta(lead.id)
+                .then(n => n && console.log(`💬 [CAMPANHA] ${lead.name} respondeu — cadência encerrada.`))
+                .catch(e => console.warn(`⚠️ [CAMPANHA] registrarResposta: ${e.message}`));
+        }
 
         // 🗄️ GAVETA OFICIAL (OUVIDO PACIENTE p/ Cloud API): o lead costuma mandar a ideia em 2-3
         // mensagens picadas (ainda mais em clínica). Sem isso, cada mensagem virava 1 job → a IA
