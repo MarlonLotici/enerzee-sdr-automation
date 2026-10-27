@@ -499,6 +499,25 @@ app.get('/webhook/whatsapp', (req, res) => {
     return res.sendStatus(403);
 });
 
+// phone_number_id → instanceId, com cache curto (o webhook é frequente; chip novo aparece em ≤2min).
+const { resolverInstancia, phoneNumberIdDaBaseUrl } = require('./lib/metaWebhook');
+const _cachePhoneId = new Map(); // phoneNumberId → { instanceId, ate }
+async function instanciaPorPhoneNumberId(phoneId) {
+    const hit = _cachePhoneId.get(phoneId);
+    if (hit && hit.ate > Date.now()) return hit.instanceId;
+    try {
+        const { data, error } = await supabase.from('instances')
+            .select('id, cloud_base_url').eq('whatsapp_provider', 'official').like('cloud_base_url', `%${phoneId}%`);
+        if (error) throw new Error(error.message);
+        const achado = (data || []).find(i => phoneNumberIdDaBaseUrl(i.cloud_base_url) === phoneId);
+        _cachePhoneId.set(phoneId, { instanceId: achado?.id || null, ate: Date.now() + (achado ? 10 * 60 * 1000 : 2 * 60 * 1000) });
+        return achado?.id || null;
+    } catch (err) {
+        console.warn(`⚠️ [WA-WEBHOOK] Falha ao resolver chip pelo número ${phoneId}: ${err.message} (usando ?instanceId=).`);
+        return null;
+    }
+}
+
 app.post('/webhook/whatsapp', webhookLimiter, express.json(), async (req, res) => {
     // Responde 200 IMEDIATAMENTE (Meta/360dialog re-tentam se demorar) e processa depois.
     res.status(200).json({ ok: true });
@@ -514,8 +533,16 @@ app.post('/webhook/whatsapp', webhookLimiter, express.json(), async (req, res) =
             return;
         }
         if (!sdr?.receberInboundOficial) return console.warn('⚠️ [WA-WEBHOOK] SDR ainda não inicializado.');
-        const instanceId = req.query.instanceId;
-        if (!instanceId) return console.warn('⚠️ [WA-WEBHOOK] instanceId ausente na URL (?instanceId=...).');
+        // O chip vem do NÚMERO que a Meta informa no próprio webhook (vários números no mesmo app
+        // compartilham a Callback URL); ?instanceId= é só fallback.
+        const rota = await resolverInstancia({
+            webhookBody: req.body, instanceIdDaUrl: req.query.instanceId, buscar: instanciaPorPhoneNumberId,
+        });
+        const instanceId = rota.instanceId;
+        if (rota.divergente) {
+            console.log(`🔀 [WA-WEBHOOK] Número ${rota.phoneId} pertence ao chip ${String(instanceId).slice(0, 8)} (a URL apontava p/ ${String(req.query.instanceId).slice(0, 8)}) — roteado pelo número.`);
+        }
+        if (!instanceId) return console.warn('⚠️ [WA-WEBHOOK] Não achei o chip: webhook sem phone_number_id conhecido e sem ?instanceId= na URL.');
         const r = await sdr.receberInboundOficial(instanceId, req.body);
         if (!r?.ok) {
             console.log(`ℹ️ [WA-WEBHOOK] Nada a processar (${r?.motivo || 'sem resultado'}).`);
