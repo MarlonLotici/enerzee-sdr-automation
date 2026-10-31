@@ -6,6 +6,7 @@ const { Server } = require('socket.io');
 const cors = require('cors');
 const helmet = require('helmet');
 const rateLimit = require('express-rate-limit');
+const compression = require('compression');
 const path = require('path');
 const { createClient } = require('@supabase/supabase-js');
 const supabase = createClient(process.env.SUPABASE_URL, process.env.SUPABASE_KEY);
@@ -93,6 +94,8 @@ const PORT = process.env.PORT || 3001;
 // helmet: headers de segurança (HSTS, X-Frame-Options, noSniff, etc.).
 // CSP desligado por ora — o CSP default pode bloquear o bundle do Vite; endurecer depois.
 app.use(helmet({ contentSecurityPolicy: false }));
+// gzip em tudo que sai (bundle do front ~840KB → ~1/3; JSON das APIs também). Socket.io não passa por aqui.
+app.use(compression());
 app.use(cors({ origin: corsOriginCheck }));
 // JSON global (limite padrão 100kb). A importação de base manda milhares de linhas → tem parser
 // próprio com limite maior na rota, e por isso fica fora do global (senão o global já devolve 413).
@@ -168,7 +171,17 @@ const webChatLimiter = rateLimit({
     message: { error: 'Muitas mensagens em pouco tempo. Aguarde um instante.' },
 });
 
-app.use(express.static(path.join(__dirname, 'frontend', 'dist')));
+// Cache: arquivos de /assets têm hash no nome (mudam a cada build) → o navegador guarda por 1 ano.
+// index.html nunca é guardado, senão o cliente ficaria preso numa versão velha depois do deploy.
+app.use(express.static(path.join(__dirname, 'frontend', 'dist'), {
+    setHeaders(res, filePath) {
+        if (filePath.includes(`${path.sep}assets${path.sep}`)) {
+            res.setHeader('Cache-Control', 'public, max-age=31536000, immutable');
+        } else if (filePath.endsWith('.html')) {
+            res.setHeader('Cache-Control', 'no-cache');
+        }
+    },
+}));
 
 
 
@@ -1526,6 +1539,7 @@ app.get('/api/metrics/funil', autenticarMiddleware, async (req, res) => {
 
 // Entrega o Frontend (Sempre depois das rotas de API)
 app.get(/.*/, (req, res) => {
+    res.setHeader('Cache-Control', 'no-cache');
     res.sendFile(path.join(__dirname, 'frontend', 'dist', 'index.html'));
 });
 

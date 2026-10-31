@@ -1,4 +1,4 @@
-﻿import React, { useState, useEffect, useRef, useMemo } from 'react'
+﻿import React, { useState, useEffect, useRef, useMemo, lazy, Suspense } from 'react'
 // --- IMPORTAÇÕES DE UI ---
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs"
 import { Button } from "@/components/ui/button"
@@ -7,15 +7,19 @@ import { Label } from "@/components/ui/label"
 import { Badge } from "@/components/ui/badge"
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogDescription, DialogFooter, DialogTrigger } from "@/components/ui/dialog"
 import NicheSelect from './components/NicheSelect'
-import VisualAnalytics from "@/components/VisualAnalytics"
-import RelatorioResultados from "@/components/RelatorioResultados"
 import ChipStatus from "./components/Chipstatus"
 import HealthPanel from "./components/HealthPanel"
 import ConversaList from './components/ConversaList'
 import OnboardingBriefing from './components/OnboardingBriefing'
-import Dashboard from "./Dashboard"
-import AuditorDashboard from "./components/AuditorDashboard"
-import Campanhas from "./components/Campanhas"
+// Telas pesadas (gráficos/recharts) só baixam quando a aba é aberta — não pesam no 1º carregamento
+const VisualAnalytics = lazy(() => import("@/components/VisualAnalytics"))
+const RelatorioResultados = lazy(() => import("@/components/RelatorioResultados"))
+const Dashboard = lazy(() => import("./Dashboard"))
+const AuditorDashboard = lazy(() => import("./components/AuditorDashboard"))
+const Campanhas = lazy(() => import("./components/Campanhas"))
+const CarregandoTela = () => (
+    <div className="h-full flex items-center justify-center p-8"><Loader2 className="h-6 w-6 animate-spin text-amber-400" /></div>
+)
 import { textoTemperatura, rotuloTemperatura } from './lib/temperatura'
 import { ehReuniao } from './lib/metricas'
 // --- ÍCONES (FULL SET 2026) ---
@@ -2283,14 +2287,18 @@ return (
 
     {/* Conteúdo */}
     <div className="flex-1 overflow-auto">
-        {analyticsView === 'relatorio' ? <RelatorioResultados /> : analyticsView === 'overview' ? <VisualAnalytics /> : analyticsView === 'operations' ? <Dashboard /> : <AuditorDashboard socket={socket} />}
+        <Suspense fallback={<CarregandoTela />}>
+            {analyticsView === 'relatorio' ? <RelatorioResultados /> : analyticsView === 'overview' ? <VisualAnalytics /> : analyticsView === 'operations' ? <Dashboard /> : <AuditorDashboard socket={socket} />}
+        </Suspense>
     </div>
 </TabsContent>
 
 
 
                         <TabsContent value="campanhas" className="flex-1 overflow-hidden m-0">
-    <Campanhas />
+    <Suspense fallback={<CarregandoTela />}>
+        <Campanhas />
+    </Suspense>
 </TabsContent>
 
                         <TabsContent value="briefing" className="flex-1 overflow-hidden m-0">
