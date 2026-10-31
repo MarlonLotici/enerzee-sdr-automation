@@ -28,12 +28,12 @@ const DESFECHO_LABEL = {
     AGENDADO:        'Agendado ✅',
     PERDIDO_SOLAR:   'Já resolvido',
     PERDIDO_CARO:    'Preço/Conta',
-    PERDIDO_SILENCIO:'Sem resposta',
+    PERDIDO_SILENCIO:'Parou de responder',
     PERDIDO_ROBO:    'Robô/URA',
     PERDIDO_OUTRO:   'Outros',
 }
 
-const ESTAGIO_LABEL = ['Abordagem', 'Qualificação', 'Revelação', 'Proposta', 'Agendamento', 'Fechado']
+const ESTAGIO_LABEL = ['Abordagem', 'Qualificação', 'Revelação', 'Proposta', 'Horário proposto', 'Reunião marcada']
 
 function KpiCard({ icon: Icon, label, value, sub, color }) {
     return (
@@ -80,7 +80,8 @@ export default function AuditorDashboard({ socket }) {
             const json = await resp.json()
             if (!resp.ok || !json.ok) throw new Error(json.error || 'Falha ao iniciar.')
             setRunMsg(json.running ? 'Auditoria já estava rodando…' : 'Auditoria iniciada — atualizando em instantes…')
-            setTimeout(fetchData, 8000)
+            // Cada conversa leva alguns segundos na IA: recarrega em etapas até o lote terminar.
+            ;[8000, 30000, 90000].forEach(ms => setTimeout(fetchData, ms))
         } catch (e) {
             setRunMsg('Erro: ' + e.message)
         } finally {
@@ -95,16 +96,14 @@ export default function AuditorDashboard({ socket }) {
             const uid = s?.user?.id
             if (!uid) { setLoading(false); return }
 
-            const { data: instData } = await supabase.from('instances').select('id').eq('user_id', uid)
-            const instIds = instData?.map(i => i.id) || []
-            if (!instIds.length) { setLoading(false); return }
-
+            // Isola por TENANT (user_id), não por chip: lead do chat do site ou de chip removido
+            // tem instance_id nulo e sumia daqui.
             const { data } = await supabase
                 .from('leads')
                 .select('id, name, niche, created_at, audit_report, current_stage')
                 .eq('is_audited', true)
                 .not('audit_report', 'is', null)
-                .in('instance_id', instIds)
+                .eq('user_id', uid)
                 .order('created_at', { ascending: false })
                 .limit(1000)
 
@@ -120,7 +119,9 @@ export default function AuditorDashboard({ socket }) {
                         }
                     }
                     return { ...l, report }
-                }).filter(l => l.report && typeof l.report === 'object' && l.report.desfecho && l.report.desfecho !== 'PERDIDO_SILENCIO')
+                // PERDIDO_SILENCIO fica: lead que nunca respondeu nem ganha relatório (o auditor pula),
+                // então "silêncio" aqui é lead que conversou e esfriou, justamente o que vale revisar.
+                }).filter(l => l.report && typeof l.report === 'object' && l.report.desfecho)
 
                 setLeads(parsed)
                 setLastSync(new Date())
@@ -247,6 +248,7 @@ export default function AuditorDashboard({ socket }) {
     if (!metrics) return (
         <div className="flex flex-col items-center justify-center h-64 gap-4 text-slate-600 text-sm">
             <p>Nenhuma auditoria disponível ainda. O loop roda sozinho de hora em hora.</p>
+            <p className="text-xs text-slate-700 max-w-md text-center">São auditadas as conversas encerradas, com reunião marcada ou paradas há mais de 3 dias em que o lead chegou a responder.</p>
             <button
                 onClick={rodarAgora}
                 disabled={rodando}

@@ -501,11 +501,17 @@ export default function Campanhas() {
     const [erro, setErro] = useState(null)
 
     const carregar = useCallback(async () => {
-        try {
-            const [ch, lo, ca] = await Promise.all([api('/api/campanhas/chips'), api('/api/bases/lotes'), api('/api/campanhas')])
-            setChips(ch.chips || []); setLotes(lo.lotes || []); setCampanhas(ca.campanhas || []); setErro(null)
-            setChipId(id => id || (ch.chips || []).find(c => c.oficial)?.id || '')
-        } catch (e) { setErro(e.message) } finally { setCarregando(false) }
+        // allSettled: uma rota falhando (ex.: tabela de campanhas ainda não criada) não pode esconder
+        // os chips. Antes tudo zerava e a tela dizia "conecte um número oficial" mesmo com um conectado.
+        const [ch, lo, ca] = await Promise.allSettled([api('/api/campanhas/chips'), api('/api/bases/lotes'), api('/api/campanhas')])
+        const ok = (r, campo) => (r.status === 'fulfilled' ? r.value[campo] || [] : [])
+        setChips(ok(ch, 'chips')); setLotes(ok(lo, 'lotes')); setCampanhas(ok(ca, 'campanhas'))
+        setChipId(id => id || ok(ch, 'chips').find(c => c.oficial)?.id || '')
+        const falha = [ch, lo, ca].find(r => r.status === 'rejected')?.reason?.message || null
+        setErro(falha && /schema cache|does not exist/i.test(falha)
+            ? 'O banco ainda não tem as tabelas de campanhas. Rode o arquivo db/campanhas.sql no SQL Editor do Supabase (uma vez só) e clique em Atualizar.'
+            : falha)
+        setCarregando(false)
     }, [])
     useEffect(() => { carregar() }, [carregar])
 

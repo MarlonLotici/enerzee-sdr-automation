@@ -200,8 +200,8 @@ function ConversaCard({ lead, ultimaMsg, isActive, onClick, onUpdate }) {
             {lead.current_stage === 1 ? '💬 Situação' :
              lead.current_stage === 2 ? '⚡ Dor' :
              lead.current_stage === 3 ? '💡 Solução' :
-             lead.current_stage === 4 ? '📅 Agenda' :
-             lead.current_stage === 5 ? '✅ Fechado' : ''}
+             lead.current_stage === 4 ? '📅 Horário proposto' :
+             lead.current_stage === 5 ? '✅ Reunião marcada' : ''}
         </span>
     </div>
 )}

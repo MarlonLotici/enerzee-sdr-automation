@@ -17,6 +17,7 @@ import Dashboard from "./Dashboard"
 import AuditorDashboard from "./components/AuditorDashboard"
 import Campanhas from "./components/Campanhas"
 import { textoTemperatura, rotuloTemperatura } from './lib/temperatura'
+import { ehReuniao } from './lib/metricas'
 // --- ÍCONES (FULL SET 2026) ---
 import { 
     Rocket, MapPin, LayoutDashboard, MessageSquare, Phone, Play, LocateFixed, Send,
@@ -288,8 +289,8 @@ const [botLogs, setBotLogs] = useState([]);
 // 🎯 Roteador Inteligente do Kanban (Sincronizado com o Analytics V13)
 const getLeadsByStatus = (coluna) => {
     return filteredLeads.filter(l => {
-        // A mesma regra de ouro do Analytics:
-        const isAgendado = l.status === 'booked' || l.calendly_booked === true || (l.current_stage || 0) >= 4;
+        // A mesma regra do Analytics (lib/metricas): só reunião de verdade, não horário proposto.
+        const isAgendado = ehReuniao(l);
 
         if (coluna === 'booked') return isAgendado;
         if (coluna === 'waiting_analysis') return l.status === 'waiting_analysis' && !isAgendado;
@@ -542,6 +543,13 @@ if (session?.user?.id) checkBriefing()
             .eq('user_id', userId);
         if (count !== null) setRealTotalLeads(count);
     };
+
+    // Recarrega quando a sessão muda (login novo, troca de conta). O carregamento inicial roda
+    // antes do login e saía sem dados, deixando o Pipeline vazio até um F5.
+    useEffect(() => {
+        if (session?.user?.id) fetchLeadsFromDB();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+    }, [session?.user?.id]);
 
     // --- LÓGICA DE BUSCA DAS MENSAGENS REAIS ---
     useEffect(() => {
@@ -854,7 +862,7 @@ if (session?.user?.id) checkBriefing()
     };
 
     const handleClearLeads = () => {
-        if(confirm("Deseja limpar todos os leads da base visual?")) {
+        if(confirm("Esconder todos os leads desta tela? Nada é apagado do banco: recarregue a página (F5) para vê-los de novo.")) {
             setLeads([]);
             setSelectedLeadIds(new Set());
         }
@@ -1511,7 +1519,8 @@ return (
             <div>
                 <h2 className="text-sm font-black text-white uppercase tracking-wider leading-none">
     {activeTab === 'search' ? 'Radar' :
-     activeTab === 'Pipeline' ? 'Pipeline' :
+     activeTab === 'crm' ? 'Pipeline' :
+     activeTab === 'briefing' ? 'Briefing' :
      activeTab === 'connections' ? 'Central WhatsApp' :
      activeTab === 'campanhas' ? 'Campanhas' :
      'Analytics'}

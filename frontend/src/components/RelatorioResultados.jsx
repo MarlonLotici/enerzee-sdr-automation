@@ -1,6 +1,7 @@
 import React, { useState, useEffect, useMemo } from 'react'
 import { supabase } from '@/lib/supabase'
 import PeriodSelector from './PeriodSelector'
+import { ehReuniao, formatarMinutos } from '@/lib/metricas'
 import { MessageSquare, Users, CalendarCheck, Clock, Moon, Printer, Zap } from 'lucide-react'
 
 // ============================================================================
@@ -99,11 +100,10 @@ export default function RelatorioResultados() {
         const leadsResponderam = new Set(userMsgs.map(x => x.whatsapp_id)).size
         const mensagensRespondidas = assistant.length
 
-        // Reunião é conversão PERMANENTE (não expira por período) — consistente com o resto
-        // do Analytics (VisualAnalytics conta agendados all-time). Evita mostrar 1 aqui e 6 lá.
-        const reunioes = leads.filter(l =>
-            l.status === 'booked' || l.status === 'closed' || l.calendly_booked === true || (l.current_stage || 0) >= 4
-        ).length
+        // Reunião: regra única (lib/metricas) e mesmo recorte da aba Resultados (leads criados no
+        // período). Antes somava estágio 4 (só horário proposto) e mostrava 55 com 4 reais.
+        const inicio = getDateFrom(periodo)
+        const reunioes = leads.filter(l => ehReuniao(l) && (!inicio || l.created_at >= inicio)).length
 
         // Fora do horário comercial (noite/fim de semana) — atendimento 24/7.
         // foraDoHorario = MENSAGENS (volume); conversasForaDoHorario = conversas distintas (contexto).
@@ -129,7 +129,7 @@ export default function RelatorioResultados() {
                 }
             }
         }
-        const tempoMedio = cont > 0 ? Math.round(soma / cont) : null
+        const tempoMedio = cont > 0 ? soma / cont : null // sem arredondar: formatarMinutos cuida
 
         return { conversasAtendidas, leadsResponderam, mensagensRespondidas, reunioes, foraDoHorario, conversasForaDoHorario, tempoMedio }
     }, [raw, periodo])
@@ -181,7 +181,7 @@ export default function RelatorioResultados() {
                         <HeroCard icon={MessageSquare} value={m.conversasAtendidas.toLocaleString('pt-BR')} label="Conversas atendidas" sub={`${m.mensagensRespondidas.toLocaleString('pt-BR')} mensagens respondidas pela IA`} color={AMBAR} />
                         <HeroCard icon={Users} value={m.leadsResponderam.toLocaleString('pt-BR')} label="Leads engajados" sub="responderam e avançaram na conversa" color={CIANO} />
                         <HeroCard icon={CalendarCheck} value={m.reunioes.toLocaleString('pt-BR')} label="Reuniões agendadas" sub="sem ninguém precisar responder na mão" color={VERDE} />
-                        <HeroCard icon={Clock} value={m.tempoMedio != null ? `${m.tempoMedio} min` : '—'} label="Tempo de 1ª resposta" sub="do contato à resposta da IA" color={ROXO} />
+                        <HeroCard icon={Clock} value={formatarMinutos(m.tempoMedio) ?? '—'} label="Tempo de 1ª resposta" sub="do contato à resposta da IA" color={ROXO} />
                         <HeroCard icon={Moon} value={m.foraDoHorario.toLocaleString('pt-BR')} label="Mensagens fora do horário" sub={`respondidas à noite/fim de semana em ${m.conversasForaDoHorario} ${m.conversasForaDoHorario === 1 ? 'conversa' : 'conversas'} — 24/7`} color="#F43F5E" />
                     </div>
 
@@ -199,7 +199,7 @@ export default function RelatorioResultados() {
                             )}
                             {m.tempoMedio != null && (
                                 <li style={{ fontSize: 15, lineHeight: 1.5, color: 'rgba(255,255,255,0.85)' }}>
-                                    Respondeu em <b style={{ color: '#fff' }}>{m.tempoMedio} minuto{m.tempoMedio === 1 ? '' : 's'}</b> em média. Lead respondido na hora converte muito mais do que lead que espera horas por um humano.
+                                    Respondeu em <b style={{ color: '#fff' }}>{m.tempoMedio < 1 ? 'menos de 1 minuto' : `${Math.round(m.tempoMedio)} minuto${Math.round(m.tempoMedio) === 1 ? '' : 's'}`}</b> em média. Lead respondido na hora converte muito mais do que lead que espera horas por um humano.
                                 </li>
                             )}
                             {m.foraDoHorario > 0 && (

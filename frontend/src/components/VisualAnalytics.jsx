@@ -11,6 +11,7 @@ import {
     Activity, Flame, RefreshCw, Cpu, MapPin,
 } from 'lucide-react'
 import PeriodSelector from './PeriodSelector'
+import { ehReuniao, FILTRO_REUNIAO, ESTAGIOS } from '@/lib/metricas'
 
 function getDateFrom(periodo) {
     if (periodo === 'all') return null
@@ -84,20 +85,20 @@ function computeMetrics(leads, instances, realTotalLeads, realAgendados = 0, rea
 
     // 🎯 AGENDAMENTOS REAIS: count vem do servidor (bypassa limite de 1000 rows do Supabase)
     // realAgendados é calculado com query server-side em fetchData
-    const totalAgendamentosReais = realAgendados || leadsValidos.filter(l =>
-        l.status === 'booked'        ||
-        l.status === 'closed'        ||
-        l.calendly_booked === true   ||
-        (l.current_stage || 0) >= 4
-    ).length
+    const totalAgendamentosReais = realAgendados || leadsValidos.filter(ehReuniao).length
 
     // Funil usa valores server-side para Capturados e Abordados (bypassa limite de 1000 rows)
-    const emConversaQtd = sc.contact + sc.waiting_analysis + sc.booked + sc.closed
+    // Conversando = respondeu de fato (avançou de estágio, mandou fatura ou marcou). Antes somava
+    // todo status 'contact', que inclui quem só recebeu a 1ª mensagem e nunca respondeu.
+    const emConversaQtd = leadsValidos.filter(l =>
+        (l.current_stage || 0) > 0 || l.status === 'waiting_analysis' || ehReuniao(l)
+    ).length
     const funnel = [
         { etapa: 'Alcançadas',   qtd: realTotalLeads || leadsValidos.length,    fill: NEON.blue    },
         { etapa: 'Contatadas',   qtd: realAbordados  || leadsValidos.filter(l => !!l.last_contact_at).length, fill: NEON.cyan },
         { etapa: 'Conversando',  qtd: emConversaQtd,                             fill: '#6366f1'   },
-        { etapa: 'Negociação',   qtd: sc.waiting_analysis + sc.booked + sc.closed, fill: NEON.violet },
+        // Negociação = IA já propôs horário (estágio 4+), lead mandou fatura, ou marcou.
+        { etapa: 'Negociação',   qtd: leadsValidos.filter(l => (l.current_stage || 0) >= 4 || l.status === 'waiting_analysis' || ehReuniao(l)).length, fill: NEON.violet },
         { etapa: 'Reuniões',     qtd: totalAgendamentosReais,                    fill: NEON.emerald },
     ]
     // ── 3. Nichos (top 6) ──
@@ -144,15 +145,13 @@ function computeMetrics(leads, instances, realTotalLeads, realAgendados = 0, rea
     // ── 6. Funil SPIN por estágio (0-5) ──
     // Usa contagem CUMULATIVA: um lead no stage 4 também conta nos stages 0-3
     // Isso representa o fluxo histórico ("quantos chegaram a cada stage") não o snapshot atual
-    const estagioLabels = ['Qualificação', 'Situação', 'Dor/Implicação', 'Solução', 'Agendamento', 'Fechamento']
+    const estagioLabels = ESTAGIOS
     const estagioCount = [0, 0, 0, 0, 0, 0]
     leadsValidos.forEach(l => {
         if (l.status === 'new') return
-        // Booked/closed/calendly_booked → força estágio 4+ para unificar com o card "Agendamentos"
-        const isBooked = l.status === 'booked' || l.status === 'closed' || l.calendly_booked === true
-        const stage = isBooked
-            ? Math.max(Math.min(l.current_stage || 0, 5), 4)
-            : Math.min(l.current_stage || 0, 5)
+        // Reunião de verdade → estágio 5 ("Reunião marcada"), mesmo se a IA não gravou o 5.
+        // Assim a última passagem bate com o card "Reuniões Marcadas".
+        const stage = ehReuniao(l) ? 5 : Math.min(l.current_stage || 0, 4)
         // Acumula: um lead no stage 3 passou pelos stages 0, 1, 2 e 3
         for (let i = 0; i <= stage; i++) estagioCount[i]++
     })
@@ -196,19 +195,16 @@ function computeMetrics(leads, instances, realTotalLeads, realAgendados = 0, rea
     }
 
     // ── 12. Taxa de Engajamento Real ──
-    // Fórmula: (Em Conversa + Pausados + Hot + Agendados) / Total Abordados
+    // Engajou = respondeu e avançou (estágio > 0), mandou fatura, está quente ou marcou reunião.
+    // Antes contava todo status 'contact', e todo lead contatado tem esse status: dava sempre 100%.
     const leadsAbordados = leadsValidos.filter(l => !!l.last_contact_at)
     const leadsEngajados = leadsAbordados.filter(l =>
         l.status !== 'dead' &&
         (
-            l.status === 'contact'          ||
+            (l.current_stage || 0) > 0      ||
             l.status === 'waiting_analysis' ||
-            l.is_paused === true            ||
             l.lead_temperature === 'hot'    ||
-            l.status === 'booked'           ||
-            l.status === 'closed'           ||
-            l.calendly_booked === true      ||
-            (l.current_stage || 0) >= 4
+            ehReuniao(l)
         )
     )
     const engagementRate = leadsAbordados.length > 0
@@ -284,8 +280,8 @@ function computeMetrics(leads, instances, realTotalLeads, realAgendados = 0, rea
         if (!canalGroups[canal]) canalGroups[canal] = { contatadas: 0, conversando: 0, reunioes: 0 }
         const g = canalGroups[canal]
         g.contatadas++
-        const isBooked = l.status === 'booked' || l.status === 'closed' || l.calendly_booked === true || (l.current_stage || 0) >= 4
-        const engajou = l.status === 'contact' || l.status === 'waiting_analysis' || (l.current_stage || 0) > 0
+        const isBooked = ehReuniao(l)
+        const engajou = l.status === 'waiting_analysis' || (l.current_stage || 0) > 0
         if (isBooked) g.reunioes++
         else if (engajou) g.conversando++
     })
@@ -472,11 +468,13 @@ export default function VisualAnalytics() {
             let countQ = supabase.from('leads').select('*', { count: 'exact', head: true }).or(orFilter)
             if (dateFrom) countQ = countQ.gte('created_at', dateFrom)
 
-            // Agendamentos: sem filtro de data — são conversões acumuladas (booked é permanente)
+            // Reuniões: MESMO recorte de período das Alcançadas/Contatadas (leads criados no período).
+            // Antes era all-time contra Contatadas do período, e a conversão passava de 100%.
             let agendQ = supabase.from('leads').select('*', { count: 'exact', head: true })
                 .or(orFilter)
                 .not('status', 'in', '(invalid,blacklisted,error)')
-                .or('status.eq.booked,status.eq.closed,calendly_booked.eq.true,current_stage.gte.4')
+                .or(FILTRO_REUNIAO)
+            if (dateFrom) agendQ = agendQ.gte('created_at', dateFrom)
 
             let aborQ = supabase.from('leads').select('*', { count: 'exact', head: true })
                 .or(orFilter)

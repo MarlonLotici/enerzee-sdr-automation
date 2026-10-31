@@ -4262,10 +4262,20 @@ async function loopAuditor(agendarProximo = true) {
         // Backend usa service_role; o dashboard filtra por user_id, então varrer todos
         // os tenants aqui é seguro e aumenta a cobertura.
         const AUDIT_LIMITE = parseInt(process.env.AUDITOR_LIMITE_CICLO, 10) || 20;
+        // Elegível: conversa encerrada, reunião marcada (inclusive só calendly_booked) OU conversa
+        // parada há AUDITOR_DIAS_PARADA dias. Antes só os 4 status finais: conta receptiva (inbound)
+        // nunca chega neles, o lead fica em 'contact' para sempre e o QA ficava vazio.
+        const DIAS_PARADA = parseInt(process.env.AUDITOR_DIAS_PARADA, 10) || 3;
+        const corte = new Date(Date.now() - DIAS_PARADA * 86400000).toISOString();
         const { data: leadsParaAuditar } = await supabase
             .from('leads')
-            .select('id, name, whatsapp_id, instance_id, status, niche')
-            .in('status', ['booked', 'dead', 'invalid', 'closed'])
+            .select('id, name, whatsapp_id, instance_id, user_id, status, niche')
+            .or([
+                'status.in.(booked,dead,invalid,closed)',
+                'calendly_booked.eq.true',
+                `and(status.in.(contact,waiting_analysis),last_contact_at.lt."${corte}")`,
+                `and(status.in.(contact,waiting_analysis),last_contact_at.is.null,created_at.lt."${corte}")`,
+            ].join(','))
             .or('is_audited.eq.false,is_audited.is.null')
             .limit(AUDIT_LIMITE);
 
@@ -4281,7 +4291,13 @@ async function loopAuditor(agendarProximo = true) {
             let errosCriticosEncontrados = [];
 
             for (const lead of leadsParaAuditar) {
-                const histRaw = await db.getHistory(lead.whatsapp_id, lead.instance_id);
+                // Histórico pelo TENANT do lead: lead do site/chip removido tem instance_id nulo e o
+                // getHistory sem chip não isola por cliente (misturaria conversas de outra conta).
+                const histRaw = lead.user_id
+                    ? ((await supabase.from('messages').select('role, content')
+                        .eq('whatsapp_id', lead.whatsapp_id).eq('user_id', lead.user_id)
+                        .order('created_at', { ascending: false }).limit(20)).data || []).reverse()
+                    : await db.getHistory(lead.whatsapp_id, lead.instance_id);
 
                 const hasLeadReply = histRaw?.some(m => m.role === 'user');
                 if (!histRaw || histRaw.length <= 2 || !hasLeadReply) {
@@ -4308,7 +4324,7 @@ async function loopAuditor(agendarProximo = true) {
 
                 // Emite para o dashboard em tempo real — apenas para o dono da instância
                 if (ioSocket) {
-                    const auditUserId = sessions.get(lead.instance_id)?.userId;
+                    const auditUserId = lead.user_id || sessions.get(lead.instance_id)?.userId;
                     if (auditUserId) {
                         ioSocket.to(`user:${auditUserId}`).emit('audit_complete', {
                             leadId:   lead.id,
@@ -6254,6 +6270,9 @@ module.exports = {
             await supabase.from('leads').update({ instance_id: WEB_INSTANCE_ID }).eq('id', lead.id).then(() => {}, () => {});
             lead.instance_id = WEB_INSTANCE_ID;
         }
+        // Marca o contato (a IA responde logo abaixo). Sem isso o lead do site ficava com
+        // last_contact_at nulo e não entrava em "Contatadas" nem nos gráficos de disparo.
+        if (lead.id) await supabase.from('leads').update({ last_contact_at: new Date().toISOString() }).eq('id', lead.id).then(() => {}, () => {});
 
         await db.saveMessage(waId, 'user', texto, null, USER_ID, 'web').catch(() => {});
 

@@ -2,6 +2,7 @@ import React, { useState, useEffect, useCallback, useRef } from 'react'
 import { createPortal } from 'react-dom'
 import { supabase } from '@/lib/supabase'
 import PeriodSelector from './components/PeriodSelector'
+import { ehReuniao, ESTAGIOS, formatarMinutos } from '@/lib/metricas'
 
 function getDateFrom(periodo) {
     if (periodo === 'all') return null
@@ -182,14 +183,16 @@ const carregarDados = useCallback(async () => {
 
             const { data: instancias } = await supabase
                 .from('instances')
-                .select('id, name, whatsapp_status, daily_limit, whatsapp_provider, inbound_only, somente_receptivo')
+                .select('id, name, whatsapp_status, daily_limit, whatsapp_provider, inbound_only')
                 .eq('user_id', uid)
+            // (pedia também 'somente_receptivo', coluna que não existe: a query inteira falhava, a
+            // Saúde dos Chips dizia "nenhum chip" e o painel caía no modo disparo por engano.)
 
             // 📥 Conta 100% receptiva: todos os chips são oficiais/inbound. Nesse modo o painel troca
             // a linguagem de DISPARO (que não existe aqui) por CONVERSAS recebidas. Evita o "Disparos
             // Hoje" sempre zerado e a "Saúde dos Chips" com barra de cota de envio sem sentido.
             const contaInbound = (instancias || []).length > 0 && (instancias || []).every(i =>
-                i.whatsapp_provider === 'official' || i.inbound_only === true || i.somente_receptivo === true
+                i.whatsapp_provider === 'official' || i.inbound_only === true
             )
 
             // instancias segue sendo buscada só pra alimentar os cards de saúde de chip (chipsSaude).
@@ -232,33 +235,10 @@ const carregarDados = useCallback(async () => {
                 if (l.whatsapp_id) mapaLeadJid[l.id] = l.whatsapp_id 
             })
 
-            // === AGENDAMENTOS REAIS — Regra blindada ===
-            // 🎯 BÔNUS: detecta agendamentos verbais procurando padrões na última mensagem da IA
-            // Ex: "amanhã às 14h", "quinta às 10h", "pode ser segunda às 15h"
-            const padroesAgendamentoVerbal = /(amanh[ãa]|segunda|ter[çc]a|quarta|quinta|sexta|s[áa]bado|domingo|hoje)\s*(?:às|as|de)?\s*\d{1,2}\s*(?:h|:|hr|horas)/i
-            
-            const ultimaMsgAssistantPorLead = {}
-            mensagens?.forEach(m => {
-                if (m.role !== 'assistant') return
-                if (!ultimaMsgAssistantPorLead[m.whatsapp_id] || 
-                    new Date(m.created_at) > new Date(ultimaMsgAssistantPorLead[m.whatsapp_id].created_at)) {
-                    ultimaMsgAssistantPorLead[m.whatsapp_id] = m
-                }
-            })
-
-            const agendamentosReais = leads?.filter(l => {
-                // Regra 1: status booked
-                if (l.status === 'booked') return true
-                // Regra 2: Calendly confirmou
-                if (l.calendly_booked === true) return true
-                // Regra 3: chegou no estágio 4 ou 5 do funil
-                if ((l.current_stage || 0) >= 4) return true
-                // Regra 4 (BÔNUS): última mensagem da IA pro lead menciona dia/horário
-                const ultimaMsg = ultimaMsgAssistantPorLead[l.whatsapp_id]
-                if (ultimaMsg && padroesAgendamentoVerbal.test(ultimaMsg.content || '')) return true
-                
-                return false
-            }) || []
+            // === AGENDAMENTOS REAIS — mesma regra de todas as telas (lib/metricas) ===
+            // Antes também contava estágio 4 (só horário proposto) e "IA citou dia/hora na última
+            // mensagem", o que inflava as reuniões.
+            const agendamentosReais = leads?.filter(ehReuniao) || []
             const agendados = agendamentosReais.length
 
             // === KPIs PRINCIPAIS ===
@@ -390,7 +370,7 @@ const carregarDados = useCallback(async () => {
                     }
                 }
             }
-            const tempoMedioResposta = contTempos > 0 ? Math.round(somaTempos / contTempos) : null
+            const tempoMedioResposta = contTempos > 0 ? somaTempos / contTempos : null // sem arredondar: formatarMinutos cuida
 
             // === TEMPERATURA DOS LEADS ===
             const tempCounts = { hot: 0, warm: 0, cold: 0, dead: 0 }
@@ -402,7 +382,7 @@ const carregarDados = useCallback(async () => {
             // === FUNIL SPIN (0-5) — cumulativo ===
             // Um lead no stage 4 passou pelos stages 0,1,2,3 — conta em todos eles
             // Assim stages 3 e 4 não ficam zerados só porque os leads avançaram para 5
-            const spinLabels = ['Qualificação', 'Situação', 'Dor', 'Solução', 'Agendamento', 'Fechamento']
+            const spinLabels = ESTAGIOS
             const spinCores  = [CORES.slate, CORES.azul, CORES.ciano, CORES.roxo, CORES.amarelo, CORES.verde]
             const spinCounts = [0, 0, 0, 0, 0, 0]
             leads?.forEach(l => {
@@ -497,7 +477,7 @@ const carregarDados = useCallback(async () => {
                     ? <KpiCard icon={Zap} label="Conversas Hoje" value={d?.kpis.conversasHoje || 0} sub="contatos que escreveram hoje" color={CORES.azul} info="Contatos distintos que mandaram mensagem hoje. Em modo receptivo (inbound) não há disparo frio — a entrada é o cliente que chega." />
                     : <KpiCard icon={Zap} label="Disparos Hoje" value={d?.kpis.disparosHoje || 0} sub={`${d?.kpis.leadsNaFila || 0} na fila`} color={CORES.azul} info="Leads disparados hoje. O subtítulo mostra quantos leads com status 'new' ainda aguardam disparo na fila." />
                 }
-                <KpiCard icon={Clock} label="Tempo Médio Resposta" value={d?.kpis.tempoMedioResposta ? `${d.kpis.tempoMedioResposta}min` : '--'} sub="do contato à resposta da IA" color={CORES.ciano} info="Tempo médio entre a mensagem do contato e a primeira resposta da IA, por conversa (capado em 24h). Quanto menor, mais rápido o atendimento." />
+                <KpiCard icon={Clock} label="Tempo Médio Resposta" value={formatarMinutos(d?.kpis.tempoMedioResposta) ?? '--'} sub="do contato à resposta da IA" color={CORES.ciano} info="Tempo médio entre a mensagem do contato e a primeira resposta da IA, por conversa (capado em 24h). Quanto menor, mais rápido o atendimento." />
                 <KpiCard icon={Flame} label="Leads Hot"            value={d?.kpis.tempCounts?.hot || 0}  sub={`${d?.kpis.emFollowUp || 0} em follow-up`}       color={CORES.vermelho} info="Leads marcados como 'hot' pela IA. O subtítulo mostra quantos estão recebendo follow-up ativo no momento." />
                 <KpiCard icon={Bot}   label="Robôs Detectados"     value={d?.kpis.leadsRobo || 0}        sub="pausados automaticamente"                         color={CORES.slate}    info="Leads únicos onde a IA detectou autoresposta nos últimos 30 dias e pausou a conversa." />
             </div>
