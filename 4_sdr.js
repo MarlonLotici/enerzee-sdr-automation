@@ -98,6 +98,7 @@ function identificarArtigo(nome) {
 // 👤 Identidade/nome (funções puras) — movidas para lib/textPuros.js pra serem testáveis sem
 // subir Redis/BullMQ. Mesma lógica, só mudou de arquivo.
 const { extrairNomeHumano, saudacaoPrimeiroNome, extrairNomeDeclarado, empresaConfiavelDoLead } = require('./lib/textPuros');
+const { cortarPerguntasEmpilhadas } = require('./lib/umaPergunta');
 const { dividirEmBaloes } = require('./lib/baloes');
 const { semTravessao } = require('./lib/semTravessao');
 // 📅 Confirmação diária de reuniões via Google Agenda (feature opt-in por tenant).
@@ -1109,7 +1110,12 @@ async function resolverPromptCompleto(promptBase, contextoLead, instanceData, hi
     // antes do lead responder. Sem esse aviso, a IA aplica o Passo 1 do roteiro de qualificação
     // como se já tivesse se apresentado, soando como "oi, que bom que me atendeu" fora de contexto.
     const jaFalouAntes = historico.some(m => m.role === 'assistant');
-    const secaoAcolhidaInbound = jaFalouAntes ? '' : `
+    // Conversa em andamento: o LLM tendia a reabrir cada resposta com "Oi" + reapresentação
+    // ("Oi Vini, sou a Sofia da Antix...") mesmo já tendo se apresentado (visto em 2026-11-02).
+    const secaoAcolhidaInbound = jaFalouAntes ? `
+
+[CONVERSA EM ANDAMENTO]
+Você já falou com este lead nesta conversa. Não cumprimente de novo ("Oi", "tudo bem?") e não se reapresente (seu nome, a ${companyName}): continue de onde parou e responda primeiro o que ele acabou de dizer ou perguntar. Exceção: se ele voltou depois de muito tempo e te cumprimentou, responda o cumprimento de forma breve.` : `
 
 [PRIMEIRO CONTATO — O LEAD FALOU PRIMEIRO]
 Ele te procurou por conta própria — você nunca abriu essa conversa antes. Não presuma que ele já sabe quem você é ou por que está falando com você. NÃO dispare a pergunta de qualificação do roteiro (Passo 1) nesta primeira resposta.
@@ -2183,14 +2189,13 @@ if (matchClima) updates.sentiment = matchClima[1].toLowerCase();
 
     // 🚦 TRAVA "1 PERGUNTA POR MENSAGEM": o prompt proíbe empilhar perguntas, mas o LLM às vezes
     // manda 2-3 de uma vez (ex.: "recebem inbound? como é o follow-up? perde oportunidade?").
-    // Se houver 2+ "?" e NÃO houver link de agendamento, corta tudo depois da 1ª pergunta.
-    // (Com link presente, deixa passar — é o CTA de fechamento, não qualificação empilhada.)
+    // Com 2+ perguntas reais e sem link, corta depois da 1ª. "tudo bem?" de cumprimento NÃO conta
+    // (antes contava e a resposta virava só "Oi, tudo bem?") — ver lib/umaPergunta.js.
     {
-        const nPerguntas = (textoLimpo.match(/\?/g) || []).length;
-        const temLink = /https?:\/\//i.test(textoLimpo);
-        if (nPerguntas > 1 && !temLink) {
-            textoLimpo = textoLimpo.slice(0, textoLimpo.indexOf('?') + 1).trim();
-            console.log(`🚦 [1-PERGUNTA] ${nPerguntas} perguntas empilhadas — cortado após a 1ª.`);
+        const corte = cortarPerguntasEmpilhadas(textoLimpo);
+        if (corte.cortado) {
+            textoLimpo = corte.texto;
+            console.log(`🚦 [1-PERGUNTA] ${corte.perguntas} perguntas empilhadas — cortado após a 1ª real.`);
         }
     }
 
