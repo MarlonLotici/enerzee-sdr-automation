@@ -3,6 +3,8 @@
 --  Supabase → SQL Editor → colar tudo → Run. Idempotente: pode rodar de novo.
 --    Seções 1–4: PERFORMANCE (índices + RLS sem recálculo por linha)
 --    Seção 5:    COLUNAS NOVAS em leads (marcos da pausa humana + referral do anúncio)
+--    Seção 6:    número que recebe os AVISOS de lead novo / reunião (46 99920-1690)
+--    Seção 7:    ÁUDIO no painel (coluna media_path + bucket privado 'audios')
 -- ============================================================================
 --  Contexto: banco Nano com CPU 96% e Disk IO Balance 7% com só 45 MB de dados.
 --  Consultas simples levavam 10–40s. Três causas, todas corrigidas aqui:
@@ -78,6 +80,26 @@ ALTER TABLE public.leads ADD COLUMN IF NOT EXISTS ad_referral jsonb;
 ALTER TABLE public.leads ADD COLUMN IF NOT EXISTS ad_source_id text;
 ALTER TABLE public.leads ADD COLUMN IF NOT EXISTS ad_ctwa_clid text;
 CREATE INDEX IF NOT EXISTS idx_leads_ad_source ON public.leads (ad_source_id) WHERE ad_source_id IS NOT NULL;
+
+-- ---------- 6. AVISO NO WHATSAPP DO DONO (lead novo / reunião agendada) ----------
+--   alerta_whatsapp → número que recebe os avisos (pedido: 46 99920-1690)
+--   alerta_template → nome de um template APROVADO na Meta, usado fora da janela de 24h (opcional)
+ALTER TABLE public.instances ADD COLUMN IF NOT EXISTS alerta_whatsapp text;
+ALTER TABLE public.instances ADD COLUMN IF NOT EXISTS alerta_template text;
+UPDATE public.instances SET alerta_whatsapp = '5546999201690'
+ WHERE id = '290a03b9-85aa-4afb-9527-1c2453588e66' AND alerta_whatsapp IS NULL;
+
+-- ---------- 7. ÁUDIO NO PAINEL (player em vez de só transcrição) ----------
+-- Caminho do arquivo no Storage (bucket privado 'audios', pasta = user_id do tenant).
+ALTER TABLE public.messages ADD COLUMN IF NOT EXISTS media_path text;
+INSERT INTO storage.buckets (id, name, public)
+VALUES ('audios', 'audios', false)
+ON CONFLICT (id) DO NOTHING;
+-- O painel só consegue gerar link (assinado, 1h) dos áudios da PRÓPRIA conta.
+-- O backend grava com a service key (ignora RLS).
+DROP POLICY IF EXISTS audios_select_own ON storage.objects;
+CREATE POLICY audios_select_own ON storage.objects FOR SELECT TO authenticated
+    USING (bucket_id = 'audios' AND (storage.foldername(name))[1] = (select auth.uid())::text);
 
 -- ---------- Conferência (opcional): deve listar os índices novos ----------
 -- SELECT indexname FROM pg_indexes WHERE schemaname = 'public' AND tablename IN ('messages','leads') ORDER BY 1;

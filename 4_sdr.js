@@ -102,6 +102,7 @@ const { cortarPerguntasEmpilhadas } = require('./lib/umaPergunta');
 const { removerMarcadoresInternos } = require('./lib/marcadoresInternos');
 const { avaliarPausa, montarSecaoRetomadaHumana, PAUSA_HUMANA_MIN } = require('./lib/pausaHumana');
 const { montarPromptSinalAgendamento, interpretarSinalAgendamento } = require('./lib/sinalAgendamento');
+const { normalizarNumeroAviso, ehNumeroDoDono, dentroDaJanela24h, montarAvisoNovoLead, montarAvisoReuniao } = require('./lib/avisoDono');
 const { ehEncerramento, jaSeDespediu, montarDespedida, agradeceu: leadAgradeceu, repeteUltimaDaIA } = require('./lib/posAgendamento');
 const { dividirEmBaloes } = require('./lib/baloes');
 const { semTravessao } = require('./lib/semTravessao');
@@ -1987,7 +1988,8 @@ async function enviarAudioTTS(sock, remoteJid, texto, lead, instanceId, voz = nu
             });
         }
 
-        await db.saveMessage(lead.whatsapp_id, 'assistant', `[AUDIO_TTS] ${texto}`, instanceId);
+        const _mediaPathTts = await guardarAudio(lead.user_id || regras?.user_id, lead.whatsapp_id, buffer, 'audio/ogg');
+        await db.saveMessage(lead.whatsapp_id, 'assistant', `[AUDIO_TTS] ${texto}`, instanceId, null, 'whatsapp', _mediaPathTts ? { media_path: _mediaPathTts } : null);
         return true;
     } catch (err) {
         console.error(`❌ [TTS] Falha:`, err.message);
@@ -4479,6 +4481,89 @@ function _montarSlotNoDia(baseISO, h, min, duracaoMin) {
     };
 }
 
+// 🎙️ Guarda o áudio (do lead ou da Sofia) no bucket PRIVADO 'audios' (pasta = user_id do tenant) pra
+// tocar no painel. Nunca trava o fluxo: falhou/demorou >8s → segue só com a transcrição.
+async function guardarAudio(userId, jid, buffer, mime = 'audio/ogg') {
+    if (!buffer || !userId) return null;
+    const caminho = `${userId}/${String(jid).split('@')[0]}/${Date.now()}-${Math.random().toString(36).slice(2, 8)}.ogg`;
+    try {
+        const envio = supabase.storage.from('audios').upload(caminho, buffer, { contentType: String(mime || 'audio/ogg').split(';')[0], upsert: false });
+        const { error } = await Promise.race([envio, new Promise((r) => setTimeout(() => r({ error: { message: 'timeout 8s' } }), 8000))]);
+        if (error) { console.warn(`⚠️ [ÁUDIO] Não guardou o áudio (${error.message}) — segue só com a transcrição.`); return null; }
+        return caminho;
+    } catch (e) {
+        console.warn(`⚠️ [ÁUDIO] Falha ao guardar áudio: ${e.message}`);
+        return null;
+    }
+}
+
+// ⚙️ Config extra do chip (colunas novas do SQL 2026-11-05 + waba_id) lida À PARTE do getInstanceRules:
+// se a coluna ainda não existe, só esta leitura falha (cai no env) — o cérebro do chip segue intacto.
+const _cacheCfgExtra = new Map(); // instanceId → { ts, cfg }
+async function cfgExtraDaInstancia(instanceId) {
+    if (!instanceId) return {};
+    const c = _cacheCfgExtra.get(instanceId);
+    if (c && Date.now() - c.ts < 10 * 60 * 1000) return c.cfg;
+    let cfg = {};
+    try {
+        const r = await supabase.from('instances').select('alerta_whatsapp, alerta_template, waba_id').eq('id', instanceId).maybeSingle();
+        if (!r.error && r.data) cfg = r.data;
+        else {
+            const r2 = await supabase.from('instances').select('waba_id').eq('id', instanceId).maybeSingle();
+            if (!r2.error && r2.data) cfg = r2.data;
+        }
+    } catch (_) {}
+    _cacheCfgExtra.set(instanceId, { ts: Date.now(), cfg });
+    return cfg;
+}
+
+// 📈 CAPI WhatsApp com o WABA do chip (ou META_WABA_ID/WABA_ID do env). Fire-and-forget.
+function enviarCapiWhatsApp(instanceData, evento) {
+    (async () => {
+        const extra = await cfgExtraDaInstancia(instanceData?.id);
+        await metaCapi.enviarEventoWhatsApp({ ...evento, wabaId: extra.waba_id || undefined });
+    })().catch(() => {});
+}
+
+// 🔔 AVISO NO WHATSAPP DO DONO (lib/avisoDono.js). Número: instances.alerta_whatsapp (SQL 2026-11-05) ou
+// env ALERTA_LEAD_WHATSAPP. Dentro da janela de 24h (o dono falou com o número) vai como texto; fora
+// dela, só um template aprovado entrega (instances.alerta_template ou env ALERTA_TEMPLATE).
+async function avisarDono(instanceData, aviso) {
+    const extra = await cfgExtraDaInstancia(instanceData?.id);
+    const numero = normalizarNumeroAviso(extra.alerta_whatsapp || process.env.ALERTA_LEAD_WHATSAPP);
+    if (!numero || instanceData?.whatsapp_provider !== 'official' || !instanceData?.cloud_api_key) return;
+    const cfg = { apiKey: instanceData.cloud_api_key, baseUrl: instanceData.cloud_base_url };
+    let janela = false;
+    try {
+        const { data } = await supabase.from('messages').select('created_at')
+            .in('whatsapp_id', regrasCampanha.variantesJidBR(`${numero}@s.whatsapp.net`)).eq('role', 'user')
+            .order('created_at', { ascending: false }).limit(1);
+        janela = dentroDaJanela24h(data?.[0]?.created_at);
+    } catch (_) {}
+    const template = extra.alerta_template || process.env.ALERTA_TEMPLATE;
+    try {
+        if (!janela && template) {
+            await cloudApiTransport.enviarTemplate(cfg, numero, template, process.env.ALERTA_TEMPLATE_IDIOMA || 'pt_BR',
+                [{ type: 'body', parameters: aviso.params.map((t) => ({ type: 'text', text: t })) }]);
+        } else {
+            await cloudApiTransport.enviarTexto(cfg, numero, aviso.texto);
+            if (!janela) console.warn('⚠️ [AVISO-DONO] Fora da janela de 24h e sem template aprovado — a Meta pode não entregar. Configure ALERTA_TEMPLATE.');
+        }
+        console.log(`🔔 [AVISO-DONO] ${aviso.titulo} → …${numero.slice(-4)} (${janela ? 'texto' : (template ? 'template' : 'texto fora da janela')}).`);
+    } catch (e) {
+        console.warn(`⚠️ [AVISO-DONO] Falha ao avisar: ${e.message}`);
+    }
+}
+// Não avisa sobre os testes do próprio dono (lead = número do aviso). Fire-and-forget.
+function avisarDonoSeNaoForEle(instanceData, jidLead, aviso) {
+    (async () => {
+        const extra = await cfgExtraDaInstancia(instanceData?.id);
+        const numero = normalizarNumeroAviso(extra.alerta_whatsapp || process.env.ALERTA_LEAD_WHATSAPP);
+        if (!numero || ehNumeroDoDono(jidLead, numero)) return;
+        await avisarDono(instanceData, aviso);
+    })().catch(() => {});
+}
+
 // 🧠 CHECAGEM POR CONTEXTO do pedido de agendamento (ver lib/sinalAgendamento.js). Lê as últimas
 // mensagens + quanto tempo o lead levou pra responder a nossa última fala e pergunta ao LLM se é uma
 // PESSOA pedindo pra marcar conosco, uma RESPOSTA AUTOMÁTICA, ou outra coisa. Falha → null (não propõe).
@@ -4624,6 +4709,14 @@ async function orquestrarAgendamento(lead, ultimaMsg, instanceData, userId, inte
                 value: valorLead, currency: 'BRL',
                 eventSourceUrl: 'https://antix-ia.com', actionSource: 'website',
             }).catch(() => {});
+        }
+        // 🔔 Reunião NOVA: avisa o dono no WhatsApp + manda pro Meta que o clique do anúncio agendou.
+        if (!remarcou) {
+            avisarDonoSeNaoForEle(instanceData, lead.whatsapp_id, montarAvisoReuniao({ nome: lead.dono || lead.name, jid: lead.whatsapp_id, quando: slot.label }));
+            if (lead.ad_ctwa_clid) {
+                enviarCapiWhatsApp(instanceData, { eventName: process.env.META_EVENTO_AGENDOU || 'QualifiedLead', ctwaClid: lead.ad_ctwa_clid,
+                    eventId: `sched:${lead.id}`, value: parseFloat(process.env.META_SCHEDULE_VALUE) || 450 });
+            }
         }
         const avisoEmail = lead.email ? ' (também mandei o convite no seu email 📩)' : '';
         const linkTxt = ev.meetLink ? `\n[QUEBRA]\nSegue o link da nossa reunião: ${ev.meetLink}${avisoEmail}` : '';
@@ -6316,10 +6409,12 @@ module.exports = {
         // 🎙️ ÁUDIO (voice note): a Cloud API só manda o ID da mídia. Baixa da Meta e transcreve
         // com o Whisper (o Baileys já fazia isso com o buffer do socket). Sem isso, o áudio chega
         // vazio e a IA ignora — foi exatamente o bug observado no 1º teste oficial.
+        let _audioRecebido = null; // 🎙️ buffer do áudio do lead → vira player no painel
         if (!norm.texto && norm.mediaId && ['audio', 'voice', 'ptt'].includes(norm.tipo)) {
             try {
                 const { buffer } = await cloudApiTransport.baixarMidia(
                     { apiKey: instanceData.cloud_api_key, baseUrl: instanceData.cloud_base_url }, norm.mediaId);
+                _audioRecebido = buffer;
                 const txt = await transcreverAudioIA(buffer);
                 if (txt) {
                     norm.texto = `(Áudio) ${txt}`;   // mesma convenção do caminho Baileys
@@ -6359,6 +6454,16 @@ module.exports = {
             if (errNovo || !novo) return { ok: false, motivo: 'falha_criar_lead', erro: errNovo?.message };
             lead = novo;
             console.log(`🌐 [INBOUND OFICIAL] Lead novo criado para ${cleanJid} (chip ${instanceId.slice(0,8)}).`);
+            // 🔔 Avisa o dono no WhatsApp (não avisa sobre os testes do próprio dono).
+            avisarDonoSeNaoForEle(instanceData, cleanJid, montarAvisoNovoLead({
+                nome: novo.name, jid: cleanJid, primeiraMsg: norm.texto,
+                origem: norm.referral ? `anúncio${norm.referral.headline ? ` "${norm.referral.headline}"` : ''}` : 'WhatsApp (orgânico)',
+            }));
+            // 📈 CAPI WhatsApp: o clique no anúncio virou lead (inerte sem credenciais).
+            if (norm.referral?.ctwa_clid) {
+                enviarCapiWhatsApp(instanceData, { eventName: process.env.META_EVENTO_LEAD || 'LeadSubmitted', ctwaClid: norm.referral.ctwa_clid,
+                    eventId: `lead:${novo.id}` });
+            }
             // 📡 Pipeline em tempo real — mesmo motivo do inbound orgânico (sem isso, só aparece no refresh).
             if (ioSocket && instanceData.user_id) {
                 ioSocket.to(`user:${instanceData.user_id}`).emit('new_lead', novo);
@@ -6379,8 +6484,9 @@ module.exports = {
             }
         }
 
-        // Salva a mensagem já (painel em tempo real + histórico completo pra IA).
-        await db.saveMessage(cleanJid, 'user', norm.texto, instanceId);
+        // Salva a mensagem já (painel em tempo real + histórico completo pra IA). Áudio → guardado pro player.
+        const _mediaPathIn = _audioRecebido ? await guardarAudio(instanceData.user_id, cleanJid, _audioRecebido, norm.mimeType) : null;
+        await db.saveMessage(cleanJid, 'user', norm.texto, instanceId, null, 'whatsapp', _mediaPathIn ? { media_path: _mediaPathIn } : null);
 
         // 📣 CAMPANHA: opt-out (LGPD) de quem recebeu campanha → nunca mais recebe, e a IA não responde.
         if (lead.ultima_campanha_at && regrasCampanha.ehOptOut(norm.texto)) {

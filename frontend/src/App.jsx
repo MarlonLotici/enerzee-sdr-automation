@@ -57,6 +57,8 @@ const playNotificationSound = () => {
 // --- Componentes Mapa ---
 
 import { supabase } from '@/lib/supabase'
+import { rotuloPausa, textoDoBalao } from '@/lib/pausaHumana'
+import AudioMensagem from './components/AudioMensagem'
     // --- COMPONENTES AUXILIARES DO MAPA --- //mudança
 function MapController({ center }) {
     const map = useMap();
@@ -535,7 +537,7 @@ if (session?.user?.id) checkBriefing()
         // Chip é efêmero; lead de chip removido tem instance_id=null. Filtrar por user_id garante que
         // nenhum lead entre em "limbo" quando o chip cai/é deletado, inclusive com zero chip conectado.
         const { data } = await supabase.from('leads')
-            .select('id, name, phone, status, niche, dono, cnpj, bairro, cep, porte, capital_social_numeric, whatsapp_id, instance_id, lat, lng, created_at, last_contact_at, is_paused, manual_pause, current_stage, lead_temperature, followup_count, opening_template, backup_phones, confirmacao_status')
+            .select('id, name, phone, status, niche, dono, cnpj, bairro, cep, porte, capital_social_numeric, whatsapp_id, instance_id, lat, lng, created_at, last_contact_at, is_paused, manual_pause, last_human_interaction, current_stage, lead_temperature, followup_count, opening_template, backup_phones, confirmacao_status')
             .eq('user_id', userId)
             .order('created_at', { ascending: false })
             .limit(10000);
@@ -897,8 +899,11 @@ if (session?.user?.id) checkBriefing()
         if (!text || !activeChat) return;
         setMessageInput('');
 
-        await supabase.from('leads').update({ is_paused: true, manual_pause: true }).eq('id', activeChat.id);
-        setActiveChat(prev => ({ ...prev, is_paused: true, manual_pause: true }));
+        // Pausa HUMANA (15 min, volta sozinha) — NÃO manual_pause: manual_pause é a pausa do botão, que só
+        // volta reativando. Antes este envio marcava manual_pause=true e a IA ficava muda pra sempre.
+        const agoraIso = new Date().toISOString();
+        await supabase.from('leads').update({ is_paused: true, last_human_interaction: agoraIso }).eq('id', activeChat.id);
+        setActiveChat(prev => ({ ...prev, is_paused: true, last_human_interaction: agoraIso }));
 
         try {
             const { data: { session: s } } = await supabase.auth.getSession();
@@ -2046,7 +2051,7 @@ return (
                     }`}
                     title={(activeChat.is_paused || activeChat.manual_pause) ? 'Clique para reativar a IA' : 'Clique para pausar a IA'}
                 >
-                    {(activeChat.is_paused || activeChat.manual_pause) ? '⏸️ IA PAUSADA' : '🟢 IA ATIVA'}
+                    {(activeChat.is_paused || activeChat.manual_pause) ? rotuloPausa(activeChat) : '🟢 IA ATIVA'}
                 </button>
                 {/* CRM Rápido — mock, funções futuras */}
                 <div className="flex items-center gap-1 ml-1 pl-1.5 border-l border-white/5">
@@ -2112,8 +2117,9 @@ return (
                                 }`}
                                 style={isLead ? {} : { backgroundColor: '#075E54', border: '1px solid rgba(255,255,255,0.08)' }}
                             >
+                                {msg.media_path && <AudioMensagem path={msg.media_path} />}
                                 <p className={`text-[11px] leading-relaxed ${isLead ? 'text-slate-200' : 'text-white'}`}>
-                                    {msg.content}
+                                    {textoDoBalao(msg.content)}
                                 </p>
                             </div>
                             <span className="text-[8px] mt-0.5 font-bold text-slate-600 px-1">

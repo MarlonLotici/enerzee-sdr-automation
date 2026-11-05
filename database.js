@@ -220,7 +220,9 @@ if (!estadoFinal && phonePuro) {
     // Resiliência: o campo `channel` só é incluído no insert quando NÃO é 'whatsapp'.
     // Assim o fluxo vivo de WhatsApp continua funcionando mesmo antes da coluna `channel`
     // existir no banco — só o canal email (novo, ainda não em produção) depende dela.
-    saveMessage: async (zapId, role, content, instanceId, userId = null, channel = 'whatsapp') => {
+    // extras: colunas opcionais (ex.: { media_path } do áudio). Se a coluna ainda não existir no banco
+    // (SQL não rodado), salva SEM os extras em vez de perder a mensagem.
+    saveMessage: async (zapId, role, content, instanceId, userId = null, channel = 'whatsapp', extras = null) => {
         // Resolve user_id via cache lazy — necessário para o RLS do frontend enxergar as mensagens
         const resolvedUserId = userId || await _resolverUserId(instanceId);
 
@@ -233,7 +235,15 @@ if (!estadoFinal && phonePuro) {
         };
         if (channel && channel !== 'whatsapp') row.channel = channel;
 
-        const { error } = await supabase.from('messages').insert([row]);
+        const temExtras = extras && typeof extras === 'object' && Object.keys(extras).length > 0;
+        if (temExtras) Object.assign(row, extras);
+
+        let { error } = await supabase.from('messages').insert([row]);
+        if (error && temExtras) {
+            console.warn(`[DB] Msg de ${zapId} salva sem extras (${Object.keys(extras).join(', ')}): ${error.message}`);
+            for (const k of Object.keys(extras)) delete row[k];
+            ({ error } = await supabase.from('messages').insert([row]));
+        }
 
         if (error) console.error(`[DB] Erro ao salvar msg de ${zapId} [uid:${resolvedUserId}]:`, error.message);
     },

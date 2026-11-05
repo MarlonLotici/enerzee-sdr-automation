@@ -1,5 +1,6 @@
 import React, { useState, useEffect, useCallback } from 'react'
 import { supabase } from '@/lib/supabase'
+import { minutosParaIAVoltar } from '@/lib/pausaHumana'
 import { Search, BrainCircuit, Clock, RefreshCw, Cpu, ChevronDown } from 'lucide-react'
 
 // ─── HELPERS ──────────────────────────────────────────────────────────────────
@@ -27,6 +28,10 @@ function resolveEstado(lead, ultimaMsg) {
     if (lead.manual_pause) {
         return { label: 'Pausado',         color: '#F43F5E', dot: '#F43F5E' }
     }
+    const mVolta = minutosParaIAVoltar(lead)
+    if (mVolta !== null) {
+        return { label: mVolta > 0 ? `IA volta em ${mVolta} min` : 'IA volta na próx. msg', color: '#38BDF8', dot: '#38BDF8' }
+    }
     if (lead.is_paused) {
         return { label: 'Intervenção',     color: '#F59E0B', dot: '#F59E0B' }
     }
@@ -41,7 +46,7 @@ function resolveEstado(lead, ultimaMsg) {
 }
 
 // ─── CARD DE CONVERSA ─────────────────────────────────────────────────────────
-function ConversaCard({ lead, ultimaMsg, isActive, onClick, onUpdate }) {
+function ConversaCard({ lead, ultimaMsg, isActive, onClick, onUpdate, doAnuncio = false }) {
     const estado   = resolveEstado(lead, ultimaMsg)
     const isUser   = ultimaMsg?.role === 'user'
     const preview  = limparPreview(ultimaMsg?.content)
@@ -156,6 +161,15 @@ function ConversaCard({ lead, ultimaMsg, isActive, onClick, onUpdate }) {
                         {estado.label}
                     </span>
                 </div>
+                {/* Badge de origem: chegou por anúncio (Click-to-WhatsApp) */}
+                {doAnuncio && (
+                    <div title="Chegou clicando num anúncio" style={{
+                        display: 'inline-flex', alignItems: 'center', gap: 3, marginLeft: 4,
+                        background: '#a855f718', border: '1px solid #a855f730', borderRadius: '999px', padding: '2px 6px',
+                    }}>
+                        <span style={{ fontSize: 8, fontWeight: 900, color: '#c084fc', textTransform: 'uppercase', letterSpacing: '0.1em' }}>📣 Anúncio</span>
+                    </div>
+                )}
                 {/* Badge de temperatura */}
                 {lead.lead_temperature && lead.lead_temperature !== 'cold' && (
                     <div style={{
@@ -338,6 +352,7 @@ function ConversaCard({ lead, ultimaMsg, isActive, onClick, onUpdate }) {
  */
 export default function ConversaList({ onSelect, activeId, socket, instances = [], selectedInstanceId = null }) {
     const [conversas, setConversas] = useState([])
+    const [idsAnuncio, setIdsAnuncio] = useState(() => new Set())
     const [busca,     setBusca]     = useState('')
     const [loading,   setLoading]   = useState(true)
     const [filtro,    setFiltro]    = useState('todos')
@@ -365,7 +380,7 @@ export default function ConversaList({ onSelect, activeId, socket, instances = [
 
            const { data: leads, error } = await supabase
     .from('leads')
-    .select('id, name, whatsapp_id, status, is_paused, manual_pause, last_contact_at, created_at, instance_id, dono, niche, bairro, phone, cnpj, capital_social_numeric, porte, current_stage, lead_temperature, internal_notes, followup_count, link_sent_at, calendly_booked')
+    .select('id, name, whatsapp_id, status, is_paused, manual_pause, last_human_interaction, last_contact_at, created_at, instance_id, dono, niche, bairro, phone, cnpj, capital_social_numeric, porte, current_stage, lead_temperature, internal_notes, followup_count, link_sent_at, calendly_booked')
     // 'booked'/'closed' incluídos: ao agendar/fechar, a conversa NÃO pode sumir da aba — você ainda
     // precisa falar com quem já marcou (confirmar, remarcar, tirar dúvida). Antes só contact/waiting.
     .in('status', ['contact', 'waiting_analysis', 'booked', 'closed'])
@@ -409,6 +424,12 @@ export default function ConversaList({ onSelect, activeId, socket, instances = [
             }
 
             setConversas(leads.map(lead => ({ lead, ultimaMsg: ultimaPorWa.get(lead.whatsapp_id) ?? null })))
+
+            // 📣 Quem veio de ANÚNCIO (referral do Click-to-WhatsApp). Consulta separada e tolerante: se a
+            // coluna ainda não existe (SQL de 2026-11-05 não rodado), só não mostra o selo.
+            const { data: doAnuncio, error: errAnuncio } = await supabase
+                .from('leads').select('id').eq('user_id', userId).not('ad_source_id', 'is', null).limit(500)
+            if (!errAnuncio) setIdsAnuncio(new Set((doAnuncio || []).map(l => l.id)))
         } finally {
             setLoading(false)
         }
@@ -665,6 +686,7 @@ conversasOrdenadas.forEach(item => {     // 👈 USA conversasOrdenadas, NÃO co
         isActive={lead.id === activeId}
         onClick={() => onSelect?.(lead)}
         onUpdate={fetchConversas}
+        doAnuncio={idsAnuncio.has(lead.id)}
     />
 ))}
                             </div>
