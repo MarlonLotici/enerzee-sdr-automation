@@ -499,7 +499,7 @@ export default function VisualAnalytics() {
 
     useEffect(() => {
         fetchData()
-        const id = setInterval(fetchData, 60_000)
+        const id = setInterval(() => { if (!document.hidden) fetchData() }, 60_000) // aba oculta não consulta
         return () => clearInterval(id)
     }, [periodo])
 

@@ -127,6 +127,24 @@ async function enviarAudio(config, jid, buffer, mimeType = 'audio/ogg') {
 
 // Converte o webhook (formato Meta Cloud API) no MESMO objeto normalizado do
 // baileysTransport, pra reusar toda a esteira do motor sem mudar a lógica de negócio.
+// 📣 Origem de ANÚNCIO (Click-to-WhatsApp): quando a pessoa chega por um anúncio do Instagram/
+// Facebook, a 1ª mensagem traz `referral` (id do anúncio, link, ctwa_clid = id do clique). Antes era
+// descartado → não dava pra saber qual lead veio de qual anúncio (nem mandar o clique pro CAPI).
+function extrairReferral(msg) {
+    const r = msg?.referral;
+    if (!r || typeof r !== 'object') return null;
+    const out = {
+        source_type: r.source_type || null,   // 'ad' | 'post'
+        source_id: r.source_id || null,       // id do anúncio/post
+        source_url: r.source_url || null,
+        ctwa_clid: r.ctwa_clid || null,       // id do clique (match key do CAPI)
+        headline: r.headline || null,
+        body: r.body ? String(r.body).slice(0, 300) : null,
+        media_type: r.media_type || null,
+    };
+    return Object.values(out).some(Boolean) ? out : null;
+}
+
 function normalizarInbound(webhookBody) {
     try {
         const value = webhookBody?.entry?.[0]?.changes?.[0]?.value;
@@ -156,6 +174,7 @@ function normalizarInbound(webhookBody) {
             texto,
             mediaId: midia?.id || null,
             mimeType: midia?.mime_type || null,
+            referral: extrairReferral(msg),
             raw: webhookBody,
         };
     } catch {
@@ -235,6 +254,7 @@ module.exports = {
     baixarMidia,
     marcarComoLido,
     normalizarInbound,
+    extrairReferral,
     nome: 'official',
     implementado: true,
     DEFAULT_BASE_URL,

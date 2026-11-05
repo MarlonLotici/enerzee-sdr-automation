@@ -372,7 +372,7 @@ function Funil({ campanha }) {
 
     useEffect(() => {
         const primeiro = setTimeout(carregar, 0)
-        const t = setInterval(carregar, 30000)
+        const t = setInterval(() => { if (!document.hidden) carregar() }, 30000) // aba oculta não consulta
         return () => { clearTimeout(primeiro); clearInterval(t) }
     }, [carregar])
 

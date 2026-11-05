@@ -101,6 +101,7 @@ const { extrairNomeHumano, saudacaoPrimeiroNome, extrairNomeDeclarado, empresaCo
 const { cortarPerguntasEmpilhadas } = require('./lib/umaPergunta');
 const { removerMarcadoresInternos } = require('./lib/marcadoresInternos');
 const { avaliarPausa, montarSecaoRetomadaHumana, PAUSA_HUMANA_MIN } = require('./lib/pausaHumana');
+const { montarPromptSinalAgendamento, interpretarSinalAgendamento } = require('./lib/sinalAgendamento');
 const { ehEncerramento, jaSeDespediu, montarDespedida, agradeceu: leadAgradeceu, repeteUltimaDaIA } = require('./lib/posAgendamento');
 const { dividirEmBaloes } = require('./lib/baloes');
 const { semTravessao } = require('./lib/semTravessao');
@@ -1184,7 +1185,7 @@ Não faça pergunta atrás de pergunta seca. Em cerca de 1 a cada 3 respostas, A
 
     const secaoCampanha = await montarSecaoCampanha(contextoLead).catch(() => '');
 
-    return constituicaoResolvida + secaoAcolhidaInbound + montarSecaoRetomadaHumana(historico) + secaoPerguntarNome + secaoCampanha + REGRA_ROTEIRO + REGRA_ANTI_INVENCAO;
+    return constituicaoResolvida + secaoAcolhidaInbound + montarSecaoRetomadaHumana(historico, { retomandoAgora: contextoLead?._retomadaHumana === true }) + secaoPerguntarNome + secaoCampanha + REGRA_ROTEIRO + REGRA_ANTI_INVENCAO;
 }
 
 // 📣 Lead da BASE que recebeu campanha: injeta o contexto (DADOS) da campanha + os dados do
@@ -4478,6 +4479,53 @@ function _montarSlotNoDia(baseISO, h, min, duracaoMin) {
     };
 }
 
+// 🧠 CHECAGEM POR CONTEXTO do pedido de agendamento (ver lib/sinalAgendamento.js). Lê as últimas
+// mensagens + quanto tempo o lead levou pra responder a nossa última fala e pergunta ao LLM se é uma
+// PESSOA pedindo pra marcar conosco, uma RESPOSTA AUTOMÁTICA, ou outra coisa. Falha → null (não propõe).
+async function verificarSinalAgendamento(lead, historico) {
+    let segundos = null;
+    try {
+        let q = supabase.from('messages').select('role, created_at')
+            .eq('whatsapp_id', lead.whatsapp_id).order('created_at', { ascending: false }).limit(8);
+        if (lead.user_id) q = q.eq('user_id', lead.user_id);
+        const { data: ult } = await q;
+        const lista = ult || [];
+        // lista vem da mais nova pra mais antiga: acha a nossa última fala e a 1ª msg do lead logo depois dela
+        const iNossa = lista.findIndex(m => m.role !== 'user');
+        if (iNossa >= 1 && lista[iNossa - 1].role === 'user') {
+            segundos = (new Date(lista[iNossa - 1].created_at) - new Date(lista[iNossa].created_at)) / 1000;
+        }
+    } catch (_) {}
+    const { system, messages } = montarPromptSinalAgendamento({ historico, segundosDesdeNossaFala: segundos });
+    const resp = await chamarLLM({ system, messages, model: MODELOS.cerebro, maxTokens: 400 });
+    return interpretarSinalAgendamento(resp);
+}
+
+// Marca a última msg do lead como [AUTORESPOSTA]: o painel mostra o porquê do silêncio e o SALVAMENTO
+// (a cada 3 min) não fica re-disparando a IA pra "responder" um robô.
+async function marcarUltimaMsgComoAutoresposta(lead) {
+    let q = supabase.from('messages').select('id, content').eq('whatsapp_id', lead.whatsapp_id)
+        .eq('role', 'user').order('created_at', { ascending: false }).limit(1);
+    if (lead.user_id) q = q.eq('user_id', lead.user_id);
+    const { data } = await q;
+    const m = data?.[0];
+    if (m && !String(m.content || '').startsWith('[AUTORESPOSTA]')) {
+        await supabase.from('messages').update({ content: `[AUTORESPOSTA] ${m.content}` }).eq('id', m.id);
+    }
+}
+
+// 🗂️ Marcos da pausa humana no banco (colunas de db/rodar_2026_11_05.sql). Tolerante: se o SQL ainda
+// não rodou, o update falha em silêncio e nada mais quebra.
+function registrarRetomadaIA(leadId) {
+    supabase.from('leads').update({ ia_retomada_em: new Date().toISOString() }).eq('id', leadId)
+        .then(({ error }) => error && console.warn(`⚠️ [PAUSA-HUMANA] ia_retomada_em não gravado (${error.message}) — rode db/rodar_2026_11_05.sql.`), () => {});
+}
+function registrarIntervencaoHumana(whatsappId, userId) {
+    let q = supabase.from('leads').update({ ultima_intervencao_humana_em: new Date().toISOString() }).eq('whatsapp_id', whatsappId);
+    if (userId) q = q.eq('user_id', userId);
+    q.then(({ error }) => error && console.warn(`⚠️ [PAUSA-HUMANA] ultima_intervencao_humana_em não gravado (${error.message}) — rode db/rodar_2026_11_05.sql.`), () => {});
+}
+
 async function orquestrarAgendamento(lead, ultimaMsg, instanceData, userId, intencao, historico = [], opts = {}) {
     // Carrega a config de booking SEMPRE (mesmo quando não vamos agendar): o worker precisa
     // saber se o booking está ativo (e se há agenda conectada) pra o closer NÃO mandar Calendly.
@@ -4508,6 +4556,28 @@ async function orquestrarAgendamento(lead, ultimaMsg, instanceData, userId, inte
     const horaFim    = cfg.booking_hora_fim ?? 18;
     const labels = (slots) => slots.map((s) => s.label).join(' ou ');
     const ok = (resposta) => ({ tratado: true, bookingAtivo: true, agendaConectada, resposta });
+    // 🧠 CHECAGEM POR CONTEXTO antes de oferecer horário NOVO: palavra-chave e roteador são só GATILHO.
+    // Se o pedido NÃO veio de um convite nosso aceito nem de uma promessa nossa de ver a agenda, a IA lê
+    // as últimas 3 mensagens do lead + a nossa última fala + o tempo de resposta e confirma que é uma
+    // PESSOA pedindo pra marcar. Bug 2026-11-05: saudação automática ("Para agendar, escolha o serviço
+    // e o horário por aqui") virou oferta de horários pra um robô.
+    if (!jaAgendado && !temSlots && !opts.forcarOferta && !opts.semChecagemContexto && !aceitouConvite && !prometeuAgenda
+        && !String(lead.whatsapp_id || '').includes('@web')) {
+        const sinal = await verificarSinalAgendamento(lead, historico).catch((e) => {
+            console.warn(`⚠️ [SINAL-AGENDA] Checagem falhou (${e.message}) — não propõe horário agora.`);
+            return null;
+        });
+        if (sinal?.classe === 'resposta_automatica') {
+            await marcarUltimaMsgComoAutoresposta(lead).catch(() => {});
+            console.log(`🤖 [SINAL-AGENDA] ${lead.name}: resposta automática (${sinal.motivo || 'sem motivo'}) — sem resposta, aguardando a pessoa.`);
+            return ok(null);
+        }
+        if (sinal?.classe !== 'pedido_agendamento') {
+            console.log(`🧠 [SINAL-AGENDA] ${lead.name}: não é pedido claro de agendamento (${sinal ? `${sinal.classe}: ${sinal.motivo || ''}` : 'checagem indisponível'}) — segue a conversa sem propor horário.`);
+            return { tratado: false, bookingAtivo: true, agendaConectada };
+        }
+        console.log(`✅ [SINAL-AGENDA] ${lead.name}: pedido de agendamento confirmado pelo contexto (${sinal.motivo || ''}).`);
+    }
 
     // Efetiva o agendamento: se o lead JÁ tem evento, REMARCA (mantém o mesmo Meet);
     // senão CRIA um novo. Evita reuniões duplicadas na agenda.
@@ -4883,7 +4953,10 @@ const workerIA = new Worker('FilaIA', async (job) => {
                 await supabase.from('leads').update({ is_paused: false, last_human_interaction: null }).eq('id', lead.id);
                 lead.is_paused = false;
                 lead.last_human_interaction = null;
+                lead._retomadaHumana = true;
+                registrarRetomadaIA(lead.id);
             }
+            if (job.data.retomadaHumana || job.data.retomouAposPausa) lead._retomadaHumana = true;
             if (job.data.retomadaHumana) await limparRetomadaHumana(instanceId, whatsappId);
         }
 
@@ -5315,7 +5388,7 @@ if (bookingAtivo && typeof resposta === 'string') {
     const semSlots  = !(Array.isArray(lead.slots_propostos) && lead.slots_propostos.length);
     const naoBooked = lead.status !== 'booked';
     if (deuStallDeAgenda && semSlots && naoBooked) {
-        const _ag = await orquestrarAgendamento(lead, ultimaMsg, instanceData, userId, 'COMPRA', historico)
+        const _ag = await orquestrarAgendamento(lead, ultimaMsg, instanceData, userId, 'COMPRA', historico, { semChecagemContexto: true })
             .catch(e => { console.error(`❌ [AGENDA-STALL-FIX] ${e.message}`); return null; });
         if (_ag?.tratado && _ag.resposta) {
             console.log(`🩹 [AGENDA-STALL-FIX] Closer deu stall sem proposta — substituindo pelos horários reais.`);
@@ -5953,6 +6026,7 @@ module.exports = {
                 }).eq('whatsapp_id', whatsappId);
                 if (_regras?.user_id) _pausaHumana = _pausaHumana.eq('user_id', _regras.user_id); // não pausar o mesmo número em OUTRO tenant
                 await _pausaHumana;
+                registrarIntervencaoHumana(whatsappId, _regras?.user_id);
 
                 console.log(`✅ [FRONTEND] Mensagem manual entregue. IA pausada para o lead.`);
                 return { success: true, messageId: sentMsg.key.id };
@@ -6291,6 +6365,20 @@ module.exports = {
             }
         }
 
+        // 📣 ORIGEM DE ANÚNCIO: a 1ª mensagem de quem clica num anúncio Click-to-WhatsApp traz o referral
+        // (id do anúncio + ctwa_clid). Grava 1x por lead (colunas de db/rodar_2026_11_05.sql; tolerante).
+        if (norm.referral) {
+            console.log(`📣 [ANÚNCIO] ${lead.name} chegou por ${norm.referral.source_type || 'anúncio'} ${norm.referral.source_id || ''}${norm.referral.headline ? ` ("${norm.referral.headline}")` : ''}.`);
+            if (!lead.ad_referral) {
+                supabase.from('leads').update({
+                    ad_referral: norm.referral,
+                    ad_source_id: norm.referral.source_id,
+                    ad_ctwa_clid: norm.referral.ctwa_clid,
+                }).eq('id', lead.id)
+                    .then(({ error }) => error && console.warn(`⚠️ [ANÚNCIO] referral não gravado (${error.message}) — rode db/rodar_2026_11_05.sql.`), () => {});
+            }
+        }
+
         // Salva a mensagem já (painel em tempo real + histórico completo pra IA).
         await db.saveMessage(cleanJid, 'user', norm.texto, instanceId);
 
@@ -6319,6 +6407,7 @@ module.exports = {
         // inteiro (as mensagens picadas) e responde UMA vez. leadId do último inbound é o alvo.
         const _keyGaveta = `${instanceId}:${cleanJid}`;
 
+        let _retomouAposPausa = false;
         // ⏸️ PAUSA HUMANA (15 min) — o chip oficial NÃO respeitava a pausa (bug 2026-11-05: a Sofia respondeu
         // por cima do Marlon). A mensagem do lead já foi salva (painel + histórico); a IA só responde fora
         // da pausa, e quando volta lê a conversa inteira.
@@ -6339,6 +6428,8 @@ module.exports = {
                 await supabase.from('leads').update({ is_paused: false, last_human_interaction: null }).eq('id', lead.id);
                 lead.is_paused = false;
                 lead.last_human_interaction = null;
+                _retomouAposPausa = true;
+                registrarRetomadaIA(lead.id);
             }
         }
         const _antigo = gavetaOficialTimers.get(_keyGaveta);
@@ -6350,7 +6441,7 @@ module.exports = {
             try {
                 inboundAtivo.set(instanceId, (inboundAtivo.get(instanceId) || 0) + 1);
                 await filaMensagensIA.add('gerar_resposta',
-                    { leadId: _leadId, whatsappId: cleanJid, instanceId, remoteJid: cleanJid },
+                    { leadId: _leadId, whatsappId: cleanJid, instanceId, remoteJid: cleanJid, retomouAposPausa: _retomouAposPausa },
                     { priority: 1, attempts: 3, backoff: { type: 'exponential', delay: 5000 } });
             } catch (e) { console.error(`❌ [GAVETA-OFICIAL] Falha ao enfileirar: ${e.message}`); }
         }, _janela);

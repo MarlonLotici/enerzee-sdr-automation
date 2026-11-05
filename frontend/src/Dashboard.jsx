@@ -426,7 +426,7 @@ const carregarDados = useCallback(async () => {
 
     // Auto-refresh a cada 60 segundos
     useEffect(() => {
-        const timer = setInterval(carregarDados, 60000)
+        const timer = setInterval(() => { if (!document.hidden) carregarDados() }, 60000) // aba oculta não consulta
         return () => clearInterval(timer)
     }, [carregarDados])
 

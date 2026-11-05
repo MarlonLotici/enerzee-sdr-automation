@@ -225,3 +225,21 @@ test('normalizarInbound: evento de status (sent/delivered) → null (não é men
     assert.equal(transport.normalizarInbound({}), null);
     assert.equal(transport.normalizarInbound(null), null);
 });
+
+test('referral de anúncio (Click-to-WhatsApp) é extraído da 1ª mensagem', () => {
+    const body = { entry: [{ changes: [{ value: {
+        contacts: [{ profile: { name: 'Andreia' } }],
+        messages: [{ from: '554891952094', id: 'wamid.A', type: 'text', text: { body: 'Olá! Posso ter mais informações sobre isso?' },
+            referral: { source_type: 'ad', source_id: '120200000000', source_url: 'https://fb.me/x', ctwa_clid: 'ARAkLk', headline: 'Antix', media_type: 'video' } }],
+    } }] }] };
+    const n = transport.normalizarInbound(body);
+    assert.equal(n.referral.source_type, 'ad');
+    assert.equal(n.referral.source_id, '120200000000');
+    assert.equal(n.referral.ctwa_clid, 'ARAkLk');
+});
+
+test('mensagem comum não tem referral', () => {
+    const body = { entry: [{ changes: [{ value: { messages: [{ from: '5511999999999', id: 'wamid.B', type: 'text', text: { body: 'oi' } }] } }] }] };
+    assert.equal(transport.normalizarInbound(body).referral, null);
+    assert.equal(transport.extrairReferral({ referral: {} }), null);
+});

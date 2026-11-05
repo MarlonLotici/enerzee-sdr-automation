@@ -378,27 +378,37 @@ export default function ConversaList({ onSelect, activeId, socket, instances = [
                 return
             }
 
-            const comUltimaMsg = await Promise.all(
-                leads.map(async lead => {
-                    // Preview isolado por TENANT: o mesmo número pode existir em 2 contas (ex.: testado
-                    // no chip do Foz e no da Sofia). Sem .eq('user_id') o preview puxaria a última msg
-                    // do OUTRO tenant. (Não uso instance_id: lead órfão tem instance_id=null.)
-                    const { data: msgs } = await supabase
-                        .from('messages')
-                        .select('role, content, created_at')
-                        .eq('whatsapp_id', lead.whatsapp_id)
-                        .eq('user_id', userId)
-                        .order('created_at', { ascending: false })
-                        .limit(1)
+            // Última mensagem de cada conversa EM LOTE (antes: 1 consulta por lead, até 300 em paralelo
+            // a cada 20s por aba aberta — era o maior peso no banco Nano). Preview isolado por TENANT
+            // (.eq('user_id')): o mesmo número pode existir em 2 contas. Não uso instance_id: lead
+            // órfão tem instance_id=null.
+            const ultimaPorWa = new Map()
+            const ids = [...new Set(leads.map(l => l.whatsapp_id).filter(Boolean))]
+            const TAM_LOTE = 30 // 30 × 30 = 900 linhas: abaixo do teto de 1000 linhas por consulta do Supabase
+            for (let i = 0; i < ids.length; i += TAM_LOTE) {
+                const lote = ids.slice(i, i + TAM_LOTE)
+                const { data: msgs } = await supabase
+                    .from('messages')
+                    .select('whatsapp_id, role, content, created_at')
+                    .in('whatsapp_id', lote)
+                    .eq('user_id', userId)
+                    .order('created_at', { ascending: false })
+                    .limit(lote.length * 30)
+                for (const m of msgs || []) if (!ultimaPorWa.has(m.whatsapp_id)) ultimaPorWa.set(m.whatsapp_id, m)
+            }
+            // Raro: conversa muito antiga ficou fora do lote (outras tinham muitas msgs recentes) → busca só ela.
+            for (const wa of ids.filter(id => !ultimaPorWa.has(id)).slice(0, 40)) {
+                const { data: m1 } = await supabase
+                    .from('messages')
+                    .select('whatsapp_id, role, content, created_at')
+                    .eq('whatsapp_id', wa)
+                    .eq('user_id', userId)
+                    .order('created_at', { ascending: false })
+                    .limit(1)
+                if (m1?.[0]) ultimaPorWa.set(wa, m1[0])
+            }
 
-                    return {
-                        lead,
-                        ultimaMsg: msgs?.[0] ?? null,
-                    }
-                })
-            )
-
-            setConversas(comUltimaMsg)
+            setConversas(leads.map(lead => ({ lead, ultimaMsg: ultimaPorWa.get(lead.whatsapp_id) ?? null })))
         } finally {
             setLoading(false)
         }
@@ -406,8 +416,12 @@ export default function ConversaList({ onSelect, activeId, socket, instances = [
 
     useEffect(() => {
         fetchConversas()
-        const id = setInterval(fetchConversas, 20_000)
-        return () => clearInterval(id)
+        // Aba em segundo plano não consulta (várias abas abertas multiplicavam a carga no banco);
+        // ao voltar pra aba, atualiza na hora.
+        const id = setInterval(() => { if (!document.hidden) fetchConversas() }, 20_000)
+        const aoVoltar = () => { if (!document.hidden) fetchConversas() }
+        document.addEventListener('visibilitychange', aoVoltar)
+        return () => { clearInterval(id); document.removeEventListener('visibilitychange', aoVoltar) }
     }, [fetchConversas])
 
     useEffect(() => {

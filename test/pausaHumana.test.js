@@ -50,3 +50,11 @@ test('houveAtendenteHumano / seção de retomada só quando um humano falou', ()
     assert.equal(montarSecaoRetomadaHumana([{ role: 'assistant', content: 'Oi!' }]), '');
     assert.equal(montarSecaoRetomadaHumana([]), '');
 });
+
+test('retomandoAgora: a IA é avisada de que é a 1ª resposta depois da pausa', () => {
+    const h = [{ role: 'assistant', content: '[ATENDENTE_HUMANO]: Oi!' }, { role: 'user', content: 'Não tenho equipe e só eu' }];
+    assert.match(montarSecaoRetomadaHumana(h, { retomandoAgora: true }), /VOCÊ ESTÁ VOLTANDO AGORA/);
+    assert.doesNotMatch(montarSecaoRetomadaHumana(h), /VOLTANDO AGORA/);
+    // retomada sem a fala humana no recorte de 20 msgs ainda avisa
+    assert.match(montarSecaoRetomadaHumana([{ role: 'user', content: 'oi' }], { retomandoAgora: true }), /PRIMEIRA resposta depois da pausa/);
+});

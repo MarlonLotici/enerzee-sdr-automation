@@ -51,7 +51,7 @@ export default function HealthPanel() {
 
     useEffect(() => {
         buscar()
-        timerRef.current = setInterval(buscar, 15000)
+        timerRef.current = setInterval(() => { if (!document.hidden) buscar() }, 15000) // aba oculta não consulta
         return () => clearInterval(timerRef.current)
     }, [buscar])
 

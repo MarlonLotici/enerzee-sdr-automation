@@ -795,7 +795,7 @@ export default function ChipStatus({ instances = [], socket }) {
     // Fetch inicial e a cada 30s
     useEffect(() => {
         fetchDailyCounts()
-        const id = setInterval(fetchDailyCounts, 30_000)
+        const id = setInterval(() => { if (!document.hidden) fetchDailyCounts() }, 30_000) // aba oculta não consulta
         return () => clearInterval(id)
     }, [fetchDailyCounts])
 

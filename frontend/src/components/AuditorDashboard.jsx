@@ -135,7 +135,7 @@ export default function AuditorDashboard({ socket }) {
 
     useEffect(() => {
         fetchData()
-        const interval = setInterval(fetchData, 120000)
+        const interval = setInterval(() => { if (!document.hidden) fetchData() }, 120000) // aba oculta não consulta
         return () => clearInterval(interval)
     }, [])
 
