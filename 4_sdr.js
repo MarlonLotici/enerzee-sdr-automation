@@ -5948,7 +5948,12 @@ module.exports = {
                     const instsAtivas = await db.getActiveInstances();
                     for (const inst of instsAtivas) {
                         // Chip oficial (Cloud API) não tem sessão Baileys: "sem sessão" é o normal dele, não queda.
-                        if (inst.whatsapp_provider === 'official') continue;
+                        if (inst.whatsapp_provider === 'official') {
+                            // Auto-cura: o status só era gravado ao ligar o chip; se o banco estivesse fora naquela hora
+                            // (522), ficava "DISCONNECTED" pra sempre e o painel mostrava "chip caído".
+                            if (inst.whatsapp_status !== 'CONNECTED') db.updateInstanceStatus(inst.id, 'CONNECTED').catch(() => {});
+                            continue;
+                        }
                         const sessao = sessions.get(inst.id);
                         const estaConectado = sessao?.ready === true;
                         const estaConectando = instanciasLigando.has(inst.id);
