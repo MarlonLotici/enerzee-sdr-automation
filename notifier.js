@@ -59,6 +59,20 @@ async function alertaCalendly({ leadName, empresa, niche, dataEvento, nomeEvento
     });
 }
 
+// 🔔 Aviso comercial genérico (lead novo de anúncio/orgânico, reunião agendada pela IA).
+// Vai pro canal COMERCIAL do Discord: sem regra de janela de 24h e sem custo (o aviso por WhatsApp
+// continua opcional — instances.alerta_whatsapp). Nunca lança.
+async function alertaAvisoComercial(titulo, descricao, cor = 0x8B5CF6) {
+    await _post(WEBHOOK_COMERCIAL, {
+        embeds: [{
+            title:       String(titulo || 'Aviso').slice(0, 250),
+            description: String(descricao || '').slice(0, 3500),
+            color:       cor,
+            timestamp:   new Date().toISOString(),
+        }],
+    });
+}
+
 // ─── 🔸 CANAL SUPORTE ─────────────────────────────────────────────────────────
 
 // Chip offline: debounce de 3 min + silêncio fora do expediente (noite/fim de semana)
@@ -147,4 +161,4 @@ async function alertaThrottled(chave, titulo, mensagem, { janelaMin = 10, cor = 
     } catch (_) { /* alerta nunca pode quebrar o chamador */ }
 }
 
-module.exports = { enviarAlerta, alertaThrottled, alertaHandoff, alertaCalendly, alertaChipOffline, cancelarDebounceChip, alertaDegradacaoIA };
+module.exports = { enviarAlerta, alertaAvisoComercial, alertaThrottled, alertaHandoff, alertaCalendly, alertaChipOffline, cancelarDebounceChip, alertaDegradacaoIA };

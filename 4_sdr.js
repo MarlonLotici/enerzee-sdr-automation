@@ -52,7 +52,7 @@ const supervisorAgent = require('./agents/supervisorAgent'); // crítico em temp
 const handoffAgent = require('./agents/handoffAgent');
 const motoresEmExecucao = new Set(); // 🛡️ Impede que o mesmo chip ligue dois loops infinitos
 const { useRedisAuthState, clearRedisSession, saveOwnerToRedis, getOwnerFromRedis } = require('./auth_redis_adapter');
-const { enviarAlerta, alertaThrottled, alertaHandoff, alertaCalendly, alertaChipOffline, cancelarDebounceChip } = require('./notifier');
+const { enviarAlerta, alertaAvisoComercial, alertaThrottled, alertaHandoff, alertaCalendly, alertaChipOffline, cancelarDebounceChip } = require('./notifier');
 const instanciasEncerrandoManualmente = new Set(); // 🛑 Flag para silenciar alertas no Discord ao remover chip
 
 // ============================================================================
@@ -4556,6 +4556,8 @@ async function avisarDono(instanceData, aviso) {
 }
 // Não avisa sobre os testes do próprio dono (lead = número do aviso). Fire-and-forget.
 function avisarDonoSeNaoForEle(instanceData, jidLead, aviso) {
+    // Discord (canal comercial): SEMPRE — sem janela de 24h e sem custo. WhatsApp abaixo é opcional.
+    alertaAvisoComercial(aviso.titulo, String(aviso.texto || '').replace(/\*([^*\n]+)\*/g, '**$1**')).catch(() => {});
     (async () => {
         const extra = await cfgExtraDaInstancia(instanceData?.id);
         const numero = normalizarNumeroAviso(extra.alerta_whatsapp || process.env.ALERTA_LEAD_WHATSAPP);
