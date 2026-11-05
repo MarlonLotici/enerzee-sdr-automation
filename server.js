@@ -914,7 +914,7 @@ app.get('/api/health', autenticarMiddleware, async (req, res) => {
     try {
         const { data: insts, error } = await supabase
             .from('instances')
-            .select('id, name, whatsapp_status, inbound_only')
+            .select('id, name, whatsapp_status, inbound_only, whatsapp_provider')
             .eq('user_id', req.user.id);
         if (error) throw new Error(error.message);
         const runtime = (sdr && sdr.snapshotSaude) ? sdr.snapshotSaude() : {};
@@ -925,7 +925,8 @@ app.get('/api/health', autenticarMiddleware, async (req, res) => {
                 name: inst.name,
                 whatsapp_status: inst.whatsapp_status || 'UNKNOWN',
                 inbound_only: inst.inbound_only === true,
-                ready: r.ready === true,
+                // Oficial (Cloud API) não tem socket na RAM — está pronto se está credenciado (não "caído").
+                ready: r.ready === true || inst.whatsapp_provider === 'official',
                 wsOpen: r.wsOpen === true,
                 recon: r.recon || 0,
                 abandonado: r.abandonado === true,

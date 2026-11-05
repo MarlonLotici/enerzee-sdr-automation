@@ -100,6 +100,7 @@ function identificarArtigo(nome) {
 const { extrairNomeHumano, saudacaoPrimeiroNome, extrairNomeDeclarado, empresaConfiavelDoLead } = require('./lib/textPuros');
 const { cortarPerguntasEmpilhadas } = require('./lib/umaPergunta');
 const { removerMarcadoresInternos } = require('./lib/marcadoresInternos');
+const { ehEncerramento, jaSeDespediu, montarDespedida, agradeceu: leadAgradeceu, repeteUltimaDaIA } = require('./lib/posAgendamento');
 const { dividirEmBaloes } = require('./lib/baloes');
 const { semTravessao } = require('./lib/semTravessao');
 // 📅 Confirmação diária de reuniões via Google Agenda (feature opt-in por tenant).
@@ -1330,7 +1331,7 @@ async function startInstance(instanceId, instanceName, preloadedUserId = null) {
     // Nível 3: Supabase (fallback — busca user_id + created_at + daily_limit para cold-start delay)
     const { data: instData } = await supabase
         .from('instances')
-        .select('user_id, created_at, daily_limit, whatsapp_provider')
+        .select('user_id, created_at, daily_limit, whatsapp_provider, whatsapp_status')
         .eq('id', instanceId)
         .maybeSingle();
 
@@ -1355,6 +1356,12 @@ async function startInstance(instanceId, instanceName, preloadedUserId = null) {
     if (instData?.whatsapp_provider === 'official') {
         await saveOwnerToRedis(redisConnection, instanceId, instanceUserId);
         console.log(`📲 [OFICIAL] ${instanceName} é Cloud API — Baileys ignorado (inbound via webhook, envio via HTTP).`);
+        // Chip oficial não tem socket: "conectado" = credenciado na Meta. Sem isto o banco ficava
+        // DISCONNECTED pra sempre → painel mostrava "1 caído"/"0/1 conectados" com o chip funcionando.
+        if (instData?.whatsapp_status !== 'CONNECTED') {
+            await supabase.from('instances').update({ whatsapp_status: 'CONNECTED' }).eq('id', instanceId)
+                .then(({ error }) => error && console.warn(`⚠️ [OFICIAL] Não marcou CONNECTED: ${error.message}`), () => {});
+        }
         instanciasLigando.delete(instanceId);
         return;
     }
@@ -2075,6 +2082,12 @@ async function filtrarEEnviarResposta(sock, remoteJid, resposta, historico, lead
         .replace(/\bENGANO\b/gi, '')                                   // ENGANO sem colchetes
         .replace(/\s*--\s*/g, ', ')                                    // em-dash estilístico do LLM → vírgula natural
         .trim();
+
+    // 🔁 ANTI-ECO: nunca manda a MESMA fala que a IA acabou de mandar (bug 2026-11-05).
+    if (repeteUltimaDaIA(textoLimpo, historico)) {
+        console.log(`🔁 [ANTI-ECO] Resposta idêntica à anterior para ${lead?.name} — não reenviada.`);
+        return;
+    }
 
     // ── BLINDAGEM ANTI-PENSAMENTO: remove parágrafos iniciais de raciocínio interno ──
     // Detecta quando a LLM "pensa em voz alta" (CoT vazado) antes de responder ao cliente.
@@ -4631,7 +4644,19 @@ async function orquestrarAgendamento(lead, ultimaMsg, instanceData, userId, inte
         if (querRemarcar) return await ofertar(false);
         // Saudação/mensagem curta pós-agendamento (ex.: "oi") → quase sempre é dúvida sobre a
         // reunião. Acolhe e OFERECE ajuda (não reoferece horário nem dá stall). Pergunta aberta.
-        if (ehSaudacaoPura(ultimaMsg) || String(ultimaMsg || '').trim().length < 15) {
+        // Encerramento ("obrigado", "tá tudo certo", 👍) → despede curto, SEM pergunta. Se a IA já se
+        // despediu e o lead manda outro "ok", silêncio (WhatsApp). Antes toda msg < 15 letras recebia a
+        // mesma frase fixa com "Tem alguma dúvida?" → repetia igualzinha (bug 2026-11-05).
+        if (ehEncerramento(ultimaMsg)) {
+            if (jaSeDespediu(historico) && !String(lead.whatsapp_id || '').includes('@web')) {
+                console.log(`🤝 [CONCIERGE] ${lead.name} encerrou de novo após a despedida — sem resposta.`);
+                return ok(null);
+            }
+            const _nome = saudacaoPrimeiroNome(lead.dono, '');
+            const quando = lead.calendly_event_at ? rotularSlotBRT(new Date(lead.calendly_event_at)) : null;
+            return ok(montarDespedida({ nome: _nome, quando, agradeceu: leadAgradeceu(ultimaMsg) }));
+        }
+        if (ehSaudacaoPura(ultimaMsg)) {
             const _nome = saudacaoPrimeiroNome(lead.dono, '');
             const quando = lead.calendly_event_at ? rotularSlotBRT(new Date(lead.calendly_event_at)) : 'no horário combinado';
             return ok(`Oi${_nome ? ' ' + _nome : ''}! 😊 Tá tudo certo pra nossa conversa ${quando}. Tem alguma dúvida ou posso te ajudar em algo até lá?`);
@@ -5680,6 +5705,8 @@ module.exports = {
                 try {
                     const instsAtivas = await db.getActiveInstances();
                     for (const inst of instsAtivas) {
+                        // Chip oficial (Cloud API) não tem sessão Baileys: "sem sessão" é o normal dele, não queda.
+                        if (inst.whatsapp_provider === 'official') continue;
                         const sessao = sessions.get(inst.id);
                         const estaConectado = sessao?.ready === true;
                         const estaConectando = instanciasLigando.has(inst.id);
