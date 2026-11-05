@@ -103,6 +103,7 @@ const { removerMarcadoresInternos } = require('./lib/marcadoresInternos');
 const { avaliarPausa, montarSecaoRetomadaHumana, PAUSA_HUMANA_MIN } = require('./lib/pausaHumana');
 const { montarPromptSinalAgendamento, interpretarSinalAgendamento } = require('./lib/sinalAgendamento');
 const { normalizarNumeroAviso, ehNumeroDoDono, dentroDaJanela24h, montarAvisoNovoLead, montarAvisoReuniao } = require('./lib/avisoDono');
+const { varrerReengajamentos } = require('./lib/reengajamentoLoop');
 const { ehEncerramento, jaSeDespediu, montarDespedida, agradeceu: leadAgradeceu, repeteUltimaDaIA } = require('./lib/posAgendamento');
 const { dividirEmBaloes } = require('./lib/baloes');
 const { semTravessao } = require('./lib/semTravessao');
@@ -4566,6 +4567,35 @@ function avisarDonoSeNaoForEle(instanceData, jidLead, aviso) {
     })().catch(() => {});
 }
 
+// 🔔 REENGAJAMENTO de quem sumiu (lib/reengajamento.js + reengajamentoLoop.js): o lead escreveu primeiro, a Sofia
+// respondeu e ele não falou mais → lembrete 45 min depois e despedida ~22 h depois (dentro da janela de 24h da
+// Meta). Só roda nas instâncias com instances.reengajamento_ativo=true (SQL db/reengajamento.sql). Desliga tudo
+// com a variável REENGAJ_DESLIGADO=1. Simulação (só loga, não envia): REENGAJ_SIMULAR=1.
+let reengajamentoEmExecucao = false;
+async function executarReengajamento() {
+    if (process.env.REENGAJ_DESLIGADO === '1' || reengajamentoEmExecucao) return;
+    reengajamentoEmExecucao = true;
+    try {
+        const r = await varrerReengajamentos({
+            supabase, redis: redisConnection, optOutRegex: OPTOUT_REGEX,
+            simular: process.env.REENGAJ_SIMULAR === '1',
+            nomeDe: (lead) => saudacaoPrimeiroNome(lead.dono, ''),
+            enviar: async ({ lead, texto }) => {
+                const enviado = await enviarMensagemIA(null, lead.whatsapp_id, { text: texto }, lead.instance_id);
+                if (!enviado?.key?.id) throw new Error('envio sem confirmação');
+                await db.saveMessage(lead.whatsapp_id, 'assistant', texto, lead.instance_id);
+            },
+        });
+        if (r.enviados.length || (r.erro && !r.erro.includes('reengajamento_ativo'))) {
+            console.log(`🔔 [REENGAJ] ciclo: ${r.enviados.length} enviado(s) de ${r.candidatos} candidato(s)${r.erro ? ` | erro: ${r.erro}` : ''}.`);
+        }
+    } catch (e) {
+        console.warn(`⚠️ [REENGAJ] Ciclo falhou: ${e.message}`);
+    } finally {
+        reengajamentoEmExecucao = false;
+    }
+}
+
 // 🧠 CHECAGEM POR CONTEXTO do pedido de agendamento (ver lib/sinalAgendamento.js). Lê as últimas
 // mensagens + quanto tempo o lead levou pra responder a nossa última fala e pergunta ao LLM se é uma
 // PESSOA pedindo pra marcar conosco, uma RESPOSTA AUTOMÁTICA, ou outra coisa. Falha → null (não propõe).
@@ -6010,6 +6040,10 @@ module.exports = {
 
             // 📅 DESPERTADOR DE FOLLOW-UPS: verifica a cada 1 minuto
             setInterval(verificarFollowUpsVencidos, 60 * 1000);
+
+            // 🔔 REENGAJAMENTO: varredura a cada 3 min (1ª rodada 90s depois do boot, pro banco/Redis estabilizarem)
+            setInterval(executarReengajamento, 3 * 60 * 1000);
+            setTimeout(executarReengajamento, 90 * 1000);
 
             // 💓 HEARTBEAT: verifica WebSocket de cada chip a cada 4 minutos
             setInterval(async () => {
