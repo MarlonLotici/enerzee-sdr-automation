@@ -13,6 +13,10 @@ test('variações do marcador e "(Áudio)" no início', () => {
     assert.equal(removerMarcadoresInternos('[ÁUDIO-TTS]: Oi!'), 'Oi!');
     assert.equal(removerMarcadoresInternos('(Áudio) Oi!'), 'Oi!');
 });
+test('[ATENDENTE_HUMANO] (marcador da fala do gestor no histórico) também não vaza', () => {
+    assert.equal(removerMarcadoresInternos('[ATENDENTE_HUMANO]: Oi Andreia, Marlon aqui!'), 'Oi Andreia, Marlon aqui!');
+    assert.equal(removerMarcadoresInternos('[atendente humano] Oi!'), 'Oi!');
+});
 test('texto normal e nulo ficam intactos', () => {
     assert.equal(removerMarcadoresInternos('Oi, tudo bem?'), 'Oi, tudo bem?');
     assert.equal(removerMarcadoresInternos('Mandei um áudio pra você'), 'Mandei um áudio pra você');

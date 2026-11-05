@@ -258,6 +258,24 @@ if (!estadoFinal && phonePuro) {
         return data.reverse();
     },
 
+    // 📖 Leitura ESTRITA: a resposta da IA só pode ser gerada DEPOIS de ler a conversa. Se a leitura
+    // falhar (banco lento/timeout), LANÇA erro em vez de devolver [] — o job vai pro retry em vez de
+    // a Sofia responder "às cegas" como se fosse o primeiro contato.
+    getHistoryEstrito: async (zapId, instanceId) => {
+        const userId = await _resolverUserId(instanceId);
+        let query = supabase
+            .from('messages')
+            .select('role, content')
+            .eq('whatsapp_id', zapId)
+            .order('created_at', { ascending: false })
+            .limit(20);
+        if (userId) query = query.eq('user_id', userId);
+        const { data, error } = await query;
+        if (error) throw new Error(`Falha ao ler o histórico da conversa: ${error.message}`);
+        if (!data || data.length === 0) throw new Error('Histórico da conversa veio vazio — não responde sem contexto.');
+        return data.reverse();
+    },
+
     isBlacklisted: async (zapId) => {
         const { data } = await supabase
             .from('blacklist')
