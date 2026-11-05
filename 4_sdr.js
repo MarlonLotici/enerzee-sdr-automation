@@ -99,6 +99,7 @@ function identificarArtigo(nome) {
 // subir Redis/BullMQ. Mesma lógica, só mudou de arquivo.
 const { extrairNomeHumano, saudacaoPrimeiroNome, extrairNomeDeclarado, empresaConfiavelDoLead } = require('./lib/textPuros');
 const { cortarPerguntasEmpilhadas } = require('./lib/umaPergunta');
+const { removerMarcadoresInternos } = require('./lib/marcadoresInternos');
 const { dividirEmBaloes } = require('./lib/baloes');
 const { semTravessao } = require('./lib/semTravessao');
 // 📅 Confirmação diária de reuniões via Google Agenda (feature opt-in por tenant).
@@ -2063,7 +2064,7 @@ async function filtrarEEnviarResposta(sock, remoteJid, resposta, historico, lead
     const matchClima = /\[?\s*CLIMA\s*:?\s*([a-zA-Z_]+)\s*\]?/gi.exec(resposta);
     const matchManual = /\[?\s*AGENDAMENTO_MANUAL\s*\]?/gi.exec(resposta);
 
-    let textoLimpo = resposta
+    let textoLimpo = removerMarcadoresInternos(resposta)
         .replace(regexTags, '')
         .replace(/\[?\s*est[aá]gio\s*:?\s*\d\s*\]?/gi, '')           // [ estágio 0 ] sem formato certo
         .replace(/\[?\s*est[aá]gio\s*:?\s*encerrado\s*\]?/gi, '')     // ESTAGIO:ENCERRADO sem colchetes
@@ -2260,11 +2261,11 @@ if (matchClima) updates.sentiment = matchClima[1].toLowerCase();
             if (sock) await sock.sendPresenceUpdate('composing', remoteJid); // oficial (Cloud API) não tem presença
 
             // ⚡ CÁLCULO DE JITTER DINÂMICO: Simula tempo de leitura + raciocínio + digitação.
-            // Reduzido ~25-30% (mult 65→48, base 3000→2000, teto 12000→9000) pra resposta mais ágil
+            // Reduzido de novo ~30% em 2026-11-05 (mult 48→34 / objeção 65→46, base 2000→1400, teto 9000→6300). Antes: 65→48, 3000→2000, 12000→9000.
             // sem perder o ritmo humano. Objeção ainda "pensa" um pouco mais (parece mais cuidadosa).
             const isObjecao = resposta.includes('CLIMA:DESCONFIADO') || resposta.includes('CLIMA:OCUPADO');
-            const multiplicador = isObjecao ? 65 : 48;
-            const tempoBase = Math.min(trecho.length * multiplicador + 2000, 9000);
+            const multiplicador = isObjecao ? 46 : 34;
+            const tempoBase = Math.min(trecho.length * multiplicador + 1400, 6300);
 
             await delay(tempoBase);
             // Salva no banco ANTES de enviar: se o job retentar, o anti-loop de 3 msgs bloqueia reenvio
@@ -6213,7 +6214,7 @@ module.exports = {
         const _keyGaveta = `${instanceId}:${cleanJid}`;
         const _antigo = gavetaOficialTimers.get(_keyGaveta);
         if (_antigo) clearTimeout(_antigo);
-        const _janela = Number(process.env.GAVETA_OFICIAL_MS) || 10000; // 10s: junta msgs picadas mas responde mais ágil (era 15s)
+        const _janela = Number(process.env.GAVETA_OFICIAL_MS) || 7000; // 7s (era 10s, antes 15s): junta msgs picadas; se voltar a responder 2x a quem digita picado, subir via env GAVETA_OFICIAL_MS
         const _leadId = lead.id;
         const _timer = setTimeout(async () => {
             gavetaOficialTimers.delete(_keyGaveta);
