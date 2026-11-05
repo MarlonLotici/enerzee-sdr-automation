@@ -546,7 +546,7 @@ export default function VisualAnalytics() {
 
             {/* HEADER */}
             <div style={{ marginBottom: 28 }}>
-                <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 14 }}>
+                <div className="m-quebra" style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 14 }}>
                     <div>
                         <div style={{ display: 'flex', alignItems: 'center', gap: 10, marginBottom: 4 }}>
                             <div style={{ background: 'rgba(59,130,246,0.15)', border: '1px solid rgba(59,130,246,0.3)', borderRadius: '0.75rem', padding: '6px', boxShadow: '0 0 16px rgba(59,130,246,0.3)' }}>

@@ -186,3 +186,24 @@ body {
     .sidebar:hover { width: 56px; }
     .sidebar-item .label { display: none; }
 }
+/* ── CELULAR (< 768px) ───────────────────────────────────────────────────────────────────────
+   Várias telas de Analytics desenham a grade com style inline (repeat(4,1fr), "1fr 340px"...), pensado
+   pra computador: no celular os cartões ficavam esmagados. Em vez de mexer em cada arquivo, as regras
+   abaixo reorganizam QUALQUER grade inline em 2 colunas (cartões de número) ou 1 (gráficos/painéis). */
+@media (max-width: 767px) {
+    [style*="grid-template-columns"] { grid-template-columns: minmax(0, 1fr) !important; }
+    [style*="repeat(3"], [style*="repeat(4"], [style*="repeat(5"], [style*="repeat(6"] {
+        grid-template-columns: repeat(2, minmax(0, 1fr)) !important;
+    }
+    [style*="auto-fit"], [style*="auto-fill"] {
+        grid-template-columns: repeat(auto-fit, minmax(min(100%, 150px), 1fr)) !important;
+    }
+    /* telas com 28px de respiro no computador: 14px no celular */
+    [style*="padding: 28px"] { padding: 14px 14px 28px !important; }
+    /* linhas "título à esquerda, botões à direita" quebram em vez de se sobrepor */
+    .m-quebra { flex-wrap: wrap; gap: 10px; }
+    /* sem zoom automático do iOS ao tocar em campos, e toque sem atraso */
+    input, textarea, select { font-size: max(16px, 1em); }
+    button, a, [role="button"] { touch-action: manipulation; }
+    html { -webkit-text-size-adjust: 100%; }
+}

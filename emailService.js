@@ -232,7 +232,18 @@ async function enviarEmailRepasse(emailDestinatario, lead, instanceData) {
     }
 }
 
+// ✉️ E-mail TRANSACIONAL (recuperação de senha etc.): sem rodapé de descadastro e sem registro de
+// histórico de campanha — é uma mensagem que o próprio usuário pediu. Usa o mesmo remetente verificado
+// no Resend (EMAIL_FROM_ADDRESS). Lança se o Resend recusar (quem chama trata).
+async function enviarEmailTransacional({ to, subject, html, text }) {
+    const from = process.env.EMAIL_FROM_ADDRESS;
+    if (!from) throw new Error('EMAIL_FROM_ADDRESS não configurado.');
+    const { error } = await getResend().emails.send({ from: `Antix <${from}>`, to, subject, html, text });
+    if (error) throw new Error(error.message || 'Resend recusou o envio.');
+}
+
 module.exports = {
+    enviarEmailTransacional,
     enviarEmailOutbound,
     enviarEmailRepasse,
     gerarCopyOutbound, // usado pelo endpoint de preview (Ver exemplo) no painel

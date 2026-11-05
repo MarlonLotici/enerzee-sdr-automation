@@ -18,6 +18,11 @@ window.addEventListener('load', () => {
   setTimeout(() => { try { sessionStorage.removeItem('reloadPorDeploy'); } catch { /* ignore */ } }, 10000);
 });
 
+// App instalável: registra o service worker mínimo (sem cache) só em produção.
+if ('serviceWorker' in navigator && import.meta.env.PROD) {
+  window.addEventListener('load', () => { navigator.serviceWorker.register('/sw.js').catch(() => { /* sem suporte: só não instala */ }); });
+}
+
 createRoot(document.getElementById('root')).render(
   <StrictMode>
     <App />

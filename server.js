@@ -19,6 +19,7 @@ const { processarLimpeza } = require('./2_clean');
 const { enriquecerLeadIndividual } = require('./3_enrich');
 const db = require('./database');
 const emailService = require('./emailService'); // usado no preview de email (gerarCopyOutbound)
+const { solicitarRecuperacao } = require('./lib/recuperarSenha');
 const { alertaCalendly, enviarAlerta, alertaThrottled } = require('./notifier');
 const budgetGuard = require('./budgetGuard'); // teto de custo / uso do dia por tenant (Redis)
 // 👁️ Observabilidade: buffer de erros recentes (pra enxergar a prod sem depender do cliente avisar).
@@ -169,6 +170,13 @@ const webChatLimiter = rateLimit({
     windowMs: 60 * 1000, max: 15,
     standardHeaders: true, legacyHeaders: false,
     message: { error: 'Muitas mensagens em pouco tempo. Aguarde um instante.' },
+});
+
+// Recuperação de senha: poucas tentativas por IP (evita usar o servidor pra spammar e-mail de terceiros).
+const recuperarSenhaLimiter = rateLimit({
+    windowMs: 15 * 60 * 1000, max: 5,
+    standardHeaders: true, legacyHeaders: false,
+    message: { ok: true }, // mesma resposta de sucesso: nunca revela o limite nem a existência da conta
 });
 
 // Cache: arquivos de /assets têm hash no nome (mudam a cada build) → o navegador guarda por 1 ano.
@@ -1577,6 +1585,23 @@ app.post('/api/send-message', autenticarMiddleware, async (req, res) => {
         console.error("❌ [API] Falha crítica na rota de envio:", error);
         return res.status(500).json({ success: false, error: "Falha interna no servidor." });
     }
+});
+
+// 🔑 ESQUECI MINHA SENHA (pública). Gera o link de recuperação com a service key e envia o e-mail pelo
+// Resend (domínio verificado) — o e-mail do Supabase nunca chegava. Resposta SEMPRE { ok: true }.
+app.post('/api/auth/esqueci-senha', recuperarSenhaLimiter, express.json({ limit: '2kb' }), async (req, res) => {
+    // Endereço do painel FIXO no servidor (APP_URL_PAINEL, senão o de produção). NUNCA derivar da requisição
+    // (Host/Origin): daria pra forjar um link de redefinição apontando pra um site falso. Não usa
+    // PUBLIC_BASE_URL de propósito (já apareceu apontando pra um host antigo).
+    const base = process.env.APP_URL_PAINEL || 'https://antix.up.railway.app';
+    const r = await solicitarRecuperacao({
+        email: req.body?.email,
+        baseUrl: base,
+        supabase,
+        enviarEmail: emailService.enviarEmailTransacional,
+    });
+    console.log(`🔑 [RECUPERAR-SENHA] pedido processado (enviado=${r.enviado}${r.motivo ? `, ${r.motivo}` : ''}).`);
+    res.json({ ok: true });
 });
 
 // 👁️ ERROR-HANDLER GLOBAL do Express (4 args) — última linha de defesa: qualquer erro não

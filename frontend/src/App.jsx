@@ -59,6 +59,10 @@ const playNotificationSound = () => {
 import { supabase } from '@/lib/supabase'
 import { rotuloPausa, textoDoBalao } from '@/lib/pausaHumana'
 import AudioMensagem from './components/AudioMensagem'
+import { LoginTela, NovaSenhaTela } from './components/AuthTelas'
+import WhatsAppMobile from './components/WhatsAppMobile'
+import NavInferior from './components/NavInferior'
+import { useIsMobile } from '@/lib/useMobile'
     // --- COMPONENTES AUXILIARES DO MAPA --- //mudança
 function MapController({ center }) {
     const map = useMap();
@@ -164,12 +168,12 @@ function AppSidebar({ activeTab, setActiveTab, leadsCount, onLogout, contaInboun
     export default function App() {
     const [session, setSession] = useState(null);
     const [authLoading, setAuthLoading] = useState(true);
-    // --- ESTADOS DO LOGIN ---
-    const [loginEmail, setLoginEmail] = useState('');
-    const [loginPassword, setLoginPassword] = useState('');
-    const [loginError, setLoginError] = useState(null);
-    const [isLoggingIn, setIsLoggingIn] = useState(false);
-    const [resetMsg, setResetMsg] = useState(null); // feedback do "esqueci minha senha"
+    const isMobile = useIsMobile(); // < 768px: layout do celular (menu embaixo, WhatsApp em duas telas)
+    // --- RECUPERAÇÃO DE SENHA ---
+    // null = fluxo normal | 'verificando' | 'pronto' (mostra "nova senha") | 'invalido' (link usado/expirado)
+    const [recuperacao, setRecuperacao] = useState(() => {
+        try { return new URLSearchParams(window.location.search).has('recuperar') ? 'verificando' : null } catch { return null }
+    });
 
     // Monitora o estado de login
     useEffect(() => {
@@ -178,12 +182,28 @@ function AppSidebar({ activeTab, setActiveTab, leadsCount, onLogout, contaInboun
             setAuthLoading(false);
         });
 
-        const { data: { subscription } } = supabase.auth.onAuthStateChange((_event, session) => {
-            setSession(session);
-        });
+        const { data: { subscription } } = supabase.auth.onAuthStateChange((event, session) => {
+            setSession(session);
+            // link nativo do Supabase (#access_token...&type=recovery): também cai na tela de nova senha
+            if (event === 'PASSWORD_RECOVERY') setRecuperacao('pronto');
+        });
 
-        return () => subscription.unsubscribe();
-    }, []);
+        return () => subscription.unsubscribe();
+    }, []);
+
+    // Link do NOSSO e-mail de recuperação: /?recuperar=<token_hash>. O token só vale 1 vez, então a troca
+    // por sessão roda uma única vez mesmo com o React em modo de desenvolvimento (efeito duplo).
+    useEffect(() => {
+        let token = null
+        try { token = new URLSearchParams(window.location.search).get('recuperar') } catch { /* sem URL */ }
+        if (!token) return
+        if (window.__trocandoTokenRecuperacao) return
+        window.__trocandoTokenRecuperacao = true
+        supabase.auth.verifyOtp({ token_hash: token, type: 'recovery' }).then(({ error }) => {
+            window.history.replaceState({}, '', window.location.pathname) // tira o token da barra de endereço
+            setRecuperacao(error ? 'invalido' : 'pronto')
+        })
+    }, []);
 
     // --- REFERÊNCIAS ---
    const kanbanRef = useRef(null);
@@ -1028,95 +1048,16 @@ if (session?.user?.id) checkBriefing()
         )
     }
 
-    if (!session) {
-        const handleLogin = async (e) => {
-            e.preventDefault();
-            setIsLoggingIn(true);
-            setLoginError(null);
-            const { error } = await supabase.auth.signInWithPassword({ email: loginEmail, password: loginPassword });
-            if (error) setLoginError(error.message);
-            setIsLoggingIn(false);
-        };
+    // 🔑 Recuperação de senha: vem ANTES do login (a sessão do link já existe, mas o usuário precisa definir a nova senha).
+    if (recuperacao) {
+        return <NovaSenhaTela
+            estado={recuperacao}
+            aoConcluir={() => setRecuperacao(null)}
+            aoVoltar={() => { setRecuperacao(null); supabase.auth.signOut() }}
+        />
+    }
 
-        const handleResetPassword = async () => {
-            setLoginError(null); setResetMsg(null);
-            if (!loginEmail || !/^[^s@]+@[^s@]+.[^s@]+$/.test(loginEmail)) {
-                setLoginError('Digite seu e-mail no campo acima pra enviar o link de redefinicao.');
-                return;
-            }
-            const { error } = await supabase.auth.resetPasswordForEmail(loginEmail, { redirectTo: window.location.origin });
-            if (error) setLoginError(error.message); else setResetMsg('Enviamos um link de redefinicao pro seu e-mail. Confira a caixa de entrada (e o spam).');
-        };
-
-        return (
-                <div className="h-screen bg-[#0A0A0A] flex items-center justify-center p-6">
-                    <div className="glass-panel p-10 rounded-[2.5rem] border-amber-500/30 flex flex-col max-w-md w-full relative overflow-hidden" style={{boxShadow:'0 0 40px rgba(245,158,11,0.15)'}}>
-                <div className="absolute top-0 left-0 w-full h-1 bg-gradient-to-r from-amber-600 via-amber-400 to-amber-600"></div>
-    
-                    <div className="flex flex-col items-center mb-8">
-                        <div className="bg-amber-600/20 p-4 rounded-3xl mb-6 border border-amber-500/30">
-                        <ShieldCheck className="h-10 w-10 text-amber-400" />
-                            </div>
-                        <h2 className="text-3xl font-black text-white italic uppercase tracking-tighter leading-none text-center">
-                       Acesso <span className="text-amber-500">Restrito</span>
-                                </h2>
-                        <p className="text-slate-500 text-[10px] font-bold uppercase tracking-widest mt-2 text-center">Antix Flow</p>
-                    </div>
-
-                    <form onSubmit={handleLogin} className="flex flex-col gap-4">
-                        <div className="space-y-2">
-                            <Label className="text-[10px] font-black text-amber-300 uppercase tracking-widest">Credencial (E-mail)</Label>
-                            <Input 
-                                type="email" 
-                                required
-                                value={loginEmail}
-                                onChange={(e) => setLoginEmail(e.target.value)}
-                                className="glass-card h-14 rounded-xl bg-black/40 border-white/10 text-white font-bold px-4 focus:border-amber-500 transition-colors" 
-                                placeholder="seu@email.com"
-                            />
-                        </div>
-                        
-                        <div className="space-y-2">
-                            <Label className="text-[10px] font-black text-amber-300 uppercase tracking-widest">Código de Acesso (Senha)</Label>
-                            <Input 
-                                type="password" 
-                                required
-                                value={loginPassword}
-                                onChange={(e) => setLoginPassword(e.target.value)}
-                                className="glass-card h-14 rounded-xl bg-black/40 border-white/10 text-white font-bold px-4 focus:border-amber-500 transition-colors" 
-                                placeholder="••••••••"
-                            />
-                        </div>
-
-                        {loginError && (
-                            <div className="bg-red-500/10 border border-red-500/30 rounded-lg p-3 mt-2">
-                                <p className="text-[10px] font-black text-red-400 uppercase tracking-wider text-center">
-                                    {loginError === 'Invalid login credentials' ? 'Credenciais Inválidas' : loginError}
-                                </p>
-                            </div>
-                        )}
-
-                        <Button 
-                            type="submit"
-                            disabled={isLoggingIn}
-                            className="w-full h-14 mt-4 bg-amber-600 hover:bg-amber-500 text-black font-black rounded-xl shadow-lg uppercase italic text-sm transition-transform active:scale-95"
-                        >
-                            {isLoggingIn ? <Loader2 className="h-5 w-5 animate-spin mx-auto" /> : "ENTRAR NO ANTIX FLOW"}
-                        </Button>
-                    
-                        {resetMsg && (
-                            <div className="bg-emerald-500/10 border border-emerald-500/30 rounded-lg p-3">
-                                <p className="text-[10px] font-bold text-emerald-400 tracking-wider text-center">{resetMsg}</p>
-                            </div>
-                        )}
-                        <button type="button" onClick={handleResetPassword} className="text-[11px] text-slate-400 hover:text-amber-400 transition-colors text-center mt-1">
-                            Esqueci minha senha
-                        </button>
-                    </form>
-                </div>
-            </div>
-        )
-    }
+    if (!session) return <LoginTela />
 
     // Se estiver logado, libera o cockpit do sistema:
 // 📥 Conta 100% receptiva (inbound): todos os chips são oficiais/inbound_only. Nesse modo
@@ -1131,7 +1072,7 @@ const contaInbound = instances.length > 0 && instances.every(i =>
 // e preserva o Radar normalmente nas contas de outbound.
 const effectiveTab = (contaInbound && activeTab === 'search') ? 'connections' : activeTab;
 return (
-    <div className="h-screen w-full flex relative bg-[#0A0A0A] overflow-hidden">
+    <div className="h-screen w-full flex relative bg-[#0A0A0A] overflow-hidden" style={{ height: '100dvh' }}>
 
     {/* 📞 PAINEL DE LIGAÇÃO IA AO VIVO */}
     {liveCall && (
@@ -1501,19 +1442,31 @@ return (
         </div>
     )}
 
-    {/* SIDEBAR */}
-    <AppSidebar
+    {/* SIDEBAR (computador) — no celular o menu fica embaixo */}
+    {!isMobile && <AppSidebar
         activeTab={effectiveTab}
         setActiveTab={setActiveTab}
         leadsCount={realTotalLeads}
         onLogout={() => supabase.auth.signOut()}
         contaInbound={contaInbound}
-    />
+    />}
 
     {/* CONTEÚDO PRINCIPAL */}
     <div className="flex-1 flex flex-col overflow-hidden min-w-0">
 
-        {/* TOP BAR */}
+        {/* TOP BAR — celular: compacta; some na aba WhatsApp (ela tem o próprio cabeçalho) */}
+{isMobile && effectiveTab !== 'connections' && (
+    <div className="shrink-0 flex items-center justify-between pl-4 pr-1 border-b border-white/5 bg-[#0d0d0d]" style={{ paddingTop: 'env(safe-area-inset-top)', minHeight: 52 }}>
+        <h2 className="text-[19px] font-bold text-white tracking-tight">
+            {effectiveTab === 'search' ? 'Radar' : effectiveTab === 'crm' ? 'Pipeline' : effectiveTab === 'briefing' ? 'Briefing' : effectiveTab === 'campanhas' ? 'Campanhas' : 'Analytics'}
+        </h2>
+        <div className="flex items-center">
+            <button onClick={openSettings} aria-label="Configurações" className="h-11 w-11 flex items-center justify-center rounded-full active:bg-white/10 text-slate-300"><Settings className="h-5 w-5" /></button>
+            <button onClick={() => supabase.auth.signOut()} aria-label="Sair" className="h-11 w-11 flex items-center justify-center rounded-full active:bg-white/10 text-slate-300"><LogOut className="h-5 w-5" /></button>
+        </div>
+    </div>
+)}
+{!isMobile && (
 <div className="shrink-0 flex items-center justify-between px-6 py-2.5 border-b border-white/5 bg-[#0d0d0d]/80 backdrop-blur-md z-40">
     <div className="flex items-center gap-4">
         {/* Título da aba com ícone */}
@@ -1628,6 +1581,7 @@ return (
         })()}
     </div>
 </div>
+)}
         {/* ÁREA DE CONTEÚDO */}
         <div className="flex-1 flex flex-col overflow-hidden min-h-0">
             <Tabs value={effectiveTab} onValueChange={setActiveTab} className="flex-1 flex flex-col overflow-hidden min-h-0">
@@ -1653,8 +1607,8 @@ return (
                 
                                 {/* --- ABA 2: CRM (DESTAQUE PARA DADOS) --- */}
                             <TabsContent value="crm" className="w-full flex flex-col flex-1 m-0 overflow-y-auto custom-scrollbar">
-                        <div className="shrink-0 flex justify-between items-center px-6 py-3 border-b border-white/5 bg-[#0d0d0d]/60 z-40">
-                     <div className="relative glass-card rounded-xl group w-[400px] bg-black/20 border-white/10">
+                        <div className="shrink-0 flex flex-wrap gap-2 justify-between items-center px-3 md:px-6 py-3 border-b border-white/5 bg-[#0d0d0d]/60 z-40">
+                     <div className="relative glass-card rounded-xl group w-full md:w-[400px] bg-black/20 border-white/10">
                       <Search className="absolute left-4 top-3 h-5 w-5 text-slate-600 group-focus-within:text-amber-500 transition-colors" />
                        <Input placeholder="Buscar por Nome, Sócio, CNPJ ou Celular..." className="bg-transparent border-none pl-12 text-white h-11 focus:ring-0 font-bold text-sm" value={filterText} onChange={e => setFilterText(e.target.value)} />
     </div>
@@ -1887,6 +1841,17 @@ return (
                             {/* ABA 3: WHATSAPP */}
 
               <TabsContent value="connections" className="w-full flex flex-col flex-1 m-0 p-0 border-none overflow-hidden">
+{isMobile ? (
+    <WhatsAppMobile
+        instances={instances} socket={socket} selectedInstanceId={selectedInstanceId}
+        activeChat={activeChat} setActiveChat={setActiveChat} chatMessages={chatMessages}
+        messageInput={messageInput} setMessageInput={setMessageInput} onSend={handleSendMessage}
+        onTogglePause={handleTogglePause} onBaixa={handleBaixa} onFechar={handleFechamento}
+        followUp={{ aberto: showFollowUpPicker, setAberto: setShowFollowUpPicker, valor: followUpDateTime, setValor: setFollowUpDateTime, confirmar: handleAgendarFollowUp }}
+        onConfig={openSettings} onSair={() => supabase.auth.signOut()}
+        painelChips={<><HealthPanel /><ChipStatus instances={instances} socket={socket} /></>}
+    />
+) : (
     <div className="flex h-full overflow-hidden bg-slate-950/40">
 
       {/* COLUNA 1 — Chips + Hub de Conversão (largura fixa) */}
@@ -2266,10 +2231,11 @@ return (
             </div>
         )}
     </div>
+)}
 </TabsContent>
                                  <TabsContent value="dashboard" className="flex-1 overflow-hidden m-0 flex flex-col">
     {/* Sub-navegação do Analytics */}
-    <div className="antix-noprint shrink-0 flex items-center gap-2 px-6 py-2.5 border-b border-white/5 bg-[#0d0d0d]/60">
+    <div className="antix-noprint shrink-0 flex items-center gap-2 px-3 md:px-6 py-2.5 border-b border-white/5 bg-[#0d0d0d]/60 overflow-x-auto whitespace-nowrap">
         <span className="text-[9px] text-slate-600 font-black uppercase tracking-widest mr-2">Visão:</span>
         {[
            { key: 'relatorio', label: '★ Relatório' },
@@ -2322,6 +2288,13 @@ return (
                         </TabsContent>
               </Tabs>
         </div>
+        {isMobile && (
+            <NavInferior
+                itens={contaInbound ? NAV_ITEMS.filter(i => i.key !== 'search') : NAV_ITEMS}
+                ativo={effectiveTab}
+                aoMudar={setActiveTab}
+            />
+        )}
     </div>
 
                             {/* POPUP DE BRIEFING — primeiro acesso */}

@@ -1,7 +1,8 @@
 import React, { useState, useEffect, useCallback } from 'react'
 import { supabase } from '@/lib/supabase'
 import { minutosParaIAVoltar } from '@/lib/pausaHumana'
-import { Search, BrainCircuit, Clock, RefreshCw, Cpu, ChevronDown } from 'lucide-react'
+import { autorDaMensagem, horaLista } from '@/lib/formatoChat'
+import { Search, BrainCircuit, Clock, RefreshCw, Cpu, ChevronDown, CheckCheck } from 'lucide-react'
 
 // ─── HELPERS ──────────────────────────────────────────────────────────────────
 function timeAgo(isoStr) {
@@ -17,6 +18,7 @@ function timeAgo(isoStr) {
 function limparPreview(content) {
     if (!content) return '...'
     if (content.startsWith('[AUTORESPOSTA]')) return '🤖 Autoresposta detectada'
+    if (content.startsWith('[AUDIO_TTS]'))    return '🎙️ ' + content.replace('[AUDIO_TTS]', '').trim().slice(0, 56)
     if (content.startsWith('<<Áudio'))        return '🎤 Áudio enviado'
     if (content.startsWith('(Áudio)'))        return '🎤 ' + content.replace('(Áudio)', '').trim()
     return content.replace(/\[QUEBRA\]/g, ' ').slice(0, 60) + (content.length > 60 ? '…' : '')
@@ -43,6 +45,65 @@ function resolveEstado(lead, ultimaMsg) {
     }
     // Última mensagem é do assistant → IA respondeu, aguardando lead
     return     { label: 'IA Ativa',        color: '#10B981', dot: '#10B981' }
+}
+
+// ─── LINHA DE CONVERSA — CELULAR (visual do WhatsApp) ──────────────────────────────────────
+const CORES_AVATAR = ['#6a7175', '#00a884', '#53bdeb', '#d98324', '#a55eea', '#e55039', '#3c9d9b', '#c56cf0']
+const corDoAvatar = (nome = '') => CORES_AVATAR[[...String(nome)].reduce((a, c) => a + c.charCodeAt(0), 0) % CORES_AVATAR.length]
+
+function ConversaLinhaMobile({ lead, ultimaMsg, isActive, onClick, doAnuncio = false }) {
+    const estado = resolveEstado(lead, ultimaMsg)
+    const autor = autorDaMensagem(ultimaMsg)
+    const leadFalouPorUltimo = autor === 'lead'
+    const aguardando = leadFalouPorUltimo && !lead.is_paused && !lead.manual_pause
+    const preview = limparPreview(ultimaMsg?.content).replace(/^\[AUDIO_TTS\]\s*/i, '🎙️ ')
+    const hora = horaLista(ultimaMsg?.created_at || lead.last_contact_at)
+    const mostrarEstado = estado.label !== 'IA Ativa'
+
+    return (
+        <button
+            onClick={onClick}
+            className="w-full flex items-center gap-3 pl-3 pr-3 text-left active:bg-white/5"
+            style={{ minHeight: 76, background: isActive ? 'rgba(255,255,255,0.06)' : 'transparent' }}
+        >
+            <div style={{
+                width: 52, height: 52, borderRadius: '50%', flexShrink: 0, background: corDoAvatar(lead.name),
+                display: 'flex', alignItems: 'center', justifyContent: 'center', fontSize: 21, fontWeight: 500, color: '#fff',
+            }}>
+                {(lead.name || '?')[0].toUpperCase()}
+            </div>
+
+            <div style={{ flex: 1, minWidth: 0, borderBottom: '1px solid rgba(255,255,255,0.06)', padding: '12px 0', alignSelf: 'stretch', display: 'flex', flexDirection: 'column', justifyContent: 'center', gap: 3 }}>
+                <div style={{ display: 'flex', alignItems: 'baseline', justifyContent: 'space-between', gap: 8 }}>
+                    <span style={{ fontSize: 17, fontWeight: 500, color: '#e9edef', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>
+                        {lead.name || 'Sem nome'}
+                    </span>
+                    <span style={{ fontSize: 12, flexShrink: 0, color: aguardando ? '#00a884' : '#8696a0', fontWeight: aguardando ? 600 : 400 }}>{hora}</span>
+                </div>
+
+                <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 8 }}>
+                    <span style={{ display: 'flex', alignItems: 'center', gap: 4, minWidth: 0, fontSize: 14.5, color: aguardando ? '#e9edef' : '#8696a0', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>
+                        {!leadFalouPorUltimo && ultimaMsg && <CheckCheck size={16} color="#53bdeb" style={{ flexShrink: 0 }} />}
+                        <span style={{ overflow: 'hidden', textOverflow: 'ellipsis' }}>{ultimaMsg ? preview : 'Sem mensagens'}</span>
+                    </span>
+                    {aguardando && (
+                        <span style={{ flexShrink: 0, minWidth: 20, height: 20, borderRadius: 10, background: '#00a884', color: '#0b141a', fontSize: 12, fontWeight: 700, display: 'flex', alignItems: 'center', justifyContent: 'center', padding: '0 6px' }}>
+                            1
+                        </span>
+                    )}
+                </div>
+
+                {(mostrarEstado || doAnuncio || lead.lead_temperature === 'hot' || lead.calendly_booked) && (
+                    <div style={{ display: 'flex', gap: 6, flexWrap: 'wrap', marginTop: 1 }}>
+                        {mostrarEstado && <span style={{ fontSize: 11, fontWeight: 600, color: estado.color, background: estado.color + '1f', borderRadius: 999, padding: '1px 8px' }}>{estado.label}</span>}
+                        {doAnuncio && <span style={{ fontSize: 11, fontWeight: 600, color: '#c084fc', background: '#a855f71f', borderRadius: 999, padding: '1px 8px' }}>📣 Anúncio</span>}
+                        {lead.lead_temperature === 'hot' && <span style={{ fontSize: 11, fontWeight: 600, color: '#ef4444', background: '#ef44441f', borderRadius: 999, padding: '1px 8px' }}>🔥 Quente</span>}
+                        {lead.calendly_booked && <span style={{ fontSize: 11, fontWeight: 600, color: '#10b981', background: '#10b9811f', borderRadius: 999, padding: '1px 8px' }}>✅ Agendado</span>}
+                    </div>
+                )}
+            </div>
+        </button>
+    )
 }
 
 // ─── CARD DE CONVERSA ─────────────────────────────────────────────────────────
@@ -350,7 +411,7 @@ function ConversaCard({ lead, ultimaMsg, isActive, onClick, onUpdate, doAnuncio 
  *   activeId  string          — id do lead ativo para highlight
  *   socket    — instância socket.io para ouvir new_lead e atualizações em tempo real
  */
-export default function ConversaList({ onSelect, activeId, socket, instances = [], selectedInstanceId = null }) {
+export default function ConversaList({ onSelect, activeId, socket, instances = [], selectedInstanceId = null, mobile = false }) {
     const [conversas, setConversas] = useState([])
     const [idsAnuncio, setIdsAnuncio] = useState(() => new Set())
     const [busca,     setBusca]     = useState('')
@@ -527,6 +588,54 @@ conversasOrdenadas.forEach(item => {     // 👈 USA conversasOrdenadas, NÃO co
         { key: 'estagio_solucao',label: 'Solução',     color: '#8B5CF6' },
         { key: 'estagio_agenda', label: 'Agenda+',     color: '#10B981' },
     ]
+
+    // 📱 CELULAR: busca + filtros em linha (rolagem horizontal) + linhas no estilo WhatsApp.
+    if (mobile) {
+        const FILTROS_MOBILE = FILTROS.filter(f => ['todos', 'a_responder', 'ia_ativa', 'pausadas', 'hot', 'estagio_agenda'].includes(f.key))
+        return (
+            <div style={{ display: 'flex', flexDirection: 'column', height: '100%', overflow: 'hidden', background: '#111b21', fontFamily: "'DM Sans', system-ui, sans-serif" }}>
+                <div style={{ flexShrink: 0, padding: '4px 12px 8px' }}>
+                    <div style={{ position: 'relative' }}>
+                        <Search size={18} style={{ position: 'absolute', left: 14, top: '50%', transform: 'translateY(-50%)', color: '#8696a0' }} />
+                        <input
+                            value={busca} onChange={e => setBusca(e.target.value)} placeholder="Buscar conversa"
+                            style={{ width: '100%', boxSizing: 'border-box', height: 42, paddingLeft: 44, paddingRight: 14, background: '#202c33', border: 'none', borderRadius: 21, color: '#e9edef', fontSize: 16, outline: 'none', fontFamily: 'inherit' }}
+                        />
+                    </div>
+                    <div style={{ display: 'flex', gap: 8, overflowX: 'auto', marginTop: 10, paddingBottom: 2, scrollbarWidth: 'none' }}>
+                        {FILTROS_MOBILE.map(f => {
+                            const ativo = filtro === f.key
+                            const count = contadores[f.key] ?? 0
+                            return (
+                                <button key={f.key} onClick={() => setFiltro(f.key)} style={{
+                                    flexShrink: 0, height: 34, padding: '0 14px', borderRadius: 17, border: 'none', cursor: 'pointer',
+                                    background: ativo ? '#0a332c' : '#202c33', color: ativo ? '#25d3a5' : '#8696a0', fontSize: 14, fontWeight: ativo ? 600 : 500,
+                                }}>
+                                    {f.label}{count > 0 && f.key !== 'todos' ? ` ${count}` : ''}
+                                </button>
+                            )
+                        })}
+                    </div>
+                </div>
+
+                <div style={{ flex: 1, overflowY: 'auto', minHeight: 0, overscrollBehavior: 'contain' }}>
+                    {loading && conversas.length === 0 ? (
+                        <p style={{ padding: '40px 0', textAlign: 'center', color: '#8696a0', fontSize: 14 }}>Carregando…</p>
+                    ) : conversasOrdenadas.length === 0 ? (
+                        <p style={{ padding: '48px 24px', textAlign: 'center', color: '#8696a0', fontSize: 14 }}>
+                            {busca ? 'Nenhuma conversa encontrada.' : filtro !== 'todos' ? 'Nenhuma conversa neste filtro.' : 'Nenhuma conversa ainda.'}
+                        </p>
+                    ) : conversasOrdenadas.map(({ lead, ultimaMsg }) => (
+                        <ConversaLinhaMobile
+                            key={lead.id} lead={lead} ultimaMsg={ultimaMsg}
+                            isActive={lead.id === activeId} onClick={() => onSelect?.(lead)}
+                            doAnuncio={idsAnuncio.has(lead.id)}
+                        />
+                    ))}
+                </div>
+            </div>
+        )
+    }
 
     return (
         <div style={{
