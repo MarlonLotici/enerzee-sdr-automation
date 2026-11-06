@@ -39,6 +39,7 @@ const budgetGuard = require('./budgetGuard');
 const { getTransport, baileysTransport, cloudApiTransport } = require('./transports');
 const { useSupabaseAuthState } = require('./auth_adapter');
 const { gerarAudioTTS } = require('./ttsElevenLabs');
+const { humanizarParaTTS } = require('./lib/humanizarTTS');
 const { detectarTomVoz } = require('./lib/tomVoz');
 const { createClient } = require('@supabase/supabase-js');
 const routerAgent = require('./agents/routerAgent'); // faz a distribuição entre os agentes dependendo da necessidade 
@@ -1945,17 +1946,8 @@ async function enviarAudioTTS(sock, remoteJid, texto, lead, instanceId, voz = nu
     try {
         console.log(`🎙️ [TTS] Gerando áudio humanizado para ${lead.name} (tom: ${tom})...`);
         
-        // 1. HUMANIZAÇÃO DO TEXTO (O Pulo do Gato)
-        // Adicionamos pontuações que forçam a IA a fazer pausas naturais de quem está pensando.
-        // Humanização sequencial sem cascata:
-        // REGRA: nenhum substituto pode conter pontos ('.') — senão o replace de pontos os processa de novo
-        let textoHumanizado = texto
-            .replace(/\.{2,}/g, '. ')              // 1. Reticências → ponto único (sem multiplicar)
-            .replace(/\?/g, '? ')                  // 2. Pontuação → só espaço (entonação natural)
-            .replace(/!/g, '! ')
-            .replace(/\./g, ', ')                  // 3. Ponto → vírgula (pausa suave — SEM pontos no substituto)
-            .replace(/,\s*,/g, ',')                // 4. Limpa duplas vírgulas eventuais
-            .trim();
+        // 1. Texto do áudio: mantém o ponto final de cada frase (é ele que dá o tom de fecho)
+        const textoHumanizado = humanizarParaTTS(texto); // mantém o ponto: é ele que fecha a frase com tom de fim
 
         // Chip OFICIAL (Cloud API da Meta): sem socket/presença "gravando"; o áudio sobe por HTTP.
         const regras = await getRegrasEmCache(instanceId);

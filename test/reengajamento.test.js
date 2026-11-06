@@ -156,3 +156,33 @@ test('texto personalizado do cliente: {nome} entra, e some sem deixar vírgula s
     assert.equal(r.montarTexto('lembrete', { nome: 'Ana', override: '{nome}, posso te ajudar?' }), 'Ana, posso te ajudar?');
     assert.equal(r.montarTexto('lembrete', { nome: '', override: '{nome}, posso te ajudar?' }), 'Posso te ajudar?');
 });
+
+test('recusa explícita (mesmo sem ser opt-out de LGPD) nunca recebe cutucada', () => {
+    for (const frase of ['Não tenho interesse, obrigado', 'sem interesse', 'Agora não', 'já tenho uma agência', 'Não preciso', 'dispenso', 'não faz sentido pra mim']) {
+        const msgs = [{ role: 'assistant', content: 'ok', created_at: atras(60 * MIN) }, { role: 'user', content: frase, created_at: atras(61 * MIN) }];
+        assert.equal(decide({ mensagens: msgs }).motivo, 'recusou', frase);
+    }
+});
+
+test('recusa numa das 3 últimas falas, mesmo que a última seja neutra, também bloqueia', () => {
+    const msgs = [
+        { role: 'assistant', content: 'Posso te explicar?', created_at: atras(60 * MIN) },
+        { role: 'user', content: 'ok', created_at: atras(61 * MIN) },
+        { role: 'assistant', content: 'Entendi', created_at: atras(70 * MIN) },
+        { role: 'user', content: 'não tenho interesse', created_at: atras(71 * MIN) },
+    ];
+    assert.equal(decide({ mensagens: msgs }).motivo, 'recusou');
+});
+
+test('interesse não é recusa ("tenho interesse", "preciso de ajuda")', () => {
+    const msgs = [{ role: 'assistant', content: 'Oi', created_at: atras(60 * MIN) }, { role: 'user', content: 'Tenho interesse, preciso de ajuda com leads', created_at: atras(61 * MIN) }];
+    assert.equal(decide({ mensagens: msgs }).acao, 'lembrete');
+});
+
+test('reunião já marcada na conversa, mesmo com status ainda "contact": não cutuca', () => {
+    const msgs = [
+        { role: 'assistant', content: 'Fechado, Ana! Reunião confirmada para amanhã às 15h, te mando o link.', created_at: atras(60 * MIN) },
+        { role: 'user', content: 'Combinado', created_at: atras(61 * MIN) },
+    ];
+    assert.equal(decide({ mensagens: msgs }).motivo, 'agendamento_na_conversa');
+});
