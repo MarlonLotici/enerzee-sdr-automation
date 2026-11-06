@@ -247,7 +247,7 @@ const { calcularBackoffReconexao } = require('./lib/reconexao');
 // 🚫 Travas de qualidade da resposta no chat do site (puras, testáveis) — lib/webGuardrails.js.
 const { stripWeb, enxugarWeb } = require('./lib/webGuardrails');
 // 📅 Decisão pura de agendamento (não agenda com "oi") — lib/agendaDecisao.js.
-const { deveProporAgendamento, aceitouConviteDeReuniao, prometeuVerAgenda, ehSaudacaoPura, querAgendar: querAgendarDecisao } = require('./lib/agendaDecisao');
+const { deveProporAgendamento, aceitouConviteDeReuniao, convidouReuniaoAntes, pediuHorarioDireto, prometeuVerAgenda, ehSaudacaoPura, querAgendar: querAgendarDecisao } = require('./lib/agendaDecisao');
 // 🧠 Triagem inteligente (escuta ativa): lê o momento da conversa e decide o modo (tira-dúvida,
 // objeção, qualificar, propor reunião, agendar) — lib/triagem.js. Só libera agenda quando faz sentido.
 const { triar, decidirAcao } = require('./lib/triagem');
@@ -3644,13 +3644,22 @@ async function processarConfirmacoesDeUmTenant(userId) {
         .select('calendar_id, confirmacao_ativa').eq('user_id', userId).maybeSingle();
     if (!conn || !conn.confirmacao_ativa || !conn.calendar_id) return { ok: false, motivo: 'nao_configurado' };
 
-    // Chip PRONTO do tenant — dispara por ele (isolamento).
+    // Chip PRONTO do tenant — dispara por ele (isolamento). Baileys (sessão aberta) OU chip OFICIAL (Cloud API,
+    // que não tem sessão em memória — antes o aviso "nenhum chip conectado" aparecia todo dia por causa disso).
     const entrada = [...sessions.entries()].find(([, s]) => s.userId === userId && s.ready);
-    if (!entrada) {
+    let instanceId, sess;
+    if (entrada) {
+        [instanceId, sess] = entrada;
+    } else {
+        const { data: oficial } = await supabase.from('instances').select('id')
+            .eq('user_id', userId).eq('whatsapp_provider', 'official').limit(1).maybeSingle();
+        if (oficial?.id) { instanceId = oficial.id; sess = { sock: null }; }
+    }
+    if (!instanceId) {
         enviarAlerta(`📅 *Confirmação de reuniões*: nenhum chip conectado pro tenant \`${userId.slice(0, 8)}\`. Tento de novo no próximo ciclo.`).catch(() => {});
         return { ok: false, motivo: 'sem_chip' };
     }
-    const [instanceId, sess] = entrada;
+    const chipOficial = !entrada;
     const regras = await getRegrasEmCache(instanceId);
     const nomeAgente = regras?.agent_name || 'nossa equipe';
     const nomeEmpresa = regras?.company_name || 'nossa equipe';
@@ -3692,6 +3701,18 @@ async function processarConfirmacoesDeUmTenant(userId) {
         const horaReuniao = ev.start?.dateTime
             ? new Date(ev.start.dateTime).toLocaleTimeString('pt-BR', { hour: '2-digit', minute: '2-digit', timeZone: 'America/Sao_Paulo' })
             : 'hoje';
+
+        // Chip oficial: texto livre só dentro de 24h da última mensagem do lead (senão a Meta recusa). Fora disso
+        // pula (os lembretes de 1h/10min e o concierge cobrem) em vez de falhar e sujar o log todo dia.
+        if (chipOficial) {
+            const { data: ult } = await supabase.from('messages').select('created_at')
+                .eq('whatsapp_id', jidEnvio).eq('user_id', userId).eq('role', 'user')
+                .order('created_at', { ascending: false }).limit(1);
+            if (!ult?.[0] || Date.now() - Date.parse(ult[0].created_at) > 23.5 * 3600e3) {
+                console.log(`⏭️ [CONFIRMA] ${primeiroNome}: chip oficial e sem mensagem do lead nas últimas 23h30 — confirmação por texto livre não é permitida; pulado.`);
+                pulados++; continue;
+            }
+        }
 
         const tpl = regras?.opening_templates?.confirmacao_reuniao;
         const msg = (tpl || `${primeiroNome}, aqui é ${nomeAgente} da ${nomeEmpresa}. Passando pra confirmar nossa reunião de hoje às ${horaReuniao}. Você consegue participar?`)
@@ -4989,6 +5010,15 @@ async function orquestrarAgendamento(lead, ultimaMsg, instanceData, userId, inte
     // aceite de convite — senão um "hoje"/"amanhã" INCIDENTAL ("hoje estou gastando 6 mil") marcaria
     // no dia errado. Fora desses casos, oferece os próximos livres.
     const diaInicial = (querAgendarDecisao(ultimaMsg) || aceitouConvite) ? (extrairDiaPedido(ultimaMsg) || null) : null;
+    // 2 PASSOS: primeiro PERGUNTA se a pessoa topa o papo ("pode ser?"); os horários só entram depois do aceite.
+    // (Antes: lead respondia "agendar mais e mais rápido" e já recebia "amanhã 11h30 ou 17h30" — seco demais.)
+    // Pula o convite se: ele já aceitou/pediu horário direto, já convidamos na fala anterior, ou prometemos ver a agenda.
+    const precisaConvite = !aceitouConvite && !prometeuAgenda && !diaInicial
+        && !pediuHorarioDireto(ultimaMsg) && !convidouReuniaoAntes(historico);
+    if (precisaConvite) {
+        console.log(`💬 [AGENDAMENTO] ${lead.name}: convite antes dos horários (aguardando o aceite).`);
+        return ok(`${_variar(['Legal', 'Que bom', 'Show'])}, pra te ajudar eu consigo agendar pra você um papo de ${duracaoMin} minutos com nosso especialista, pode ser?`);
+    }
     return await ofertar(false, diaInicial);
 }
 
