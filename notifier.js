@@ -6,6 +6,10 @@ const axios = require('axios');
 const WEBHOOK_COMERCIAL = process.env.DISCORD_WEBHOOK_URL;
 const WEBHOOK_SUPORTE   = process.env.DISCORD_WEBHOOK_SUPORTE_URL || process.env.DISCORD_WEBHOOK_URL;
 
+console.log(WEBHOOK_COMERCIAL
+    ? '✅ [DISCORD] Webhook configurado (avisos de lead novo e reunião vão pro Discord).'
+    : '⚠️ [DISCORD] DISCORD_WEBHOOK_URL NÃO configurada: avisos de lead novo/reunião NÃO serão enviados.');
+
 // Timers de debounce por chip: instanceId → TimerHandle
 const _debounceTimers = new Map();
 
