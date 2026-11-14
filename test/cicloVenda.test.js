@@ -78,3 +78,45 @@ test('só a Antix usa o ciclo rígido por padrão; env sobrescreve', () => {
     assert.equal(tenantComCiclo('cfa8f1e9-0000-0000-0000-000000000000', {}), false);
     assert.equal(tenantComCiclo('abc', { CICLO_SOLUCAO_USER_IDS: 'abc, def' }), true);
 });
+
+const { respostaCumpreFase, estagioDaFase, forcarEstagio, textoFixoDaFase, leadRecusou } = require('../lib/cicloVenda');
+
+test('respostas REAIS que ficaram presas na dor NÃO cumprem a fase solução', () => {
+    assert.equal(respostaCumpreFase('solucao', 'Entendi, você sente que está faltando tanto volume quanto qualidade nas agendas. Qual o maior obstáculo que vocês enfrentam hoje ao transformar esse volume em reuniões qualificadas?'), false);
+    assert.equal(respostaCumpreFase('solucao', 'Qual o maior desafio que vocês enfrentam hoje ao transformar esse volume em reuniões realmente qualificadas?'), false);
+    // pitch genérico + pergunta de descoberta (o que ela mandou às 02:01) também não vale
+    assert.equal(respostaCumpreFase('solucao', 'A Antix cria agentes de inteligência artificial sob medida para cada ponto do funil comercial, desde a qualificação de leads no WhatsApp até o follow-up pós-venda. Qual seria a meta de volume de agendas qualificadas que vocês gostariam de alcançar por mês?'), false);
+});
+
+test('respostas boas (espelha a dor, mostra a solução, valida) cumprem a fase solução', () => {
+    assert.equal(respostaCumpreFase('solucao', 'Então o que pega é que, mesmo com volume, a qualidade das agendas não está atendendo ao padrão que vocês precisam. Nosso agente de IA qualifica cada lead antes de passar ao time, garantindo critérios definidos e mantendo a consistência mesmo com alta demanda. Isso faria sentido para melhorar a agenda de vocês?'), true);
+    assert.equal(respostaCumpreFase('solucao', textoFixoDaFase('solucao')), true);
+});
+
+test('solução com horário ou convite junto NÃO cumpre (convite é outra fase)', () => {
+    assert.equal(respostaCumpreFase('solucao', 'Nosso agente de IA qualifica cada lead antes de passar pro time e mantém o padrão com volume alto. Posso te mandar os horários dessa semana?'), false);
+});
+
+test('fase convite: convida sem horário; texto fixo também vale', () => {
+    assert.equal(respostaCumpreFase('convite', 'Faz sentido agendar uma conversa de 30 minutos com nosso especialista para detalharmos a solução?'), true);
+    assert.equal(respostaCumpreFase('convite', textoFixoDaFase('convite', 0)), true);
+    assert.equal(respostaCumpreFase('convite', textoFixoDaFase('convite', 1)), true);
+    assert.equal(respostaCumpreFase('convite', 'Qual o maior desafio de vocês hoje?'), false);
+    assert.equal(respostaCumpreFase('convite', 'Faz sentido agendar um papo? Tenho amanhã às 10h.'), false);
+});
+
+test('o código é dono do estágio: força a etiqueta e mapeia fase → estágio', () => {
+    assert.equal(estagioDaFase('solucao'), 3);
+    assert.equal(estagioDaFase('convite'), 4);
+    assert.equal(estagioDaFase('descoberta'), null);
+    assert.equal(forcarEstagio('Texto da IA [ESTAGIO:2] [CLIMA:Neutro]', 3), 'Texto da IA  [CLIMA:Neutro] [ESTAGIO:3]'.replace('  ', ' '));
+    assert.match(forcarEstagio('Sem etiqueta', 4), /\[ESTAGIO:4\]$/);
+    assert.doesNotMatch(forcarEstagio('A [ESTAGIO: 2] b [estágio:5]', 3), /ESTAGIO:2|estágio:5/i);
+});
+
+test('lead que recusa não é forçado a avançar no ciclo', () => {
+    assert.equal(leadRecusou('não tenho interesse, obrigado'), true);
+    assert.equal(leadRecusou('agora não'), true);
+    assert.equal(leadRecusou('Volume e qualidade'), false);
+    assert.equal(leadRecusou('faz sentido sim'), false);
+});

@@ -247,6 +247,7 @@ const { calcularBackoffReconexao } = require('./lib/reconexao');
 // 🚫 Travas de qualidade da resposta no chat do site (puras, testáveis) — lib/webGuardrails.js.
 const { stripWeb, enxugarWeb } = require('./lib/webGuardrails');
 // 📅 Decisão pura de agendamento (não agenda com "oi") — lib/agendaDecisao.js.
+const { faseDoCiclo, estagioDaFase, respostaCumpreFase, forcarEstagio, textoFixoDaFase, leadRecusou, tenantComCiclo } = require('./lib/cicloVenda');
 const { deveProporAgendamento, aceitouConviteDeReuniao, convidouReuniaoAntes, pediuHorarioDireto, prometeuVerAgenda, prometeHorarios, cicloLiberaHorarios, ehSaudacaoPura, querAgendar: querAgendarDecisao } = require('./lib/agendaDecisao');
 // 🧠 Triagem inteligente (escuta ativa): lê o momento da conversa e decide o modo (tira-dúvida,
 // objeção, qualificar, propor reunião, agendar) — lib/triagem.js. Só libera agenda quando faz sentido.
@@ -5524,6 +5525,36 @@ if (!promptResolvido) {
 if (!resposta) {
     console.error(`❌ [WORKER-IA] Nenhum agente gerou resposta válida para ${lead.name}. Abortando envio.`);
     return;
+}
+
+// 🎯 CICLO DE VENDA CONTROLADO PELO CÓDIGO (bug 2026-11-14, Haislann: lead nomeou a dor e a IA seguiu perguntando).
+// O estágio NÃO é decidido pelo prompt: o código calcula a fase (descoberta → solução → convite), CONFERE se a
+// resposta da IA cumpre a fase, refaz uma vez se não cumprir, cai num texto fixo se insistir, e GRAVA o estágio
+// (reescreve a etiqueta [ESTAGIO:N]). A IA não consegue pular nem travar o funil. Só tenants com ciclo rígido
+// (lib/cicloVenda.js), só WhatsApp texto, só fluxo de conversa (não objeção/compra/repasse).
+if (typeof resposta === 'string' && (intencao === 'DUVIDA' || intencao === 'CONTINUAR' || intencao === 'LIXO')
+    && !primeiroContato && tenantComCiclo(lead.user_id) && !String(lead.whatsapp_id || '').includes('@web')) {
+    const faseC = faseDoCiclo(historico, lead);
+    const estagioC = estagioDaFase(faseC.fase);
+    if (estagioC && !leadRecusou(ultimaMsg)) {
+        if (!respostaCumpreFase(faseC.fase, resposta)) {
+            console.log(`🎯 [CICLO-FASE] ${lead.name}: fase=${faseC.fase} (${faseC.perguntasRespondidas} perguntas respondidas) mas a IA não cumpriu — refazendo.`);
+            const avisoFase = `\n\n⛔ CORREÇÃO OBRIGATÓRIA: sua resposta anterior NÃO cumpriu a fase "${faseC.fase}". Escreva APENAS a mensagem da fase, exatamente como a ordem acima descreve, sem pergunta de descoberta e sem horário.`;
+            const refeitaFase = await closerAgent.gerarRespostaCloser(historico, lead, promptResolvido + avisoFase, 'DUVIDA', {
+                calendlyLink: instanceData?.calendly_link, instanceType: instanceData?.product_type || 'generico', bookingAtivo, agendaConectada,
+            }).catch(() => null);
+            if (refeitaFase && respostaCumpreFase(faseC.fase, refeitaFase)) {
+                resposta = refeitaFase;
+            } else {
+                console.warn(`🎯 [CICLO-FASE] ${lead.name}: IA insistiu fora da fase ${faseC.fase} — usando texto fixo.`);
+                resposta = textoFixoDaFase(faseC.fase, Math.floor(Math.random() * 2));
+            }
+        }
+        resposta = forcarEstagio(resposta, estagioC); // o estágio gravado é o do código
+    } else if (faseC.fase === 'descoberta' && /EST[AÁ]GIO\s*:?\s*[3-5]/i.test(resposta)) {
+        // IA tentou pular pra solução/convite/agenda antes da hora: segura em descoberta.
+        resposta = forcarEstagio(resposta, Math.max(1, Math.min(2, Number(lead.current_stage) || 1)));
+    }
 }
 
 // 🔁 CICLO ANTES DA AGENDA (bug 2026-11-13): o lead disse "Geração e qualificação" e a IA respondeu "já
