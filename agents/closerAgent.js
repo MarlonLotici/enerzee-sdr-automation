@@ -331,7 +331,9 @@ ${isVoz ? `[REGRAS ABSOLUTAS DE ALTA PERFORMANCE — VOZ]
             // gpt-oss é modelo de RACIOCÍNIO: maxTokens baixo demais faz o raciocínio comer tudo e
             // devolver VAZIO ("instabilidade"). Mantemos folga aqui; a brevidade é garantida pela
             // trava de 2 balões (4_sdr) + regras do prompt, não por cortar tokens.
-            maxTokens: 500,
+            // Configurável: modelos de raciocínio maiores (DeepSeek V4 Pro, Kimi, GLM) gastam mais tokens pensando antes
+            // de responder e, com 500, às vezes devolvem vazio. Suba via LLM_MAXTOKENS_CLOSER ao trocar o modelo.
+            maxTokens: Number(process.env.LLM_MAXTOKENS_CLOSER) || 500,
 
         });
 
