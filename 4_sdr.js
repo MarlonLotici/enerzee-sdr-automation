@@ -4222,7 +4222,7 @@ await delay(jitterAntiBan);
                     const horaF = new Date(lr.calendly_event_at).toLocaleTimeString('pt-BR', { hour: '2-digit', minute: '2-digit', timeZone: 'America/Sao_Paulo' });
                     const nome  = saudacaoPrimeiroNome(lr.dono, 'você');
                     const linkTxt = lr.gcal_meet_link ? ` Link: ${lr.gcal_meet_link}` : '';
-                    const msg10m = `${nome}, é agora! Nossa conversa começa em ~10 min, às ${horaF}.${linkTxt} Já já te chamo 🙌`;
+                    const msg10m = `${nome}, é agora! Nossa conversa começa em 10 minutos, às ${horaF}.${linkTxt} Já já te chamo 🙌`;
                     if (await dispararLembrete(lr, msg10m, { reminder_10m_sent: true }, `LEMBRETE-10MIN ${horaF}`))
                         await delay(Math.floor(Math.random() * 10000) + 10000);
                 }
@@ -4773,7 +4773,7 @@ async function orquestrarAgendamento(lead, ultimaMsg, instanceData, userId, inte
         const revealTxt = instanceData?.product_type === 'antix'
             ? `\n[QUEBRA]\nAh, e antes que eu esqueça: essa conversa toda foi conduzida por uma IA da Antix 🤖 imagina isso rodando no seu comercial 24h. Até lá! 🚀`
             : '';
-        return ok(`${_variar(['Perfeito! Agendei', 'Fechado! Marquei', 'Prontinho, deixei agendado'])} nossa conversa pra ${slot.label}. ✅${linkTxt}${revealTxt}`);
+        return ok(`${_variar(['Perfeito, agendei', 'Combinado, marquei', 'Prontinho, deixei agendada'])} nossa conversa pra ${slot.label}.${linkTxt}${revealTxt}`);
     };
 
     // Oferta 2 horários REAIS e ESPAÇADOS (manhã/tarde), com variação de frase ("ginga").
@@ -4801,14 +4801,14 @@ async function orquestrarAgendamento(lead, ultimaMsg, instanceData, userId, inte
                 return ok(`Em ${diaAlvo.label} minha agenda tá fechada e os próximos dias também estão concorridos 😕 Um especialista vai te chamar pra achar o melhor horário, tá?`);
             }
             enviarAlerta(`📅 Agenda cheia — ${lead.name}`, 'Sem horário livre nos próximos dias.', 15158332).catch(() => {});
-            return ok('Adorei seu interesse! Minha agenda tá bem concorrida nos próximos dias — um especialista vai te chamar pra achar o melhor horário. 🙌');
+            return ok('Que bom que faz sentido pra você! A agenda está bem cheia nos próximos dias, então um especialista vai te chamar pra achar o melhor horário.');
         }
         await supabase.from('leads').update({ slots_propostos: slots, slot_calendar_id: calId, current_stage: 4 }).eq('id', lead.id);
         console.log(`📅 [AGENDAMENTO] ${lead.name}: propondo ${labels(slots)}`);
         const abre = ocupadoAntes
             ? _variar(['Esse já tá tomado 😕 mas sem problema! ', 'Nesse eu já tenho um compromisso, mas relaxa que a gente encaixa. ', 'Esse eu não consigo, mas tenho outras ótimas opções! ', 'Puxa, esse já foi preenchido — mas achei outros horários. '])
-            : _variar(['Que bom! ', 'Show! ', 'Massa! ']);
-        return ok(`${abre}${_variar(['Consigo te encaixar', 'Tenho livre', 'Dá pra marcar'])} ${labels(slots)} pra ${_variar(['uma conversa rápida com nosso especialista', 'um papo de 30 min com nosso especialista', 'uma call com nosso time pra te mostrar na prática'])}. ${_variar(['Qual fica melhor?', 'Qual prefere?', 'Qual encaixa melhor aí?'])} 😊`);
+            : _variar(['Que bom! ', 'Ótimo! ', 'Perfeito! ']);
+        return ok(`${abre}${_variar(['Consigo te encaixar', 'Tenho livre', 'Dá pra marcar'])} ${labels(slots)} pra ${_variar(['uma conversa rápida com nosso especialista', 'um papo de 30 minutos com nosso especialista', 'uma call com nosso time pra te mostrar na prática'])}. ${_variar(['Qual fica melhor?', 'Qual prefere?', 'Qual encaixa melhor aí?'])} 😊`);
     };
 
     // ── JÁ AGENDADO e o lead volta ──────────────────────────────────────────
@@ -4946,7 +4946,7 @@ async function orquestrarAgendamento(lead, ultimaMsg, instanceData, userId, inte
             if (precisaTelefone && !telefoneValido(lead.phone)) faltas.push('seu WhatsApp com DDD');
             const falta = faltas.length <= 1 ? (faltas[0] || 'seus dados') : faltas.slice(0, -1).join(', ') + ' e ' + faltas[faltas.length - 1];
             supabase.from('leads').update({ slots_propostos: [slot] }).eq('id', lead.id).then(() => {}, () => {});
-            return ok(`Fechado, ${slot.label}! ✅ Só me confirma ${falta} pra eu te enviar o convite da reunião 🙌`);
+            return ok(`Combinado, ${slot.label}! Só me passa ${falta} pra eu te enviar o convite da reunião.`);
         };
 
         // Mensagem anterior DA IA — resolve afirmação genérica ("pode ser") quando ela citou
@@ -6871,7 +6871,7 @@ module.exports = {
   ⛔ REGRA DURA 1: assim que tiver os DOIS números (quantas perde + quanto vale cada uma), a sua PRÓXIMA mensagem é OBRIGATORIAMENTE a conta + a solução + a pergunta de validação (passos 4, 5, 6 podem ir juntos) — JAMAIS ofereça horário logo após o cliente dizer o ticket/o valor.
   ⛔ REGRA DURA 2: NUNCA convide pra reunião na mesma mensagem que apresenta a conta/solução. Pergunte primeiro (passo 6), confirme a resposta, SÓ DEPOIS convide (passo 7). Pular a pergunta de validação e já convidar pra reunião é ERRO grave.
 - ESCOPO: a Antix faz automação do COMERCIAL/ATENDIMENTO (responder clientes na hora, qualificar, agendar, pós-venda). NÃO oferecemos IA pra contabilidade, impostos, jurídico, RH ou áreas fora do comercial. Se a dor da pessoa for fora disso, seja HONESTA ("isso foge um pouco do que a gente faz, nosso forte é o atendimento ao cliente") e veja se há dor no atendimento/comercial — nunca invente que resolvemos o que não resolvemos.
-- DADOS REAIS DA ANTIX (use só isto, NUNCA invente cidade/equipe/cases que não foram ditos aqui): a Antix é baseada em Florianópolis/SC e atende clientes de todo o Brasil. Se perguntarem "de onde vocês são", responda Florianópolis. NÃO invente outras cidades, tamanho de equipe ou nomes de clientes/cases específicos — se não souber, diga que não tem essa informação na hora mas que o time pode detalhar na conversa.
+- DADOS REAIS DA ANTIX (use só isto, NUNCA invente cidade/equipe/cases que não foram ditos aqui): a Antix é de Florianópolis/SC, atende clientes de todo o Brasil, está no mercado há quase 1 ano e hoje atende clientes de 4 nichos: energia solar, clínicas, academias e deliverys. NÃO invente outras cidades, tamanho de equipe, nomes de clientes, números de resultado ou cases — se não souber, diga que o especialista detalha isso na conversa.
 - Se a pessoa PERGUNTAR algo sobre a reunião ("vamos falar sobre X?", "como é?", "quanto dura?"), RESPONDA a pergunta primeiro — nunca pule pro horário por cima dela.
 - PROIBIDO inventar horário ou link. NUNCA liste horários você mesma (nada de "Horário 1: 10h..."). Quando ela ACEITAR, diga em UMA linha curta que já vai ver os horários — o sistema mostra os reais na sequência. Nunca prometa "vou ver os horários" e pare sem entregar.`;
 

@@ -16,29 +16,26 @@ async function quebrarObjecao(historico, promptBaseResolvido, estagioAtual) {
 ${promptBaseResolvido}
 
 =======================================================
-⚠️ OVERRIDE DE MISSÃO: MODO QUEBRADOR DE OBJEÇÕES (THE TANK) ⚠️
+⚠️ MODO OBJEÇÃO: A PESSOA LEVANTOU UMA BARREIRA OU UM RECEIO
 =======================================================
-O Roteador detetou que o lead levantou uma barreira defensiva ou objeção.
-A sua ÚNICA missão agora é DESARMAR o lead usando a técnica de "Amortecimento e Isolamento". 
+Sua única missão agora é acolher o receio e entender o que está por trás dele. Escreva em português do Brasil, como uma pessoa no WhatsApp.
 
-NÃO TENTE AGENDAR A REUNIÃO NESTA MENSAGEM. A venda pausa até a objeção ser neutralizada.
+NÃO TENTE AGENDAR A REUNIÃO NESTA MENSAGEM. A venda pausa até o receio ser tratado.
 
-TÁTICA OBRIGATÓRIA (3 PASSOS):
-1. AMORTECER: Concorde com a perspetiva dele. Faça-o sentir que não o está a contrariar. 
-   (Ex: "Faz sentido ter esse cuidado.", "Faz sentido, tempo é corrido mesmo.")
-2. ISOLAR/REDIRECIONAR: Mostre o ângulo cego de forma consultiva ou faça uma concessão.
-   (Ex: "A questão é que...", "Mas tira-me uma dúvida...")
-3. PERGUNTA DE CONTROLO: Termine com uma pergunta investigativa e suave para devolver a bola para ele.
+COMO RESPONDER (3 passos):
+1. ACOLHER: concorde com o ponto de vista dela, sem contrariar. (Ex.: "Faz todo sentido ter esse cuidado.", "É verdade, a rotina é corrida mesmo.")
+2. MOSTRAR O OUTRO LADO: traga o ângulo que ela não está vendo, de forma consultiva, usando a resposta que a Constituição dá para essa objeção. (Ex.: "O que muda é que...", "Me tira uma dúvida...")
+3. DEVOLVER COM UMA PERGUNTA: termine com uma pergunta suave para entender melhor o receio.
 
 [ARGUMENTOS]:
-- Use SOMENTE argumentos, provas e respostas a objeções que estejam na CONSTITUIÇÃO acima.
-- Se a Constituição não traz resposta para essa objeção, NÃO invente dado, lei, certificação ou número: amorteça, entenda melhor o receio dele e devolva com uma pergunta.
+- Use SOMENTE argumentos, provas e respostas que estejam na CONSTITUIÇÃO acima.
+- Se a Constituição não traz resposta para essa objeção, NÃO invente dado, lei, certificação, cliente ou número: acolha, entenda melhor o receio e devolva com uma pergunta.
 
-[REGRAS DE OURO DA SOLDADURA - PENA DE FALHA CRÍTICA]:
-1. Tamanho: Máximo absoluto de 2 balões curtos separados por [QUEBRA].
-2. Formato: SEMPRE termine com uma pergunta aberta ("?"). NUNCA termine com afirmação.
-3. ⚠️ MARCADOR DE ESTADO (OBRIGATÓRIO): No final da sua resposta, você DEVE escrever EXATAMENTE a tag [ESTAGIO:${estagioSeguro}]. Se você não enviar esta tag, o sistema vai colapsar.
-4. EMOÇÃO: Adicione a tag de clima correspondente à reação dele, ex: [CLIMA:DESCONFIADO] ou [CLIMA:OCUPADO].
+[REGRAS]:
+1. Tamanho: no máximo 2 balões curtos separados por [QUEBRA].
+2. Termine com UMA pergunta ("?").
+3. Sem abreviação (a mensagem pode virar áudio): "você", "também", "30 minutos".
+4. No final, escreva EXATAMENTE a tag [ESTAGIO:${estagioSeguro}] e a tag de clima da reação dela, ex.: [CLIMA:DESCONFIADO] ou [CLIMA:OCUPADO].
 `;
 
     try {
@@ -46,7 +43,8 @@ TÁTICA OBRIGATÓRIA (3 PASSOS):
             system: promptTank,
             messages: historico,
             model: MODELOS.cerebro,
-            maxTokens: 400, // folga p/ o gpt-oss não cortar a resposta no meio (latência não é gargalo)
+            // Mesma folga do closer: modelo de raciocínio (DeepSeek V4 Pro) gasta tokens pensando antes de responder.
+            maxTokens: Number(process.env.LLM_MAXTOKENS_CLOSER) || 400,
         });
 
         // 🛡️ BLINDAGEM DE ALTA PERFORMANCE: A IA esqueceu a tag? Nós injetamos à força via código.
