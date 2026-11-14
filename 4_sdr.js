@@ -247,7 +247,7 @@ const { calcularBackoffReconexao } = require('./lib/reconexao');
 // 🚫 Travas de qualidade da resposta no chat do site (puras, testáveis) — lib/webGuardrails.js.
 const { stripWeb, enxugarWeb } = require('./lib/webGuardrails');
 // 📅 Decisão pura de agendamento (não agenda com "oi") — lib/agendaDecisao.js.
-const { deveProporAgendamento, aceitouConviteDeReuniao, convidouReuniaoAntes, pediuHorarioDireto, prometeuVerAgenda, ehSaudacaoPura, querAgendar: querAgendarDecisao } = require('./lib/agendaDecisao');
+const { deveProporAgendamento, aceitouConviteDeReuniao, convidouReuniaoAntes, pediuHorarioDireto, prometeuVerAgenda, prometeHorarios, cicloLiberaHorarios, ehSaudacaoPura, querAgendar: querAgendarDecisao } = require('./lib/agendaDecisao');
 // 🧠 Triagem inteligente (escuta ativa): lê o momento da conversa e decide o modo (tira-dúvida,
 // objeção, qualificar, propor reunião, agendar) — lib/triagem.js. Só libera agenda quando faz sentido.
 const { triar, decidirAcao } = require('./lib/triagem');
@@ -5526,11 +5526,32 @@ if (!resposta) {
     return;
 }
 
+// 🔁 CICLO ANTES DA AGENDA (bug 2026-11-13): o lead disse "Geração e qualificação" e a IA respondeu "já
+// solicito ao sistema os horários". Horário só depois de explorar a dor → mostrar a solução → convite →
+// "sim". Se o closer prometer horário antes disso, refaz a resposta UMA vez mandando seguir o ciclo; se
+// insistir, troca por uma pergunta de exploração da dificuldade (nunca deixa sair promessa de horário).
+const cicloOk = cicloLiberaHorarios({
+    texto: ultimaMsg, historico,
+    temSlots: Array.isArray(lead.slots_propostos) && lead.slots_propostos.length > 0,
+    jaAgendado: lead.status === 'booked',
+});
+if (bookingAtivo && !cicloOk && typeof resposta === 'string' && prometeHorarios(resposta)) {
+    console.log(`🔁 [CICLO] ${lead.name}: closer prometeu horários antes do ciclo — refazendo a resposta.`);
+    const avisoCiclo = `\n\n⛔ CORREÇÃO OBRIGATÓRIA: sua resposta anterior falou em ver/puxar horários, mas o lead AINDA NÃO aceitou reunião. NÃO fale de horário, agenda nem reunião agora. Siga o ciclo: se ainda não explorou a dificuldade dele com o que ele disse, pergunte sobre essa dificuldade (como faz hoje, o que trava). Se já explorou, mostre como a gente resolve essa dor.`;
+    const refeita = await closerAgent.gerarRespostaCloser(historico, lead, promptResolvido + avisoCiclo, 'DUVIDA', {
+        calendlyLink: instanceData?.calendly_link, instanceType: instanceData?.product_type || 'generico', bookingAtivo, agendaConectada,
+    }).catch(() => null);
+    resposta = (refeita && !prometeHorarios(refeita))
+        ? refeita
+        : 'Entendi! E hoje, qual é a maior dificuldade que vocês têm com isso? [ESTAGIO:2] [CLIMA:NEUTRO]';
+}
+
 // 🩹 STALL DE AGENDA SEM PROPOSTA: o closer pode dizer "deixa eu ver os horários" (quer agendar),
 // mas o orquestrador rodou ANTES dele e não propôs → beco sem saída ("vou ver" que nunca volta).
 // Quando isso acontece, força a proposta REAL agora, no mesmo turno, trocando o stall pelos
 // horários de verdade. (orquestrar só propõe/grava slots; não cria evento — seguro.)
-if (bookingAtivo && typeof resposta === 'string') {
+// Só depois do ciclo (cicloOk): antes dele a promessa já foi barrada acima.
+if (bookingAtivo && cicloOk && typeof resposta === 'string') {
     const deuStallDeAgenda = /\b(deixa|vou|deixe)\b[^.!?]*\b(ver|puxar|olhar|checar|conferir|verificar)\b[^.!?]*\b(hor[áa]rio|hor[áa]rios|agenda)\b/i.test(resposta);
     const semSlots  = !(Array.isArray(lead.slots_propostos) && lead.slots_propostos.length);
     const naoBooked = lead.status !== 'booked';
@@ -5597,7 +5618,7 @@ if (bookingAtivo && typeof resposta === 'string') {
 
         // 🛑 ANTI-STALL (WhatsApp): se o closer prometeu "deixa eu ver os horários" e PARARIA, o lead
         // ia esperar uma msg que nunca chega. Intercepta e entrega os horários REAIS agora.
-        if (resposta && prometeuVerAgenda([{ role: 'assistant', content: String(resposta) }])) {
+        if (resposta && cicloOk && prometeuVerAgenda([{ role: 'assistant', content: String(resposta) }])) {
             const forcado = await orquestrarAgendamento(lead, ultimaMsg, instanceData, userId, intencao, historico, { forcarOferta: true }).catch(() => null);
             if (forcado?.tratado && forcado.resposta) {
                 await filtrarEEnviarResposta(instancia?.sock, remoteJid, forcado.resposta, historico, lead, instanceId, instanceData?.tts_voice || null);

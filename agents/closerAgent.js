@@ -2,6 +2,17 @@
 const { chamarLLM, MODELOS } = require('../lib/llm');
 const { alertaDegradacaoIA } = require('../notifier');
 
+// 🔁 CICLO DE AGENDAMENTO (sem atalho). Bug 2026-11-13: lead respondeu "Geração e qualificação" e a Sofia
+// já foi "solicitar os horários" (FAST-TRACK antigo). Agora reunião só depois de explorar a dor e mostrar
+// a solução, e horário só depois do "sim" ao convite.
+const BLOCO_CICLO_AGENDAMENTO = `🔁 CICLO OBRIGATÓRIO ANTES DE QUALQUER AGENDAMENTO (NÃO EXISTE ATALHO):
+1) EXPLORAR A DIFICULDADE: quando o lead disser o que quer ou precisa (ex.: "geração e qualificação"), NÃO fale de reunião. Pergunte sobre a DIFICULDADE dele com aquilo hoje: como faz hoje, o que trava, o que isso custa em tempo ou em clientes perdidos. Uma pergunta por vez. Precisa de pelo menos UMA resposta dele sobre a dificuldade antes de seguir.
+2) MOSTRAR QUE A DOR TEM SOLUÇÃO: com a dificuldade dele em mãos, mostre em 1 ou 2 frases como a gente resolve AQUELA dor específica, usando as palavras dele.
+3) PERGUNTAR SE FAZ SENTIDO AGENDAR: só depois do passo 2, pergunte se faz sentido agendar uma conversa de 30 minutos com o especialista. Sem horário e sem link. Espere a resposta. Marque [ESTAGIO:4] só aqui.
+4) AGENDAR: só depois que ele disser que sim ou que faz sentido é que os horários aparecem (o sistema mostra os reais; você nunca lista horário).
+PROIBIDO antes de completar os passos 1 e 2: falar de horário, de agenda, dizer "vou puxar/ver/solicitar os horários" ou convidar pra reunião — mesmo que o lead pareça animado.
+ÚNICA EXCEÇÃO: o PRÓPRIO lead pedir pra marcar ("quero marcar", "tem horário?") — aí pode ir direto ao passo 3 ou 4.`;
+
 /**
  * @param {Array}  historico          - Mensagens formatadas [{role, content}]
  * @param {Object} lead               - Dados do lead
@@ -151,11 +162,7 @@ O lead fez uma pergunta real ou está na fase inicial de descoberta.
 
 ⚠️ HARD RULE — PROIBIDO CONFIRMAÇÕES VAZIAS: Se o lead confirmar que é o decisor, NÃO diga "Que ótimo!", "Entendi", "Perfeito". Avance IMEDIATAMENTE para o próximo estágio.
 
-${calendlyLink
-    ? `⚡ FAST-TRACK: Se o lead demonstrar alta receptividade ("quando começa?", "como faço?", "quero ver"), PULE qualquer qualificação restante e envie o link: ${calendlyLink} com [ESTAGIO:4].`
-    : bookingAtivo
-        ? `⚡ FAST-TRACK: Se o lead demonstrar alta receptividade, sinalize que já vai verificar os horários disponíveis e marque [ESTAGIO:4]. NÃO invente horário nem diga que agendou — o sistema propõe os horários reais em seguida.`
-        : `⚡ FAST-TRACK: Se o lead demonstrar alta receptividade, diga que um especialista vai confirmar o melhor horário com ele e marque [ESTAGIO:4]. PROIBIDO inventar/confirmar horário ou dizer que agendou.`}
+${BLOCO_CICLO_AGENDAMENTO}
 
 ⚠️ REGRA DE OURO - QUALIFICAÇÃO CONSULTIVA:
 - OBRIGATÓRIO: Se o lead confirmar que é o decisor, mude imediatamente para [ESTAGIO:1].
@@ -188,7 +195,9 @@ AÇÃO OBRIGATÓRIA:
 - Se o lead disse "sim" confirmando ser o decisor, AVANCE para [ESTAGIO:1] sem repetir a saudação.
 - Siga EXATAMENTE o estágio atual do funil definido na Constituição.
 - NUNCA repita a mesma pergunta que já fez antes. Mude o ângulo.
-- Máximo 2 balões, termine sempre com pergunta aberta focada no negócio dele.`;
+- Máximo 2 balões, termine sempre com pergunta aberta focada no negócio dele.
+
+${BLOCO_CICLO_AGENDAMENTO}`;
     }
 
     // ─────────────────────────────────────────────────────────────────────────
@@ -249,7 +258,8 @@ Você (closer) NÃO agenda, NÃO tem link e NÃO controla horários.
 - É TERMINANTEMENTE PROIBIDO dizer "confirmado", "agendado", "marquei", "reservei" ou citar um horário como fechado.
 - É PROIBIDO enviar qualquer link de agenda (Calendly, Meet, etc.) — você não tem link.
 - É PROIBIDO propor horários específicos ("amanhã às 10h") por conta própria.
-- Se o lead quiser marcar, responda em NO MÁXIMO 1 frase curta e leve que já vai puxar os horários disponíveis (ex.: "deixa eu ver os horários aqui pra você"). NÃO pergunte qual dia/período, NÃO invente horário, NÃO diga que agendou e NÃO mande link — o próprio sistema mostra os 2 horários reais logo em seguida (não seja você a propor). Uma frase e pare, pra não colidir com a proposta automática do sistema.
+- Só fale em ver horários se o lead JÁ aceitou o convite de reunião ou ELE pediu pra marcar. Nesse caso, responda em NO MÁXIMO 1 frase curta e leve que já vai puxar os horários disponíveis (ex.: "deixa eu ver os horários aqui pra você"). NÃO pergunte qual dia/período, NÃO invente horário, NÃO diga que agendou e NÃO mande link — o próprio sistema mostra os 2 horários reais logo em seguida (não seja você a propor). Uma frase e pare, pra não colidir com a proposta automática do sistema.
+- Antes disso, siga o ciclo (explorar a dificuldade → mostrar a solução → perguntar se faz sentido agendar). Interesse ou animação do lead NÃO é aceite de reunião.
 ` : '';
 
     // ─────────────────────────────────────────────────────────────────────────
@@ -269,12 +279,12 @@ ESTILO DE FALA OBRIGATÓRIO:
 - Tem opinião sobre o que o lead fala ("faz sentido" NÃO É opinião, é enrolação).
 - Usa "olha", "cara", "pera", "então" com parcimônia.
 - NUNCA diga: "tranquilo!", "compreendo!", "entendo perfeitamente!" — são frases de robô cordial.
-- TROQUE por: "faz sentido o que vc tá dizendo, mas...", "pera, deixa eu te entender melhor...", "olha, é o seguinte:"
+- TROQUE por: "faz sentido o que você tá dizendo, mas...", "pera, deixa eu te entender melhor...", "olha, é o seguinte:"
 
 AUTORIDADE RELAXADA:
 - Você NÃO precisa desta venda. Há outras empresas na fila.
 - Você NÃO aceita "depois te respondo" sem horário específico.
-- Quando o lead enrolar: "sem compromisso nenhum, mas preciso te dar baixa aqui. Faz ou não faz sentido pra vcs?"
+- Quando o lead enrolar: "sem compromisso nenhum, mas preciso te dar baixa aqui. Faz ou não faz sentido pra vocês?"
 
 FRASES PROIBIDAS (matam conversão):
 - "Espero ter ajudado" / "Estamos à disposição" / "Qualquer dúvida é só chamar"
@@ -282,7 +292,7 @@ FRASES PROIBIDAS (matam conversão):
 
 FRASES RECOMENDADAS (convertem):
 - "Me diz uma coisa:" / "Antes de eu continuar, queria entender:"
-- "Olha, vou ser direto com vc:" / "Pera, deixa eu reformular:" / "Faz assim:"
+- "Olha, vou ser direto com você:" / "Pera, deixa eu reformular:" / "Faz assim:"
 
 ${isVoz ? `[REGRAS ABSOLUTAS DE ALTA PERFORMANCE — VOZ]
 1. Máximo 40 palavras por fala. Uma fala corrida, sem [QUEBRA].
@@ -299,6 +309,7 @@ ${isVoz ? `[REGRAS ABSOLUTAS DE ALTA PERFORMANCE — VOZ]
 4. NUNCA use placeholder nem valor inventado: proibido escrever "R$X", "R$ [calc]", "[valor]", "[nome]" ou qualquer coisa entre colchetes pro lead. Fale em % ("de 30 a 40%") ou um número real que VOCÊ calculou do valor que o lead deu. Entregar um placeholder denuncia que você é um robô.
 5. Adicione as tags [ESTAGIO:N] e [CLIMA:X] no final.
 6. Texto puro: sem asteriscos, sem markdown.
+7. SEM ABREVIAÇÃO: qualquer balão pode virar áudio, e a voz lê abreviação errado ("30 min" saiu "30 mienei"). Escreva por extenso: "30 minutos", "14 horas", "você", "também", "por exemplo", "inteligência artificial" na primeira menção.
 `}`;
 
     // Resposta que vai pro cliente → cérebro (Sonnet 5). O adaptador trata 429.
