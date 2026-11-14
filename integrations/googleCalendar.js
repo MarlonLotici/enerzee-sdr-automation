@@ -246,6 +246,21 @@ async function remarcarEvento(userId, calendarId, eventId, { inicioISO, fimISO }
     return { eventId: ev.id, htmlLink: ev.htmlLink || null, meetLink };
 }
 
+// Troca o convidado (e-mail) de um evento já criado — lead digitou o e-mail errado e corrigiu depois.
+// sendUpdates:'all' → a Google manda o convite pro e-mail novo. Mantém o mesmo horário e o mesmo Meet.
+async function atualizarConvidado(userId, calendarId, eventId, emailNovo) {
+    const auth = await _authDoTenant(userId);
+    if (!auth) return null;
+    const cal = google.calendar({ version: 'v3', auth });
+    const res = await cal.events.patch({
+        calendarId: calendarId || 'primary',
+        eventId,
+        sendUpdates: 'all',
+        requestBody: { attendees: [{ email: emailNovo }] },
+    });
+    return { eventId: res.data.id };
+}
+
 // Cancela (deleta) um evento da agenda. sendUpdates:'all' → a Google avisa o convidado (lead)
 // por e-mail que a reunião foi cancelada. Idempotente-ish: se o evento já sumiu, trata como ok.
 async function cancelarEvento(userId, calendarId, eventId) {
@@ -284,6 +299,7 @@ module.exports = {
     criarEvento,
     verificarLivre,
     remarcarEvento,
+    atualizarConvidado,
     cancelarEvento,
     atualizarEmojiTitulo,
     assinarState,

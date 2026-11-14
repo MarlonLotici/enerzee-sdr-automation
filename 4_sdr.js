@@ -247,6 +247,8 @@ const { calcularBackoffReconexao } = require('./lib/reconexao');
 // 🚫 Travas de qualidade da resposta no chat do site (puras, testáveis) — lib/webGuardrails.js.
 const { stripWeb, enxugarWeb } = require('./lib/webGuardrails');
 // 📅 Decisão pura de agendamento (não agenda com "oi") — lib/agendaDecisao.js.
+const { ultimoEmailDaRajada, aguardandoCorrecao: aguardandoCorrecaoEmail } = require('./lib/emailContato');
+const { precisaReprocessar } = require('./lib/reprocesso');
 const { faseDoCiclo, estagioDaFase, respostaCumpreFase, forcarEstagio, textoFixoDaFase, leadRecusou, tenantComCiclo } = require('./lib/cicloVenda');
 const { deveProporAgendamento, aceitouConviteDeReuniao, convidouReuniaoAntes, pediuHorarioDireto, prometeuVerAgenda, prometeHorarios, cicloLiberaHorarios, ehSaudacaoPura, querAgendar: querAgendarDecisao } = require('./lib/agendaDecisao');
 // 🧠 Triagem inteligente (escuta ativa): lê o momento da conversa e decide o modo (tira-dúvida,
@@ -4814,6 +4816,24 @@ async function orquestrarAgendamento(lead, ultimaMsg, instanceData, userId, inte
     // já está marcado (sem reofertar e sem deixar o closer ecoar horários velhos do histórico).
     if (jaAgendado && !temSlots) {
         const _txt = String(ultimaMsg || '');
+        // 📧 E-MAIL CORRIGIDO DEPOIS DO EVENTO CRIADO: o lead errou o e-mail, a reunião foi criada com ele e agora ele manda
+        // o certo. Troca o convidado do evento (a Google reenvia o convite) e atualiza o lead. Só mensagem curta, pra
+        // não confundir com um e-mail citado no meio de um texto longo.
+        const emailCorrigido = ultimoEmailDaRajada(historico, ultimaMsg);
+        if (emailCorrigido && lead.gcal_event_id && _txt.length <= 160
+            && emailCorrigido !== String(lead.email || '').trim().toLowerCase()) {
+            try {
+                await gcal.atualizarConvidado(userId, lead.gcal_calendar_id || calId, lead.gcal_event_id, emailCorrigido);
+                await supabase.from('leads').update({ email: emailCorrigido }).eq('id', lead.id);
+                lead.email = emailCorrigido;
+                console.log(`📧 [EMAIL] ${lead.name}: convite da reunião reenviado para o e-mail corrigido (${emailCorrigido}).`);
+                return ok(`Corrigido! Reenviei o convite pro ${emailCorrigido} ✅ Qualquer coisa é só me chamar.`);
+            } catch (e) {
+                console.error(`❌ [EMAIL] Falha ao trocar o convidado do evento de ${lead.name}: ${e.message}`);
+                enviarAlerta(`⚠️ E-mail corrigido, convite NÃO reenviado — ${lead.name}`, `O lead corrigiu o e-mail para ${emailCorrigido}, mas a troca do convidado no evento falhou: ${e.message}. Reenvie o convite à mão.`, 15158332).catch(() => {});
+                return ok(`Anotei seu e-mail certo (${emailCorrigido}). Vou garantir que o convite chegue aí, tá? 🙂`);
+            }
+        }
         // CANCELAR ≠ REMARCAR. Remarcar: o lead quer OUTRO horário → ofertar faz sentido. Cancelar/
         // desmarcar: ele NÃO quer mais marcar agora → empurrar slots por cima disso é justamente o
         // "empurrar reunião" que incomoda. Acolhe e devolve a escolha (cancelar de vez x remarcar),
@@ -4898,8 +4918,17 @@ async function orquestrarAgendamento(lead, ultimaMsg, instanceData, userId, inte
         // caso o e-mail não seja respondido). No WhatsApp o número já é conhecido via o próprio canal.
         const precisaTelefone = ehWeb;
         const telefoneValido = (t) => /\d{10,13}/.test(String(t || '').replace(/\D/g, ''));
-        const emailNaMsg = (String(ultimaMsg || '').match(/[^\s@]+@[^\s@]+\.[^\s@]+/) || [])[0];
-        if (emailNaMsg && !emailValido(lead.email)) { await supabase.from('leads').update({ email: emailNaMsg }).eq('id', lead.id).then(() => {}, (e) => console.error('[AGENDAMENTO] falha ao salvar email:', e.message)); lead.email = emailNaMsg; }
+        // 📧 E-mail lido da RAJADA (tudo desde a última fala da IA), o ÚLTIMO vence (é a correção). Antes só olhava a
+        // última mensagem: "e-mail errado, Ops, e-mail certo" travava (bug 2026-11-14), e um e-mail novo nunca
+        // substituía o salvo.
+        // Se a última mensagem é um "Ops/errei" depois de um e-mail, a correção está a caminho: NÃO usa nem grava o
+        // e-mail errado, só pede o certo.
+        if (aguardandoCorrecaoEmail(ultimaMsg, historico)) {
+            console.log(`📧 [EMAIL] ${lead.name}: "${String(ultimaMsg).slice(0, 30)}" depois de um e-mail — aguardando o e-mail correto, sem efetivar.`);
+            return ok(_variar(['Sem problema! Me manda o e-mail certinho de novo 😊', 'Tranquilo! Pode mandar o e-mail correto 🙂']));
+        }
+        const emailNaMsg = ultimoEmailDaRajada(historico, ultimaMsg);
+        if (emailNaMsg && emailNaMsg !== String(lead.email || '').trim().toLowerCase()) { await supabase.from('leads').update({ email: emailNaMsg }).eq('id', lead.id).then(() => {}, (e) => console.error('[AGENDAMENTO] falha ao salvar email:', e.message)); lead.email = emailNaMsg; }
         // Telefone: aceita formatos comuns ((48) 99999-8888, 48999998888, +55 48 99999-8888) — exige
         // 10-13 dígitos pra não confundir com os números da qualificação (ticket, quantidade).
         const telefoneNaMsg = (String(ultimaMsg || '').match(/(?:\+?55\s?)?\(?\d{2}\)?[\s.-]?9?\d{4}[\s.-]?\d{4}\b/) || [])[0];
@@ -5059,10 +5088,14 @@ const workerIA = new Worker('FilaIA', async (job) => {
     // lead podiam rodar juntos → 2 respostas iguais/parecidas. Se já há um job processando esta
     // conversa, ignora este (o job em curso lê o histórico fresco e cobre as msgs picadas).
     if (iaRespondendo.has(whatsappId)) {
-        console.log(`🔒 [WORKER] ${whatsappId} já em processamento — job duplicado ignorado (anti-duplicação).`);
+        // O job em curso confere, ao terminar, se ficou mensagem do lead sem resposta e enfileira um job novo
+        // (lib/reprocesso.js). Antes a mensagem nova era descartada aqui E a resposta velha era descartada pelo
+        // ANTI-DUP: ninguém respondia (bug 2026-11-14).
+        console.log(`🔒 [WORKER] ${whatsappId} já em processamento — job duplicado ignorado; o job em curso reprocessa ao terminar se ficar mensagem pendente.`);
         return;
     }
     iaRespondendo.add(whatsappId);
+    const _inicioJobMs = Date.now();
 
     try {
         // Job de retomada (agendado após pausa humana) não passou pela gaveta: balanceia o contador do finally.
@@ -5669,6 +5702,19 @@ if (bookingAtivo && cicloOk && typeof resposta === 'string') {
         const _restantes = (inboundAtivo.get(instanceId) || 1) - 1;
         if (_restantes <= 0) inboundAtivo.delete(instanceId); else inboundAtivo.set(instanceId, _restantes);
         console.log(`🔓 [WORKER-TRAVA] IA pronta para ${whatsappId} novamente.`);
+        // 🔁 MENSAGEM PERDIDA: se o lead mandou algo ENQUANTO este job rodava e ninguém respondeu (o job dele foi
+        // descartado pela trava, e/ou o ANTI-DUP abortou a resposta velha), enfileira um job novo agora.
+        try {
+            const { data: _ultMsg } = await supabase.from('messages').select('role, created_at')
+                .eq('whatsapp_id', whatsappId).order('created_at', { ascending: false }).limit(1).maybeSingle();
+            if (precisaReprocessar(_ultMsg, _inicioJobMs)) {
+                console.log(`🔁 [REPROCESSO] ${whatsappId}: lead mandou mensagem durante o processamento e ficou sem resposta — enfileirando job novo.`);
+                inboundAtivo.set(instanceId, (inboundAtivo.get(instanceId) || 0) + 1);
+                await filaMensagensIA.add('gerar_resposta',
+                    { leadId, whatsappId, instanceId, remoteJid, reprocesso: true },
+                    { priority: 1, attempts: 3, backoff: { type: 'exponential', delay: 5000 }, delay: 1500 });
+            }
+        } catch (_eRep) { console.warn(`⚠️ [REPROCESSO] Falha ao conferir/enfileirar: ${_eRep.message}`); }
     }
 }, { 
     connection: redisConnection,
