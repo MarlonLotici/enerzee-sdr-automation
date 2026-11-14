@@ -1,6 +1,7 @@
 // agents/closerAgent.js
 const { chamarLLM, MODELOS } = require('../lib/llm');
 const { alertaDegradacaoIA } = require('../notifier');
+const { faseDoCiclo, blocoDaFase, tenantComCiclo } = require('../lib/cicloVenda');
 
 // 🔁 CICLO DE AGENDAMENTO (sem atalho). Bug 2026-11-13: lead respondeu "Geração e qualificação" e a Sofia
 // já foi "solicitar os horários" (FAST-TRACK antigo). Agora reunião só depois de explorar a dor e mostrar
@@ -263,12 +264,21 @@ Você (closer) NÃO agenda, NÃO tem link e NÃO controla horários.
 ` : '';
 
     // ─────────────────────────────────────────────────────────────────────────
+    // FASE DO CICLO (dor → solução → convite): saída DETERMINÍSTICA da descoberta. Só no WhatsApp
+    // (o chat do site tem fluxo próprio) e só nos tenants com ciclo rígido (lib/cicloVenda.js).
+    // ─────────────────────────────────────────────────────────────────────────
+    const usaCiclo = !isVoz && (intencao === 'DUVIDA' || intencao === 'LIXO') && !primeiroContato
+        && !String(lead?.whatsapp_id || '').includes('@web') && tenantComCiclo(lead?.user_id);
+    const blocoFase = usaCiclo ? blocoDaFase(faseDoCiclo(historico, lead)) : '';
+
+    // ─────────────────────────────────────────────────────────────────────────
     // PROMPT FINAL = Constituição + Override + DNA do Vendedor
     // ─────────────────────────────────────────────────────────────────────────
     const promptFinal = `${promptPersonalidade}
 ${blocoStandby}
 ${overrideTatico}
 ${blocoBookingAuto}
+${blocoFase}
 ${blocoVoz}
 ========================================================
 🎭 DNA DO VENDEDOR — VOCÊ NÃO É UM ASSISTENTE, VOCÊ É UM CLOSER
