@@ -1270,8 +1270,8 @@ async function gerarRespostaIA(historico, contextoLead, instanceData) {
             const respostaDaIA = await chamarLLM({
                 system: promptFinal,
                 messages: historicoPodado,
-                model: MODELOS.cerebro,
-                maxTokens: 500, // folga p/ o gpt-oss não cortar a resposta no meio (latência não é gargalo)
+                model: MODELOS.conversa,
+                maxTokens: Number(process.env.LLM_MAXTOKENS_CLOSER) || 500, // folga p/ o modelo não cortar a resposta no meio
             });
             if (!respostaDaIA) throw new Error('resposta vazia da LLM');
             return respostaDaIA.replace(/[\*_~`]/g, '');
@@ -4602,7 +4602,7 @@ function enviarBriefingReuniao({ lead, historico, instanceData, quando, meetLink
         const nomeLead = lead.dono || lead.name || 'Lead';
         const corpo = await chamarLLM({
             messages: [{ role: 'user', content: promptBriefing({ historico, nomeLead, empresaCliente: instanceData?.company_name || 'a empresa', contextoNegocio: tp?.system_prompt || '', quando }) }],
-            model: MODELOS.cerebro, maxTokens: Number(process.env.LLM_MAXTOKENS_CLOSER) || 1500,
+            model: MODELOS.conversa, maxTokens: Number(process.env.LLM_MAXTOKENS_CLOSER) || 1500,
         });
         const cab = cabecalhoBriefing({ nomeLead, telefone: String(lead.whatsapp_id || '').includes('@web') ? lead.phone : String(lead.whatsapp_id || '').split('@')[0], email: lead.email, quando, meetLink });
         await avisarTenant(supabase, userId, { titulo: `📋 Briefing da reunião — ${nomeLead}`, descricao: `${cab}\n\n${String(corpo || 'Resumo indisponível.').trim()}`, cor: 0x3B82F6, nomeCliente: instanceData?.company_name || '' });
@@ -4630,7 +4630,7 @@ async function executarPropostasPosReuniao() {
             const nomeLead = lead.dono || lead.name || 'Lead';
             const texto = await chamarLLM({
                 messages: [{ role: 'user', content: promptProposta({ historico, nomeLead, oferta: process.env.OFERTA_ANTIX || OFERTA_ANTIX_PADRAO }) }],
-                model: MODELOS.cerebro, maxTokens: Number(process.env.LLM_MAXTOKENS_CLOSER) || 1500,
+                model: MODELOS.conversa, maxTokens: Number(process.env.LLM_MAXTOKENS_CLOSER) || 1500,
             }).catch(e => { console.warn(`⚠️ [PROPOSTA] LLM: ${e.message}`); return null; });
             if (!texto) { await redisConnection.del(chave).catch(() => {}); continue; }
             const tel = String(lead.whatsapp_id || '').includes('@web') ? lead.phone : String(lead.whatsapp_id || '').split('@')[0];
@@ -4674,7 +4674,7 @@ async function executarProspeccaoDiaria({ forcar = false } = {}) {
                 if (!res.ok) throw new Error(`Serper HTTP ${res.status} ${(await res.text().catch(() => '')).slice(0, 80)}`);
                 return res.json();
             },
-            gerarMensagens: (prompt) => chamarLLM({ messages: [{ role: 'user', content: prompt }], model: MODELOS.cerebro, maxTokens: 4000 }),
+            gerarMensagens: (prompt) => chamarLLM({ messages: [{ role: 'user', content: prompt }], model: MODELOS.conversa, maxTokens: 4000 }),
             marcarNovo: async (chave) => (await redisConnection.set(`prospeccao:visto:${chave}`, '1', 'EX', 180 * 86400, 'NX').catch(() => 'OK')) === 'OK',
             enviarDiscord: (payload) => postarDiscord(wh.url, payload),
         });
@@ -5875,7 +5875,7 @@ async function gerarCutucaoNatural(lead, instanceId) {
 O lead ainda não respondeu sua última mensagem. PROIBIDO mencionar ou insinuar qualquer instabilidade, sistema, erro técnico, conexão ou "não recebi sua resposta" — o cliente NUNCA pode saber disso. Apenas retome a conversa com naturalidade, como um vendedor faria ao continuar: reforce brevemente o ponto anterior de outro jeito, ou avance. Curto (1-2 frases).`;
 
     try {
-        const resp = await chamarLLM({ system: promptRetomada, messages: podarHistorico(historico), model: MODELOS.cerebro, maxTokens: 300 });
+        const resp = await chamarLLM({ system: promptRetomada, messages: podarHistorico(historico), model: MODELOS.conversa, maxTokens: Number(process.env.LLM_MAXTOKENS_CLOSER) || 300 });
         return resp ? resp.replace(/[\*_~`]/g, '') : null;
     } catch (e) {
         console.error('❌ [CUTUCÃO-IA] Falha ao gerar retomada:', e.message);

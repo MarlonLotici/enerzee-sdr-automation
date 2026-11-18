@@ -51,8 +51,8 @@ ${blocoConcierge}`;
         const resposta = await chamarLLM({
             system: promptFinal,
             messages: historico,
-            model: MODELOS.cerebro,
-            maxTokens: 400,
+            model: MODELOS.conversa,
+            maxTokens: Number(process.env.LLM_MAXTOKENS_CLOSER) || 400,
         });
         if (!resposta || resposta.trim().length < 3) {
             console.warn(`⚠️ [CONCIERGE] LLM devolveu resposta vazia para ${lead?.name}.`);

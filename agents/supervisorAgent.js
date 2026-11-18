@@ -120,7 +120,7 @@ ${instrucoes}`;
 
         const raw = (await chamarLLM({
             messages: [...historico.slice(-6), { role: 'user', content: prompt }],
-            model: MODELOS.cerebro, maxTokens: 260,
+            model: MODELOS.conversa, maxTokens: Number(process.env.LLM_MAXTOKENS_CLOSER) || 260,
         }) || '').trim();
         const limpo = raw.replace(/^"+|"+$/g, '').trim();
         return limpo || null;

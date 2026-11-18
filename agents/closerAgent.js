@@ -328,7 +328,7 @@ ${isVoz ? `[REGRAS ABSOLUTAS DE ALTA PERFORMANCE — VOZ]
         const resposta = await chamarLLM({
             system: promptFinal,
             messages: historico,
-            model: MODELOS.cerebro,
+            model: MODELOS.conversa,
             // gpt-oss é modelo de RACIOCÍNIO: maxTokens baixo demais faz o raciocínio comer tudo e
             // devolver VAZIO ("instabilidade"). Mantemos folga aqui; a brevidade é garantida pela
             // trava de 2 balões (4_sdr) + regras do prompt, não por cortar tokens.

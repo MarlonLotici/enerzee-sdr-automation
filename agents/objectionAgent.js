@@ -42,7 +42,7 @@ COMO RESPONDER (3 passos):
         const resposta = await chamarLLM({
             system: promptTank,
             messages: historico,
-            model: MODELOS.cerebro,
+            model: MODELOS.conversa,
             // Mesma folga do closer: modelo de raciocínio (DeepSeek V4 Pro) gasta tokens pensando antes de responder.
             maxTokens: Number(process.env.LLM_MAXTOKENS_CLOSER) || 400,
         });
