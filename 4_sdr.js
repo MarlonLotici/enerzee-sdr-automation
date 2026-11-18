@@ -249,6 +249,9 @@ const { stripWeb, enxugarWeb } = require('./lib/webGuardrails');
 // 📅 Decisão pura de agendamento (não agenda com "oi") — lib/agendaDecisao.js.
 const { ultimoEmailDaRajada, aguardandoCorrecao: aguardandoCorrecaoEmail } = require('./lib/emailContato');
 const { precisaReprocessar } = require('./lib/reprocesso');
+const { ANTIX_USER_ID, webhookDoTenant, postarDiscord, avisarTenant } = require('./lib/discordTenant');
+const { promptBriefing, promptProposta, cabecalhoBriefing, reuniaoTerminouAgora, OFERTA_ANTIX_PADRAO } = require('./lib/briefing');
+const { rodarProspeccao, ehDiaUtilBRT, horaBRT, dataBRT, linkWhatsApp } = require('./lib/prospeccao');
 const { faseDoCiclo, estagioDaFase, respostaCumpreFase, forcarEstagio, textoFixoDaFase, leadRecusou, tenantComCiclo } = require('./lib/cicloVenda');
 const { deveProporAgendamento, aceitouConviteDeReuniao, convidouReuniaoAntes, pediuHorarioDireto, prometeuVerAgenda, prometeHorarios, cicloLiberaHorarios, ehSaudacaoPura, querAgendar: querAgendarDecisao } = require('./lib/agendaDecisao');
 // 🧠 Triagem inteligente (escuta ativa): lê o momento da conversa e decide o modo (tira-dúvida,
@@ -4573,14 +4576,124 @@ async function avisarDono(instanceData, aviso) {
 }
 // Não avisa sobre os testes do próprio dono (lead = número do aviso). Fire-and-forget.
 function avisarDonoSeNaoForEle(instanceData, jidLead, aviso) {
-    // Discord (canal comercial): SEMPRE — sem janela de 24h e sem custo. WhatsApp abaixo é opcional.
-    alertaAvisoComercial(aviso.titulo, String(aviso.texto || '').replace(/\*([^*\n]+)\*/g, '**$1**')).catch(() => {});
+    // Discord: SEMPRE — sem janela de 24h e sem custo. Vai pro Discord DO CLIENTE (lib/discordTenant.js); sem canal
+    // próprio cai no da Antix com o nome do cliente no título. WhatsApp abaixo é opcional.
+    const _descr = String(aviso.texto || '').replace(/\*([^*\n]+)\*/g, '**$1**');
+    if (instanceData?.user_id) {
+        avisarTenant(supabase, instanceData.user_id, { titulo: aviso.titulo, descricao: _descr, nomeCliente: instanceData.company_name || instanceData.name || '' }).catch(() => {});
+    } else {
+        alertaAvisoComercial(aviso.titulo, _descr).catch(() => {});
+    }
     (async () => {
         const extra = await cfgExtraDaInstancia(instanceData?.id);
         const numero = normalizarNumeroAviso(extra.alerta_whatsapp || process.env.ALERTA_LEAD_WHATSAPP);
         if (!numero || ehNumeroDoDono(jidLead, numero)) return;
         await avisarDono(instanceData, aviso);
     })().catch(() => {});
+}
+
+// 📋 BRIEFING DA REUNIÃO (lib/briefing.js): quando a IA agenda, o vendedor do cliente recebe no Discord dele um resumo
+// do lead (dor nas palavras dele, números, objeções, temperatura, como abrir a reunião). Fire-and-forget.
+function enviarBriefingReuniao({ lead, historico, instanceData, quando, meetLink }) {
+    (async () => {
+        const userId = instanceData?.user_id || lead?.user_id;
+        if (!userId) return;
+        const { data: tp } = await supabase.from('tenant_prompts').select('system_prompt').eq('user_id', userId).maybeSingle();
+        const nomeLead = lead.dono || lead.name || 'Lead';
+        const corpo = await chamarLLM({
+            messages: [{ role: 'user', content: promptBriefing({ historico, nomeLead, empresaCliente: instanceData?.company_name || 'a empresa', contextoNegocio: tp?.system_prompt || '', quando }) }],
+            model: MODELOS.cerebro, maxTokens: Number(process.env.LLM_MAXTOKENS_CLOSER) || 1500,
+        });
+        const cab = cabecalhoBriefing({ nomeLead, telefone: String(lead.whatsapp_id || '').includes('@web') ? lead.phone : String(lead.whatsapp_id || '').split('@')[0], email: lead.email, quando, meetLink });
+        await avisarTenant(supabase, userId, { titulo: `📋 Briefing da reunião — ${nomeLead}`, descricao: `${cab}\n\n${String(corpo || 'Resumo indisponível.').trim()}`, cor: 0x3B82F6, nomeCliente: instanceData?.company_name || '' });
+        console.log(`📋 [BRIEFING] ${nomeLead}: briefing da reunião enviado ao Discord do cliente.`);
+    })().catch(e => console.warn(`⚠️ [BRIEFING] Falha: ${e.message}`));
+}
+
+// ✍️ RASCUNHO DE PROPOSTA (só Antix): depois que a reunião termina, manda pro Discord da Antix um rascunho de proposta
+// com a oferta vigente (env OFERTA_ANTIX ou a de cliente fundador), pra revisar e enviar. Uma vez por reunião (Redis).
+let propostasEmExecucao = false;
+async function executarPropostasPosReuniao() {
+    if (process.env.PROPOSTA_DESLIGADA === '1' || propostasEmExecucao) return;
+    propostasEmExecucao = true;
+    try {
+        const desde = new Date(Date.now() - 6 * 3600e3).toISOString();
+        const { data: leads } = await supabase.from('leads')
+            .select('id, name, dono, whatsapp_id, phone, email, user_id, instance_id, calendly_event_at, gcal_event_id')
+            .eq('user_id', ANTIX_USER_ID).eq('status', 'booked').gte('calendly_event_at', desde).lte('calendly_event_at', new Date().toISOString());
+        for (const lead of leads || []) {
+            if (!reuniaoTerminouAgora(lead.calendly_event_at)) continue;
+            const chave = `proposta:${lead.id}:${lead.gcal_event_id || lead.calendly_event_at}`;
+            const nova = await redisConnection.set(chave, '1', 'EX', 60 * 86400, 'NX').catch(() => null);
+            if (nova !== 'OK') continue;
+            const historico = await db.getHistory(lead.whatsapp_id, lead.instance_id).catch(() => []);
+            const nomeLead = lead.dono || lead.name || 'Lead';
+            const texto = await chamarLLM({
+                messages: [{ role: 'user', content: promptProposta({ historico, nomeLead, oferta: process.env.OFERTA_ANTIX || OFERTA_ANTIX_PADRAO }) }],
+                model: MODELOS.cerebro, maxTokens: Number(process.env.LLM_MAXTOKENS_CLOSER) || 1500,
+            }).catch(e => { console.warn(`⚠️ [PROPOSTA] LLM: ${e.message}`); return null; });
+            if (!texto) { await redisConnection.del(chave).catch(() => {}); continue; }
+            const tel = String(lead.whatsapp_id || '').includes('@web') ? lead.phone : String(lead.whatsapp_id || '').split('@')[0];
+            await avisarTenant(supabase, ANTIX_USER_ID, {
+                titulo: `✍️ Rascunho de proposta — ${nomeLead}`, cor: 0x10B981,
+                url: tel ? linkWhatsApp(String(tel).replace(/\D/g, ''), String(texto).trim()) : null,
+                descricao: `A reunião com **${nomeLead}** já passou. Revise e, se estiver bom, toque no título pra abrir o WhatsApp com o texto pronto.\n\n${String(texto).trim()}`,
+            });
+            console.log(`✍️ [PROPOSTA] ${nomeLead}: rascunho de proposta enviado ao Discord da Antix.`);
+        }
+    } catch (e) {
+        console.warn(`⚠️ [PROPOSTA] Varredura falhou: ${e.message}`);
+    } finally { propostasEmExecucao = false; }
+}
+
+// 🔎 PROSPECÇÃO DIÁRIA DA ANTIX (lib/prospeccao.js): dias úteis, a partir das 08:30 de Brasília, uma vez por dia
+// (trava no Redis). Lista integradores solares + gestores de tráfego com mensagem pronta no Discord da Antix.
+// Desliga com PROSPECCAO_DESLIGADA=1. Cotas: PROSPECCAO_INTEGRADORES (8) e PROSPECCAO_GESTORES (4).
+let prospeccaoEmExecucao = false;
+async function executarProspeccaoDiaria({ forcar = false } = {}) {
+    if (process.env.PROSPECCAO_DESLIGADA === '1' || prospeccaoEmExecucao || !process.env.SERPER_API_KEY) return;
+    if (!forcar && (!ehDiaUtilBRT() || horaBRT() < 8.5)) return;
+    const hoje = dataBRT();
+    if (!forcar) {
+        const nova = await redisConnection.set(`prospeccao:rodou:${hoje}`, '1', 'EX', 2 * 86400, 'NX').catch(() => null);
+        if (nova !== 'OK') return;
+    }
+    prospeccaoEmExecucao = true;
+    try {
+        const wh = await webhookDoTenant(supabase, ANTIX_USER_ID);
+        const r = await rodarProspeccao({
+            dataISO: hoje,
+            qtdIntegradores: Number(process.env.PROSPECCAO_INTEGRADORES) || 8,
+            qtdGestores: Number(process.env.PROSPECCAO_GESTORES) || 4,
+            serper: async (endpoint, q) => {
+                const res = await fetch(`https://google.serper.dev/${endpoint}`, {
+                    method: 'POST', signal: AbortSignal.timeout(20000),
+                    headers: { 'X-API-KEY': process.env.SERPER_API_KEY, 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ q, gl: 'br', hl: 'pt-br', num: 20 }),
+                });
+                if (!res.ok) throw new Error(`Serper HTTP ${res.status} ${(await res.text().catch(() => '')).slice(0, 80)}`);
+                return res.json();
+            },
+            gerarMensagens: (prompt) => chamarLLM({ messages: [{ role: 'user', content: prompt }], model: MODELOS.cerebro, maxTokens: 4000 }),
+            marcarNovo: async (chave) => (await redisConnection.set(`prospeccao:visto:${chave}`, '1', 'EX', 180 * 86400, 'NX').catch(() => 'OK')) === 'OK',
+            enviarDiscord: (payload) => postarDiscord(wh.url, payload),
+        });
+        console.log(`🔎 [PROSPECCAO] ${hoje}: ${r.integradores} integradores + ${r.gestores} gestores enviados ao Discord.`);
+    } catch (e) {
+        console.warn(`⚠️ [PROSPECCAO] Falhou: ${e.message}`);
+        await redisConnection.del(`prospeccao:rodou:${hoje}`).catch(() => {}); // tenta de novo na próxima volta
+        // Avisa o motivo UMA vez por dia (ex.: Serper sem créditos), em vez de silêncio ou de "nenhum contato novo".
+        const avisou = await redisConnection.set(`prospeccao:aviso-falha:${hoje}`, '1', 'EX', 2 * 86400, 'NX').catch(() => null);
+        if (avisou === 'OK') {
+            const semCredito = /credit/i.test(e.message);
+            avisarTenant(supabase, ANTIX_USER_ID, {
+                titulo: '⚠️ Prospecção do dia não rodou', cor: 0xEF4444,
+                descricao: semCredito
+                    ? 'O Serper está **sem créditos**, então não deu pra buscar os contatos. Recarregue em serper.dev (ou troque a SERPER_API_KEY no Railway). O sistema tenta de novo sozinho a cada 10 minutos hoje.'
+                    : `A busca falhou: ${String(e.message).slice(0, 300)}. O sistema tenta de novo sozinho a cada 10 minutos hoje.`,
+            }).catch(() => {});
+        }
+    } finally { prospeccaoEmExecucao = false; }
 }
 
 // 🔔 REENGAJAMENTO de quem sumiu (lib/reengajamento.js + reengajamentoLoop.js): o lead escreveu primeiro, a Sofia
@@ -4761,6 +4874,7 @@ async function orquestrarAgendamento(lead, ultimaMsg, instanceData, userId, inte
         // 🔔 Reunião NOVA: avisa o dono no WhatsApp + manda pro Meta que o clique do anúncio agendou.
         if (!remarcou) {
             avisarDonoSeNaoForEle(instanceData, lead.whatsapp_id, montarAvisoReuniao({ nome: lead.dono || lead.name, jid: lead.whatsapp_id, quando: slot.label }));
+            enviarBriefingReuniao({ lead, historico, instanceData: { ...instanceData, user_id: instanceData?.user_id || userId }, quando: slot.label, meetLink: ev.meetLink });
             if (lead.ad_ctwa_clid) {
                 enviarCapiWhatsApp(instanceData, { eventName: process.env.META_EVENTO_AGENDOU || 'QualifiedLead', ctwaClid: lead.ad_ctwa_clid,
                     eventId: `sched:${lead.id}`, value: parseFloat(process.env.META_SCHEDULE_VALUE) || 450 });
@@ -6164,6 +6278,11 @@ module.exports = {
             // 🔔 REENGAJAMENTO: varredura a cada 3 min (1ª rodada 90s depois do boot, pro banco/Redis estabilizarem)
             setInterval(executarReengajamento, 3 * 60 * 1000);
             setTimeout(executarReengajamento, 90 * 1000);
+
+            // 🔎 PROSPECÇÃO DIÁRIA (dias úteis 08:30+) e ✍️ PROPOSTA PÓS-REUNIÃO: checam a cada 10 min.
+            setInterval(() => executarProspeccaoDiaria().catch(() => {}), 10 * 60 * 1000);
+            setTimeout(() => executarProspeccaoDiaria().catch(() => {}), 2 * 60 * 1000);
+            setInterval(() => executarPropostasPosReuniao().catch(() => {}), 10 * 60 * 1000);
 
             // 💓 HEARTBEAT: verifica WebSocket de cada chip a cada 4 minutos
             setInterval(async () => {
