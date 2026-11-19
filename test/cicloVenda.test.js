@@ -120,3 +120,50 @@ test('lead que recusa não é forçado a avançar no ciclo', () => {
     assert.equal(leadRecusou('Volume e qualidade'), false);
     assert.equal(leadRecusou('faz sentido sim'), false);
 });
+
+// Conversa real de 2026-11-17/18 (Lucas/ANSI): só 1 pergunta de descoberta foi de fato respondida.
+// A autoresposta do WhatsApp Business dele e o "OI" dois dias depois contaram como respostas e a
+// Sofia caiu na SOLUCAO_FIXA ("Entendi o cenário de vocês...") sem a dor ter sido mapeada.
+const conversaLucas = [
+    U('Oi'),
+    U('Querida'),
+    A('Oi! 😊 Sou a Sofia, da Antix. A gente cria agentes de inteligência artificial sob medida pro comercial de empresas. O que te trouxe até aqui?'),
+    U('Preciso melhorar o marketing da minha empresa'),
+    A('Legal! Me conta rapidinho: o que a sua empresa vende e como vocês atraem clientes hoje?'),
+    U('Trabalhamos com engenharia elétrica'),
+    A('Bacana! E como vocês atraem clientes hoje?'),
+    A('Lucas, estou aqui pra te ajudar... consegue falar agora e testar como funciono?'),
+    U('[AUTORESPOSTA] Agradecemos sua mensagem. Não estamos disponíveis no momento, mas entraremos em contato assim que possível.'),
+    A('[AUDIO_TTS] Sem problema! Quando você tiver um tempinho, me chama aqui que a gente continua de onde parou. 😊'),
+    A('Lucas, estou aqui pra te ajudar... consegue falar agora e testar como funciono?'),
+    A('Lucas, respeito seu tempo e decisão, mas saiba que estou aqui se quiser conversar! Desejo uma ótima semana!'),
+    U('OI'),
+];
+
+test('caso Lucas: autoresposta e "OI" não contam como pergunta de descoberta respondida', () => {
+    const r = faseDoCiclo(conversaLucas, { current_stage: 2 });
+    assert.equal(r.fase, 'descoberta');
+    assert.equal(r.perguntasRespondidas, 1);
+});
+
+test('autoresposta marcada nunca vira resposta, mesmo sem saudação', () => {
+    const h = [
+        U('Oi'), A('Oi! Sou a Sofia. O que te trouxe até aqui?'),
+        U('Preciso de leads'), A('O que vocês vendem?'),
+        U('[AUTORESPOSTA] Obrigado pelo contato. Nosso horário de atendimento é de seg a sex.'),
+        A('E como vocês atraem clientes hoje?'), U('[SUSPEITA_BOT] Menu principal'),
+    ];
+    // a resposta à abertura não conta, e as 2 mensagens marcadas são ignoradas: nada de descoberta respondido
+    assert.equal(faseDoCiclo(h, {}).perguntasRespondidas, 0);
+    assert.equal(faseDoCiclo(h, {}).fase, 'descoberta');
+});
+
+test('resposta de gente continua contando (regressão): "sim"/"não"/frase curta', () => {
+    const h = [
+        U('Oi'), A('Oi! Sou a Sofia. O que te trouxe até aqui?'),
+        U('Preciso de leads'), A('Vocês já usam tráfego pago?'),
+        U('sim'), A('E o time comercial dá conta?'),
+        U('não'),
+    ];
+    assert.equal(faseDoCiclo(h, {}).perguntasRespondidas, 2);
+});

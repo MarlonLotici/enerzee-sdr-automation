@@ -111,3 +111,41 @@ test('extrairHorarioPedido: pega o horário pedido mesmo fora dos ofertados', ()
     assert.deepEqual(extrairHorarioPedido('as 11'), { h: 11, m: 0 });
     assert.equal(extrairHorarioPedido('bom dia'), null);
 });
+
+// Bug real 2026-11-18 (Lucas/ANSI): pediu "14;30" com slots 11h30 e 14h30 e a reunião foi marcada às 14h.
+const SLOTS_1130_1430 = [
+    { inicioISO: '2026-11-19T14:30:00Z', fimISO: '2026-11-19T15:00:00Z', label: 'amanhã às 11h30' },
+    { inicioISO: '2026-11-19T17:30:00Z', fimISO: '2026-11-19T18:00:00Z', label: 'amanhã às 14h30' },
+];
+
+test('separador ; . , entre hora e minuto casa o slot (14;30 → 14h30)', () => {
+    for (const msg of ['amanha as 14;30', '14.30', '14,30', '14 30', 'as 14h30', 'pode ser 14:30', 'às 14 ; 30']) {
+        assert.equal(detectarConfirmacaoSlot(msg, SLOTS_1130_1430)?.label, 'amanhã às 14h30', msg);
+    }
+    assert.equal(detectarConfirmacaoSlot('11;30 tá bom', SLOTS_1130_1430)?.label, 'amanhã às 11h30');
+});
+
+test('extrairHorarioPedido entende ; . , como separador de minuto', () => {
+    assert.deepEqual(extrairHorarioPedido('amanha as 14;30'), { h: 14, m: 30 });
+    assert.deepEqual(extrairHorarioPedido('14.30'), { h: 14, m: 30 });
+    assert.deepEqual(extrairHorarioPedido('9,15'), { h: 9, m: 15 });
+});
+
+test('regressão: só hora continua hora cheia e não casa slot com minuto', () => {
+    const slots = [{ inicioISO: 'x', fimISO: 'y', label: 'amanhã às 14h' }, { inicioISO: 'x', fimISO: 'y', label: 'amanhã às 16h' }];
+    assert.equal(detectarConfirmacaoSlot('14h', slots)?.label, 'amanhã às 14h');
+    assert.equal(detectarConfirmacaoSlot('14', SLOTS_1130_1430), null);
+    assert.deepEqual(extrairHorarioPedido('as 14h'), { h: 14, m: 0 });
+});
+
+test('data e preço NÃO viram horário (19.11, 19.11.2026, R$ 10,30)', () => {
+    assert.notDeepEqual(extrairHorarioPedido('dia 19.11'), { h: 19, m: 11 });
+    assert.notDeepEqual(extrairHorarioPedido('19.11.2026'), { h: 19, m: 11 });
+    assert.notDeepEqual(extrairHorarioPedido('custa R$ 10,30'), { h: 10, m: 30 });
+    assert.equal(detectarConfirmacaoSlot('dia 19.11 pode ser', SLOTS_1130_1430), null);
+});
+
+test('rede de segurança: separador estranho só casa se bater exato com um slot ofertado', () => {
+    assert.equal(detectarConfirmacaoSlot('14h-30', SLOTS_1130_1430)?.label, 'amanhã às 14h30');
+    assert.equal(detectarConfirmacaoSlot('14h-45', SLOTS_1130_1430), null);
+});

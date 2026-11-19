@@ -101,6 +101,7 @@ function identificarArtigo(nome) {
 const { extrairNomeHumano, saudacaoPrimeiroNome, extrairNomeDeclarado, empresaConfiavelDoLead } = require('./lib/textPuros');
 const { cortarPerguntasEmpilhadas } = require('./lib/umaPergunta');
 const { removerMarcadoresInternos } = require('./lib/marcadoresInternos');
+const { pareceRespostaAutomatica } = require('./lib/respostaAutomatica');
 const { avaliarPausa, montarSecaoRetomadaHumana, PAUSA_HUMANA_MIN } = require('./lib/pausaHumana');
 const { montarPromptSinalAgendamento, interpretarSinalAgendamento } = require('./lib/sinalAgendamento');
 const { normalizarNumeroAviso, ehNumeroDoDono, dentroDaJanela24h, montarAvisoNovoLead, montarAvisoReuniao } = require('./lib/avisoDono');
@@ -4728,8 +4729,8 @@ async function executarReengajamento() {
 // 🧠 CHECAGEM POR CONTEXTO do pedido de agendamento (ver lib/sinalAgendamento.js). Lê as últimas
 // mensagens + quanto tempo o lead levou pra responder a nossa última fala e pergunta ao LLM se é uma
 // PESSOA pedindo pra marcar conosco, uma RESPOSTA AUTOMÁTICA, ou outra coisa. Falha → null (não propõe).
-async function verificarSinalAgendamento(lead, historico) {
-    let segundos = null;
+// Segundos entre a nossa última fala e a 1ª mensagem do lead logo depois dela (null se não der pra saber).
+async function segundosDesdeNossaFalaDoLead(lead, { mensagemAindaNaoSalva = false } = {}) {
     try {
         let q = supabase.from('messages').select('role, created_at')
             .eq('whatsapp_id', lead.whatsapp_id).order('created_at', { ascending: false }).limit(8);
@@ -4739,9 +4740,18 @@ async function verificarSinalAgendamento(lead, historico) {
         // lista vem da mais nova pra mais antiga: acha a nossa última fala e a 1ª msg do lead logo depois dela
         const iNossa = lista.findIndex(m => m.role !== 'user');
         if (iNossa >= 1 && lista[iNossa - 1].role === 'user') {
-            segundos = (new Date(lista[iNossa - 1].created_at) - new Date(lista[iNossa].created_at)) / 1000;
+            return (new Date(lista[iNossa - 1].created_at) - new Date(lista[iNossa].created_at)) / 1000;
+        }
+        // A mensagem do lead que chegou agora ainda não está no banco: a mais recente é a NOSSA fala.
+        if (mensagemAindaNaoSalva && iNossa === 0) {
+            return Math.max(0, (Date.now() - new Date(lista[0].created_at).getTime()) / 1000);
         }
     } catch (_) {}
+    return null;
+}
+
+async function verificarSinalAgendamento(lead, historico) {
+    const segundos = await segundosDesdeNossaFalaDoLead(lead);
     const { system, messages } = montarPromptSinalAgendamento({ historico, segundosDesdeNossaFala: segundos });
     const resp = await chamarLLM({ system, messages, model: MODELOS.cerebro, maxTokens: 400 });
     return interpretarSinalAgendamento(resp);
@@ -5683,7 +5693,9 @@ if (typeof resposta === 'string' && (intencao === 'DUVIDA' || intencao === 'CONT
     && !primeiroContato && tenantComCiclo(lead.user_id) && !String(lead.whatsapp_id || '').includes('@web')) {
     const faseC = faseDoCiclo(historico, lead);
     const estagioC = estagioDaFase(faseC.fase);
-    if (estagioC && !leadRecusou(ultimaMsg)) {
+    // Saudação pura ("OI" de quem volta depois de dias) não é resposta à fase: a IA retoma a conversa em vez de
+    // o código trocar a fala pelo texto fixo da solução (bug 2026-11-18, Lucas/ANSI).
+    if (estagioC && !leadRecusou(ultimaMsg) && !ehSaudacaoPura(ultimaMsg)) {
         if (!respostaCumpreFase(faseC.fase, resposta)) {
             console.log(`🎯 [CICLO-FASE] ${lead.name}: fase=${faseC.fase} (${faseC.perguntasRespondidas} perguntas respondidas) mas a IA não cumpriu — refazendo.`);
             const avisoFase = `\n\n⛔ CORREÇÃO OBRIGATÓRIA: sua resposta anterior NÃO cumpriu a fase "${faseC.fase}". Escreva APENAS a mensagem da fase, exatamente como a ordem acima descreve, sem pergunta de descoberta e sem horário.`;
@@ -6765,6 +6777,18 @@ module.exports = {
         }
 
         // Salva a mensagem já (painel em tempo real + histórico completo pra IA). Áudio → guardado pro player.
+        // 🤖 RESPOSTA AUTOMÁTICA do WhatsApp Business do contato ("Agradecemos sua mensagem. Não estamos
+        // disponíveis..."): grava com o marcador [AUTORESPOSTA] (painel, salvamento e ciclo de venda já o
+        // entendem), NÃO responde e NÃO conta como resposta de campanha. Bug 2026-11-18 (Lucas/ANSI): a Sofia
+        // respondeu o robô dele e a conversa andou de fase por causa disso. Áudio nunca cai aqui.
+        if (!_audioRecebido) {
+            const _auto = pareceRespostaAutomatica({ texto: norm.texto, segundosDesdeNossaFala: await segundosDesdeNossaFalaDoLead(lead, { mensagemAindaNaoSalva: true }) });
+            if (_auto.automatica) {
+                await db.saveMessage(cleanJid, 'user', `[AUTORESPOSTA] ${norm.texto}`, instanceId, null, 'whatsapp');
+                console.log(`🤖 [AUTO-RESPOSTA] ${lead.name}: mensagem automática ignorada (${_auto.motivo}).`);
+                return { ok: true, leadId: lead.id, autoresposta: true };
+            }
+        }
         const _mediaPathIn = _audioRecebido ? await guardarAudio(instanceData.user_id, cleanJid, _audioRecebido, norm.mimeType) : null;
         await db.saveMessage(cleanJid, 'user', norm.texto, instanceId, null, 'whatsapp', _mediaPathIn ? { media_path: _mediaPathIn } : null);
 
