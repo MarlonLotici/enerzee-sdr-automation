@@ -1,8 +1,10 @@
 // agents/routerAgent.js
 const { chamarLLM, MODELOS } = require('../lib/llm');
 const { alertaDegradacaoIA } = require('../notifier');
+const { ajustarIntencao } = require('../lib/intencaoContexto');
 
-async function classificarMensagem(ultimaMensagemLead) {
+// ctx.ultimaIA = última fala da IA antes dessa mensagem (o roteador sozinho não vê a pergunta e confunde resposta com objeção/repasse).
+async function classificarMensagem(ultimaMensagemLead, ctx = {}) {
     // 🛡️ NÍVEL 1: Blindagem de Custo Zero (Bypass Cego)
     if (!ultimaMensagemLead || ultimaMensagemLead.trim().length === 0) {
         return 'LIXO';
@@ -156,12 +158,19 @@ Retorne APENAS a palavra da intenção. Nada de pontuação, aspas ou justifica�
         });
         const resposta = (raw || '').trim().toUpperCase();
 
+        // REPASSE/OBJEÇÃO só valem com sinal explícito na fala (ou se a pergunta da IA pedia isso). Senão é conversa normal.
+        const conferir = (i) => {
+            const f = ajustarIntencao(i, ultimaMensagemLead, ctx);
+            if (f !== i) console.log(`🧭 [ROTEADOR] ${i} sem sinal explícito na fala nem na pergunta da IA — tratando como conversa normal.`);
+            return f;
+        };
+
         // Mapeamento à prova de balas
         if (resposta.includes('AGENDA_RETORNO') || resposta.includes('AGENDA')) return 'AGENDA_RETORNO';
         if (resposta.includes('COMPRA')) return 'COMPRA';
-        if (resposta.includes('OBJECAO') || resposta.includes('OBJEÇÃO')) return 'OBJECAO';
+        if (resposta.includes('OBJECAO') || resposta.includes('OBJEÇÃO')) return conferir('OBJECAO');
         if (resposta.includes('ENCERRAMENTO')) return 'ENCERRAMENTO';
-        if (resposta.includes('REPASSE')) return 'REPASSE';
+        if (resposta.includes('REPASSE')) return conferir('REPASSE');
 
         // 🎯 O SEGREDO DA SOLDADURA:
         // O Roteador devolve "CONTINUAR" ou "DUVIDA" para a intenção de fluxo natural.

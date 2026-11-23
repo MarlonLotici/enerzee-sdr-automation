@@ -5278,7 +5278,7 @@ if (funilEncerrado) {
 
         // 💸 Marca o tenant do fluxo p/ o teto de custo de LLM contar por conta
         // (cobre os agentes despachados abaixo, que não recebem userId na assinatura).
-        definirTenantLLM(lead.user_id || instanceData?.user_id);
+        definirTenantLLM(lead.user_id || instanceData?.user_id, { leadId: lead.id, leadNome: lead.name });
 
         // Socket Baileys: exigido só para chips Baileys. Oficiais (Cloud API) respondem por
         // HTTP e não têm socket na memória — pulam essa checagem.
@@ -5355,12 +5355,15 @@ if (funilEncerrado) {
         const msgCurta = ultimaMsg.trim().split(/\s+/).length <= 2;
 
         const promessas = [
-            routerAgent.classificarMensagem(ultimaMsg),
-            msgCurta
-                ? Promise.resolve("Conversa muito curta para análise. Seguir Constituição padrão.")
+            routerAgent.classificarMensagem(ultimaMsg, { ultimaIA: ([...historico].reverse().find(m => m.role === 'assistant') || {}).content || '' }),
+            // Raio-X e Perfil DESLIGADOS por padrão (2026-11-23): no teste da Sofia devolveram "sem sinais" / "perfil
+            // neutro" em toda resposta e custavam 2 chamadas por mensagem. O closer já vê a conversa inteira.
+            // RAIOX_PERFIL_ATIVO=true religa (útil na prospecção ativa, onde o lead tem CNPJ e dados da empresa).
+            (msgCurta || process.env.RAIOX_PERFIL_ATIVO !== 'true')
+                ? Promise.resolve("Sem sinais táticos relevantes. Seguir Constituição padrão.")
                 : intelAgent.analisarEmpresa(historico, lead),
-            msgCurta
-                ? Promise.resolve("Perfil neutro — mensagem curta sem carga emocional clara.")
+            (msgCurta || process.env.RAIOX_PERFIL_ATIVO !== 'true')
+                ? Promise.resolve("Perfil neutro. Responda de forma natural e objetiva.")
                 : profilerAgent.analisarPerfil(ultimaMsg)
         ];
 
@@ -5698,6 +5701,7 @@ if (typeof resposta === 'string' && (intencao === 'DUVIDA' || intencao === 'CONT
     if (estagioC && !leadRecusou(ultimaMsg) && !ehSaudacaoPura(ultimaMsg)) {
         if (!respostaCumpreFase(faseC.fase, resposta)) {
             console.log(`🎯 [CICLO-FASE] ${lead.name}: fase=${faseC.fase} (${faseC.perguntasRespondidas} perguntas respondidas) mas a IA não cumpriu — refazendo.`);
+            console.log(`🎯 [CICLO-FASE] rascunho recusado: "${String(resposta).replace(/\s+/g, ' ').slice(0, 160)}"`);
             const avisoFase = `\n\n⛔ CORREÇÃO OBRIGATÓRIA: sua resposta anterior NÃO cumpriu a fase "${faseC.fase}". Escreva APENAS a mensagem da fase, exatamente como a ordem acima descreve, sem pergunta de descoberta e sem horário.`;
             const refeitaFase = await closerAgent.gerarRespostaCloser(historico, lead, promptResolvido + avisoFase, 'DUVIDA', {
                 calendlyLink: instanceData?.calendly_link, instanceType: instanceData?.product_type || 'generico', bookingAtivo, agendaConectada,
@@ -5762,7 +5766,13 @@ if (bookingAtivo && cicloOk && typeof resposta === 'string') {
         if (process.env.SUPERVISOR_ATIVO !== 'false' && typeof resposta === 'string') {
             const _txt = resposta.trim();
             const _trivial = _txt.length < 25 && !/[?]/.test(_txt) && !/https?:\/\//.test(_txt);
-            if (!_trivial) {
+            // 🎯 Solução/convite são decididos pelo CICLO (código). O supervisor julga pelo roteiro SPIN ("não avance sem entender") e
+            // REESCREVIA a solução de volta pra pergunta de descoberta (bug 2026-11-23: 13 perguntas seguidas, estágio preso em 2).
+            // Nessas fases ele fica de fora: respeita o ciclo e economiza as 2 chamadas de LLM (revisar + corrigir).
+            const _faseCiclo = tenantComCiclo(lead.user_id) ? faseDoCiclo(historico, lead).fase : null;
+            const _cicloManda = _faseCiclo === 'solucao' || _faseCiclo === 'convite';
+            if (_cicloManda && !_trivial) console.log(`🧑‍⚖️ [SUPERVISOR] Pulado: a fase "${_faseCiclo}" é do ciclo de venda.`);
+            if (!_trivial && !_cicloManda) {
                 console.log(`🧑‍⚖️ [SUPERVISOR] Revisando rascunho de ${lead.name}...`);
                 const _crit = await supervisorAgent.revisar({ historico, lead, draft: resposta, primeiroContato })
                     .catch(() => ({ ok: true, problemas: [] }));
