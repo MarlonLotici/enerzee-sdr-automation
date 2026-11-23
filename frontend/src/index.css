@@ -191,6 +191,8 @@ body {
    pra computador: no celular os cartões ficavam esmagados. Em vez de mexer em cada arquivo, as regras
    abaixo reorganizam QUALQUER grade inline em 2 colunas (cartões de número) ou 1 (gráficos/painéis). */
 @media (max-width: 767px) {
+    /* iOS dá zoom na página inteira quando o campo tem fonte menor que 16px */
+    input:not([type="checkbox"]):not([type="radio"]):not([type="range"]):not([type="file"]), select, textarea { font-size: 16px !important; }
     [style*="grid-template-columns"] { grid-template-columns: minmax(0, 1fr) !important; }
     [style*="repeat(3"], [style*="repeat(4"], [style*="repeat(5"], [style*="repeat(6"] {
         grid-template-columns: repeat(2, minmax(0, 1fr)) !important;
@@ -206,4 +208,10 @@ body {
     input, textarea, select { font-size: max(16px, 1em); }
     button, a, [role="button"] { touch-action: manipulation; }
     html { -webkit-text-size-adjust: 100%; }
+}
+
+/* Celular: botões de texto (sem altura definida por classe h-*) ganham 40px de altura mínima.
+   Botões de ícone, que já têm tamanho próprio, ficam como estão. */
+@media (max-width: 767px) {
+    button:not([class*="h-"]):not([role="tab"]):not([role="switch"]):not([role="combobox"]) { min-height: 40px; }
 }

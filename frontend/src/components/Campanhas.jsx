@@ -141,7 +141,7 @@ function ImportarBase({ chip, onImportado }) {
             {linhas.length > 0 && (
                 <div className="mt-5 space-y-4">
                     <p className="text-xs text-white"><b>{linhas.length}</b> linhas lidas. Diga qual coluna é qual:</p>
-                    <div className="grid grid-cols-3 gap-3">
+                    <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
                         {[['telefone', 'Telefone *'], ['nome', 'Nome'], ['email', 'E-mail']].map(([k, l]) => (
                             <div key={k}>
                                 <label className={labelCls} style={{ color: C.muted }}>{l}</label>
@@ -282,7 +282,7 @@ function NovaCampanha({ chip, lotes, onCriada, onCancelar }) {
                     <p className="text-[11px] mt-2" style={{ color: C.muted }}>
                         {publicoEstimado !== null ? `~${publicoEstimado} contatos (antes de excluir quem pediu para sair).` : 'Nenhum lote marcado = todos os contatos deste chip.'}
                     </p>
-                    <div className="grid grid-cols-3 gap-3 mt-3">
+                    <div className="grid grid-cols-1 sm:grid-cols-3 gap-3 mt-3">
                         <input className={inputCls} value={form.campo} onChange={e => set('campo', e.target.value)} placeholder="filtro opcional: dados.produto" />
                         <select className={inputCls} value={form.operador} onChange={e => set('operador', e.target.value)}>
                             <option value="igual">é igual a</option><option value="contem">contém</option>
@@ -338,7 +338,7 @@ function NovaCampanha({ chip, lotes, onCriada, onCancelar }) {
                     <p className="text-[11px] mt-1" style={{ color: C.muted }}>Somado ao prompt principal da conta. Quando o cliente fechar, a IA marca a conversão sozinha.</p>
                 </div>
 
-                <div className="grid grid-cols-4 gap-3">
+                <div className="grid grid-cols-2 sm:grid-cols-4 gap-3">
                     <div><label className={labelCls} style={{ color: C.muted }}>Das (h)</label><input type="number" className={inputCls} value={form.janela_inicio} onChange={e => set('janela_inicio', e.target.value)} /></div>
                     <div><label className={labelCls} style={{ color: C.muted }}>Até (h)</label><input type="number" className={inputCls} value={form.janela_fim} onChange={e => set('janela_fim', e.target.value)} /></div>
                     <div><label className={labelCls} style={{ color: C.muted }}>Envios/dia</label><input type="number" className={inputCls} value={form.limite_diario} onChange={e => set('limite_diario', e.target.value)} /></div>

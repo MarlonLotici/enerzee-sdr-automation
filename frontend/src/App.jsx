@@ -1646,7 +1646,7 @@ return (
     </div>
 </div>
 
-                        <div ref={kanbanRef} className="flex-1 flex gap-6 overflow-x-auto p-8 custom-scrollbar bg-[#0A0A0A]/40 items-stretch" style={{ scrollBehavior: 'auto' }}>
+                        <div ref={kanbanRef} className="flex-1 flex gap-4 sm:gap-6 overflow-x-auto p-4 sm:p-8 snap-x snap-mandatory md:snap-none custom-scrollbar bg-[#0A0A0A]/40 items-stretch" style={{ scrollBehavior: 'auto' }}>
     
 
             <KanbanColumn title="Novos Leads" count={getLeadsByStatus('new').length} color="from-slate-700 to-slate-900" icon={<Users className="h-6 w-6 text-slate-300"/>}>
@@ -1691,7 +1691,7 @@ return (
 
                     {/* ABA RADAR (CORREÇÃO DE CONTRASTE NICHO) */}
                             <TabsContent value="search" className="flex-1 flex flex-col lg:flex-row overflow-hidden m-0">
-                        <div className="w-[420px] glass-panel p-10 space-y-10 overflow-y-auto h-full shadow-2xl z-20 border-r border-white/5">
+                        <div className="w-full lg:w-[420px] shrink-0 max-h-[58%] lg:max-h-none lg:h-full glass-panel p-5 sm:p-10 space-y-6 sm:space-y-10 overflow-y-auto shadow-2xl z-20 border-b lg:border-b-0 lg:border-r border-white/5">
                             <div className="space-y-4">
     <Label className="text-amber-400 font-black text-xs uppercase tracking-[0.4em] flex items-center gap-3"><Zap className="h-5 w-5 text-amber-500 animate-pulse"/> 1. Segmento Estratégico</Label>
     <div className="[&_button]:h-16 [&_button]:rounded-xl [&_button]:text-base [&_button]:font-bold [&_button]:border-white/10 [&_button]:bg-white/[0.02]">
@@ -1733,18 +1733,18 @@ return (
                           </button>
                         </div>
 
-                              <div className="flex-1 relative">
+                              <div className="flex-1 relative min-h-[260px]">
 
                                 {/* Botão minha localização */}
 <button
     onClick={handleMyLocation}
-    className="absolute top-6 left-6 z-[999] glass-card border border-white/10 rounded-2xl px-4 py-2 flex items-center gap-2 hover:bg-white/10 transition-all active:scale-95"
+    className="absolute top-3 left-3 sm:top-6 sm:left-6 z-[999] glass-card border border-white/10 rounded-2xl px-3 sm:px-4 py-2 flex items-center gap-2 hover:bg-white/10 transition-all active:scale-95"
 >
     <LocateFixed className="h-4 w-4 text-blue-400" />
     <span className="text-[10px] font-black text-white uppercase tracking-widest">Minha Localização</span>
 </button>
     {/* Badge contador */}
-    <div className="absolute top-6 right-6 z-[999] bg-amber-600/90 backdrop-blur-md border border-amber-500/40 rounded-2xl px-4 py-2 shadow-lg">
+    <div className="absolute top-3 right-3 sm:top-6 sm:right-6 z-[999] bg-amber-600/90 backdrop-blur-md border border-amber-500/40 rounded-2xl px-4 py-2 shadow-lg">
         <span className="text-[10px] font-black text-white uppercase tracking-widest">
             📍 {leads.filter(l => l.lat && l.lng).length} leads mapeados
         </span>
@@ -1821,7 +1821,7 @@ return (
     </MapContainer>
 
     {/* Legenda */}
-    <div className="absolute bottom-6 left-6 z-[999] glass-card rounded-2xl px-4 py-3 border-white/10 space-y-1.5">
+    <div className="absolute bottom-3 left-3 sm:bottom-6 sm:left-6 z-[999] glass-card rounded-2xl px-3 py-2 sm:px-4 sm:py-3 border-white/10 space-y-1 sm:space-y-1.5">
         {[
             { color: '#10B981', label: 'Agendado' },
             { color: '#F59E0B', label: 'Em atendimento' },
@@ -2473,13 +2473,13 @@ return (
 {/* --- MODAL DETALHES GIGANTE: O DOSSIÊ DE INTELIGÊNCIA --- */}
 <Dialog open={!!viewingLeadDetail} onOpenChange={() => setViewingLeadDetail(null)}>
     <DialogContent 
-className="glass-panel border-white/20 text-white max-w-5xl w-[95vw] max-h-[95vh] rounded-[2.5rem] p-0 overflow-y-auto custom-scrollbar shadow-[0_0_100px_rgba(0,0,0,1)] bg-[#0A0A0A]/98 border-t-4 border-t-amber-600"
+className="glass-panel border-white/20 text-white max-w-5xl w-[95vw] max-h-[92dvh] rounded-[1.75rem] sm:rounded-[2.5rem] p-0 overflow-y-auto overflow-x-hidden custom-scrollbar shadow-[0_0_100px_rgba(0,0,0,1)] bg-[#0A0A0A]/98 border-t-4 border-t-amber-600"
 >
         {/* Reduzi o padding de p-10 para p-6 e o espaçamento vertical de space-y-8 para space-y-4 */}
-        <div className="p-6 space-y-4">
+        <div className="p-4 sm:p-6 space-y-4">
             
             {/* HEADER DO DOSSIÊ */}
-            <div className="flex justify-between items-start">
+            <div className="flex flex-wrap sm:flex-nowrap justify-between items-start gap-3">
                 <div className="space-y-1">
                     <div className="flex items-center gap-2">
                      <Badge className="bg-amber-600/20 text-amber-400 border-amber-500/30 px-3 py-0.5 text-[8px] uppercase font-black tracking-widest rounded-full">Antix Flow 2026</Badge>
@@ -2493,7 +2493,7 @@ className="glass-panel border-white/20 text-white max-w-5xl w-[95vw] max-h-[95vh
                     </div>
                 </div>
                 {/* Reduzi o card de score e a fonte de 6xl para 4xl */}
-                <div className="text-right glass-card p-4 rounded-3xl border-amber-500/20 bg-amber-500/5 min-w-[120px]">
+                <div className="text-right glass-card p-3 sm:p-4 rounded-3xl border-amber-500/20 bg-amber-500/5 min-w-[96px] sm:min-w-[120px]">
     <p className="text-[8px] font-black text-slate-500 uppercase mb-1 tracking-widest">Estágio</p>
     <div className="text-4xl font-black text-amber-400 leading-none italic">
         {viewingLeadDetail?.current_stage || 0}<span className="text-lg text-slate-500">/5</span>
@@ -2505,14 +2505,14 @@ className="glass-panel border-white/20 text-white max-w-5xl w-[95vw] max-h-[95vh
             </div>
 
             {/* GRID DE INFORMAÇÕES TÉCNICAS - Gap reduzido para 4 */}
-            <div className="grid grid-cols-3 gap-4">
+            <div className="grid grid-cols-1 sm:grid-cols-3 gap-3 sm:gap-4">
                 {/* Blocos com padding reduzido para p-4 e bordas menores */}
                 <div className="glass-card p-4 rounded-3xl space-y-3 bg-white/5 border-white/10">
                     <p className="text-[9px] font-black text-amber-400 uppercase tracking-widest flex items-center gap-2"><ShieldCheck className="h-3 w-3"/> Rastreio Fiscal</p>
                     <div className="space-y-2">
                         <div>
                             <span className="text-[8px] text-slate-600 uppercase font-black block opacity-60">CNPJ</span>
-                            <span className="text-base font-black text-white tracking-widest font-mono">{viewingLeadDetail?.cnpj || '00.000.000/0000-00'}</span>
+                            <span className="text-sm sm:text-base font-black text-white tracking-wider sm:tracking-widest font-mono break-all">{viewingLeadDetail?.cnpj || '00.000.000/0000-00'}</span>
                         </div>
                         <div>
                             <span className="text-[8px] text-slate-600 uppercase font-black block opacity-60">Natureza</span>
@@ -2554,7 +2554,7 @@ className="glass-panel border-white/20 text-white max-w-5xl w-[95vw] max-h-[95vh
             </div>
             {/* DADOS DE CONVERSÃO (NOVAS MÉTRICAS V13) */}
             {(viewingLeadDetail?.current_stage > 0 || viewingLeadDetail?.lead_temperature || viewingLeadDetail?.followup_count > 0 || viewingLeadDetail?.opening_template) && (
-                <div className="grid grid-cols-4 gap-3">
+                <div className="grid grid-cols-2 sm:grid-cols-4 gap-3">
                     <div className="glass-card p-3 rounded-2xl border-white/5">
                         <span className="text-[8px] text-slate-600 uppercase font-black block mb-1">Estágio Funil</span>
                         <div className="flex items-center gap-2">
@@ -2581,28 +2581,28 @@ className="glass-panel border-white/20 text-white max-w-5xl w-[95vw] max-h-[95vh
                 </div>
             )}
             {/* CONTATO DIRETO - Altura e padding reduzidos */}
-          <div className="bg-amber-600/5 p-4 rounded-3xl border border-amber-500/20 flex items-center justify-between">
+          <div className="bg-amber-600/5 p-4 rounded-3xl border border-amber-500/20 flex flex-col sm:flex-row sm:items-center justify-between gap-3">
                 <div className="flex items-center gap-4">
                     <div className="h-12 w-12 bg-amber-600/20 rounded-full border border-amber-500/30 flex items-center justify-center" style={{boxShadow:'0 0 16px rgba(245,158,11,0.2)'}}>
     <Users className="h-6 w-6 text-amber-400" />
 </div>
                     <div>
                        <span className="text-[8px] text-amber-400 font-black uppercase tracking-widest block">Decisor</span>
-                        <span className="text-xl font-black text-white uppercase tracking-tighter italic leading-none">{viewingLeadDetail?.dono || 'Sócio Administrador'}</span>
+                        <span className="text-lg sm:text-xl font-black text-white uppercase tracking-tighter italic leading-none break-words">{viewingLeadDetail?.dono || 'Sócio Administrador'}</span>
                     </div>
                 </div>
-                <div className="text-right">
+                <div className="sm:text-right">
                     <span className="text-[8px] text-slate-500 font-black uppercase tracking-widest block opacity-60">WhatsApp</span>
-               <span className="text-xl font-black text-amber-400 tracking-widest font-mono">{viewingLeadDetail?.phone || '(48) 0000-0000'}</span>
+               <span className="text-lg sm:text-xl font-black text-amber-400 tracking-wider sm:tracking-widest font-mono break-all">{viewingLeadDetail?.phone || '(48) 0000-0000'}</span>
                 </div>
             </div>
 
             {/* BOTÕES DE AÇÃO - Altura reduzida de h-24 para h-14 */}
-            <div className="flex gap-4 pt-2">
+            <div className="flex flex-col sm:flex-row gap-3 sm:gap-4 pt-2">
                    <Button onClick={() => { setActiveChat(viewingLeadDetail); setActiveTab('connections'); setViewingLeadDetail(null); }} className="flex-1 h-14 bg-amber-600 hover:bg-amber-500 text-black text-lg font-black rounded-2xl shadow-lg border border-amber-500/30 uppercase italic flex items-center justify-center gap-2 transition-all active:scale-95 group">
                     IR PARA A CONVERSA <ArrowRight className="h-5 w-5 group-hover:translate-x-1 transition-transform" />
                 </Button>
-                <Button variant="outline" className="h-14 px-8 border border-white/10 glass-card text-xs font-black rounded-2xl uppercase tracking-widest hover:bg-white/5" onClick={() => setViewingLeadDetail(null)}>FECHAR</Button>
+                <Button variant="outline" className="h-14 px-8 w-full sm:w-auto border border-white/10 glass-card text-xs font-black rounded-2xl uppercase tracking-widest hover:bg-white/5" onClick={() => setViewingLeadDetail(null)}>FECHAR</Button>
             </div>
         </div>
     </DialogContent>
@@ -2610,8 +2610,8 @@ className="glass-panel border-white/20 text-white max-w-5xl w-[95vw] max-h-[95vh
 
             {/* MODAL EDIÇÃO */}
             <Dialog open={!!editingLead} onOpenChange={() => setEditingLead(null)}>
-                <DialogContent className="glass-panel border-white/20 text-white sm:max-w-md rounded-[3rem] p-12 bg-[#0A0A0A]/98 shadow-2xl backdrop-blur-3xl">
-                    <DialogHeader className="mb-8 text-center"><DialogTitle className="text-4xl font-black text-amber-400 neon-text tracking-tighter uppercase italic">Ajustar Lead</DialogTitle></DialogHeader>
+                <DialogContent className="glass-panel border-white/20 text-white w-[95vw] sm:max-w-md rounded-[2rem] sm:rounded-[3rem] p-6 sm:p-12 max-h-[92dvh] overflow-y-auto bg-[#0A0A0A]/98 shadow-2xl backdrop-blur-3xl">
+                    <DialogHeader className="mb-8 text-center"><DialogTitle className="text-2xl sm:text-4xl font-black text-amber-400 neon-text tracking-tighter uppercase italic">Ajustar Lead</DialogTitle></DialogHeader>
                     <div className="space-y-8">
                         <div className="space-y-3"><Label className="text-[11px] font-black text-amber-300 uppercase tracking-[0.3em]">Nome Comercial</Label><Input value={editingLead?.name || ""} onChange={e => setEditingLead({ ...editingLead, name: e.target.value })} className="glass-card h-16 rounded-2xl bg-slate-950 border-white/10 text-xl font-black tracking-tighter px-6" /></div>
                         <div className="space-y-3"><Label className="text-[11px] font-black text-amber-300 uppercase tracking-[0.3em]">Fase do Funil</Label><select value={editingLead?.status || "new"} onChange={e => setEditingLead({ ...editingLead, status: e.target.value })} className="w-full glass-card h-16 bg-slate-950 border-white/10 rounded-2xl px-6 text-lg font-black text-white uppercase appearance-none cursor-pointer"><option value="new" className="bg-slate-950 text-white">Novos Leads</option><option value="contact" className="bg-slate-950 text-white">Em Atendimento</option><option value="waiting_analysis" className="bg-slate-950 text-white">Auditoria</option><option value="booked" className="bg-slate-950 text-white">Agendado</option></select></div>
@@ -2629,7 +2629,7 @@ className="glass-panel border-white/20 text-white max-w-5xl w-[95vw] max-h-[95vh
 function KanbanColumn({ title, count, color, children, icon, isActive }) {
     return (
         /* flex-1 e h-full garantem que a coluna expanda dinamicamente quando o header sumir */
-        <div className={`min-w-[310px] w-[310px] glass-panel rounded-3xl flex flex-col overflow-hidden border relative transition-all duration-500 
+        <div className={`min-w-[86vw] w-[86vw] sm:min-w-[310px] sm:w-[310px] snap-center md:snap-align-none glass-panel rounded-3xl flex flex-col overflow-hidden border relative transition-all duration-500 
 
                 ${isActive ? 'border-amber-500/30 bg-amber-900/5' : 'border-white/5'}`}
     style={{ height: '100%', minHeight: '65vh', boxShadow: isActive ? '0 0 24px rgba(245,158,11,0.08)' : 'none' }}>
