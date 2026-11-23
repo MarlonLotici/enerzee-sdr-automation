@@ -1158,7 +1158,7 @@ PROIBIDO dizer de novo "vou ver os horários" / "deixa eu ver os horários" — 
 - LINK de reunião: NUNCA invente um. Use APENAS um link que esteja escrito nas suas instruções. Se não houver, só conduza o lead pro agendamento — o sistema cria o horário e o link REAIS. Nunca afirme que uma reunião está confirmada por conta própria.
 - NUNCA ofereça prospecção ativa / disparo em massa. Nosso foco é atender e qualificar quem chega.
 - NUNCA use travessão (—) na resposta. Prefira vírgula, ponto ou quebra de frase.
-- Responda SEMPRE no MESMO idioma em que o lead escreveu.${secaoEstadoAgenda}`;
+- Responda SEMPRE no MESMO idioma em que o lead escreveu.`;
 
     // 🧑 NOME DO CONTATO: quando nomeLead='vc' (pushName vazio OU nome de EMPRESA, filtrado por
     // extrairNomeHumano), peça o nome da PESSOA com leveza — mas só se a IA ainda não perguntou
@@ -1195,7 +1195,8 @@ Não faça pergunta atrás de pergunta seca. Em cerca de 1 a cada 3 respostas, A
 
     const secaoCampanha = await montarSecaoCampanha(contextoLead).catch(() => '');
 
-    return constituicaoResolvida + secaoAcolhidaInbound + montarSecaoRetomadaHumana(historico, { retomandoAgora: contextoLead?._retomadaHumana === true }) + secaoPerguntarNome + secaoCampanha + REGRA_ROTEIRO + REGRA_ANTI_INVENCAO;
+    // Fixo primeiro (cache do prompt); o que muda por conversa/turno vai no fim.
+    return constituicaoResolvida + REGRA_ROTEIRO + REGRA_ANTI_INVENCAO + secaoAcolhidaInbound + montarSecaoRetomadaHumana(historico, { retomandoAgora: contextoLead?._retomadaHumana === true }) + secaoPerguntarNome + secaoCampanha + secaoEstadoAgenda;
 }
 
 // 📣 Lead da BASE que recebeu campanha: injeta o contexto (DADOS) da campanha + os dados do
@@ -5703,7 +5704,7 @@ if (typeof resposta === 'string' && (intencao === 'DUVIDA' || intencao === 'CONT
             console.log(`🎯 [CICLO-FASE] ${lead.name}: fase=${faseC.fase} (${faseC.perguntasRespondidas} perguntas respondidas) mas a IA não cumpriu — refazendo.`);
             console.log(`🎯 [CICLO-FASE] rascunho recusado: "${String(resposta).replace(/\s+/g, ' ').slice(0, 160)}"`);
             const avisoFase = `\n\n⛔ CORREÇÃO OBRIGATÓRIA: sua resposta anterior NÃO cumpriu a fase "${faseC.fase}". Escreva APENAS a mensagem da fase, exatamente como a ordem acima descreve, sem pergunta de descoberta e sem horário.`;
-            const refeitaFase = await closerAgent.gerarRespostaCloser(historico, lead, promptResolvido + avisoFase, 'DUVIDA', {
+            const refeitaFase = await closerAgent.gerarRespostaCloser(historico, lead, promptResolvido, 'DUVIDA', { avisoFinal: avisoFase,
                 calendlyLink: instanceData?.calendly_link, instanceType: instanceData?.product_type || 'generico', bookingAtivo, agendaConectada,
             }).catch(() => null);
             if (refeitaFase && respostaCumpreFase(faseC.fase, refeitaFase)) {
@@ -5732,7 +5733,7 @@ const cicloOk = cicloLiberaHorarios({
 if (bookingAtivo && !cicloOk && typeof resposta === 'string' && prometeHorarios(resposta)) {
     console.log(`🔁 [CICLO] ${lead.name}: closer prometeu horários antes do ciclo — refazendo a resposta.`);
     const avisoCiclo = `\n\n⛔ CORREÇÃO OBRIGATÓRIA: sua resposta anterior falou em ver/puxar horários, mas o lead AINDA NÃO aceitou reunião. NÃO fale de horário, agenda nem reunião agora. Siga o ciclo: se ainda não explorou a dificuldade dele com o que ele disse, pergunte sobre essa dificuldade (como faz hoje, o que trava). Se já explorou, mostre como a gente resolve essa dor.`;
-    const refeita = await closerAgent.gerarRespostaCloser(historico, lead, promptResolvido + avisoCiclo, 'DUVIDA', {
+    const refeita = await closerAgent.gerarRespostaCloser(historico, lead, promptResolvido, 'DUVIDA', { avisoFinal: avisoCiclo,
         calendlyLink: instanceData?.calendly_link, instanceType: instanceData?.product_type || 'generico', bookingAtivo, agendaConectada,
     }).catch(() => null);
     resposta = (refeita && !prometeHorarios(refeita))

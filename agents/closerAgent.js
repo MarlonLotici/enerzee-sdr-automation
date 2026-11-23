@@ -1,7 +1,7 @@
 // agents/closerAgent.js
 const { chamarLLM, MODELOS } = require('../lib/llm');
 const { alertaDegradacaoIA } = require('../notifier');
-const { faseDoCiclo, blocoDaFase, tenantComCiclo } = require('../lib/cicloVenda');
+const { faseDoCiclo, blocoDaFase, lembreteDaFase, anexarLembrete, tenantComCiclo } = require('../lib/cicloVenda');
 
 // 🔁 CICLO DE AGENDAMENTO (sem atalho). Bug 2026-11-13: lead respondeu "Geração e qualificação" e a Sofia
 // já foi "solicitar os horários" (FAST-TRACK antigo). Agora reunião só depois de explorar a dor e mostrar
@@ -269,17 +269,27 @@ Você (closer) NÃO agenda, NÃO tem link e NÃO controla horários.
     // ─────────────────────────────────────────────────────────────────────────
     const usaCiclo = !isVoz && (intencao === 'DUVIDA' || intencao === 'LIXO') && !primeiroContato
         && !String(lead?.whatsapp_id || '').includes('@web') && tenantComCiclo(lead?.user_id);
-    const blocoFase = usaCiclo ? blocoDaFase(faseDoCiclo(historico, lead)) : '';
+    const faseAtual = usaCiclo ? faseDoCiclo(historico, lead) : null;
+    const blocoFase = faseAtual ? blocoDaFase(faseAtual) : '';
+    // Além do bloco no prompt, um lembrete curto colado na última fala do cliente (o modelo obedece mais ao que está perto).
+    const mensagensParaLLM = anexarLembrete(historico, faseAtual ? lembreteDaFase(faseAtual) : '');
 
     // ─────────────────────────────────────────────────────────────────────────
     // PROMPT FINAL = Constituição + Override + DNA do Vendedor
     // ─────────────────────────────────────────────────────────────────────────
-    const promptFinal = `${promptPersonalidade}
-${blocoStandby}
+    // 💲 CACHE DO PROMPT (2026-11-23): a DeepSeek só reaproveita (cache a ~3% do preço) o COMEÇO do prompt quando ele é idêntico
+    // ao da chamada anterior. Medido: prompt igual = 100% de cache; fase mudando no meio = 22%. Por isso tudo que muda de uma
+    // resposta pra outra (standby, override da intenção, agenda, FASE do ciclo, voz e o aviso de "refazer") vai NO FIM,
+    // depois do bloco fixo grande (DNA + regras). Também fica mais forte: o que vem por último pesa mais pro modelo.
+    const blocosVariaveis = `${blocoStandby}
 ${overrideTatico}
 ${blocoBookingAuto}
 ${blocoFase}
-${blocoVoz}
+${blocoVoz}`;
+    const avisoFinal = opcoes.avisoFinal ? `
+
+${opcoes.avisoFinal}` : '';
+    const promptFinal = `${promptPersonalidade}
 ========================================================
 🎭 DNA DO VENDEDOR — VOCÊ NÃO É UM ASSISTENTE, VOCÊ É UM CLOSER
 ========================================================
@@ -321,13 +331,14 @@ ${isVoz ? `[REGRAS ABSOLUTAS DE ALTA PERFORMANCE — VOZ]
 5. Adicione as tags [ESTAGIO:N] e [CLIMA:X] no final.
 6. Texto puro: sem asteriscos, sem markdown.
 7. SEM ABREVIAÇÃO: qualquer balão pode virar áudio, e a voz lê abreviação errado ("30 min" saiu "30 mienei"). Escreva por extenso: "30 minutos", "14 horas", "você", "também", "por exemplo", "inteligência artificial" na primeira menção.
-`}`;
+`}
+${blocosVariaveis}${avisoFinal}`;
 
     // Resposta que vai pro cliente → cérebro (Sonnet 5). O adaptador trata 429.
     try {
         const resposta = await chamarLLM({
             system: promptFinal,
-            messages: historico,
+            messages: mensagensParaLLM,
             model: MODELOS.conversa,
             // gpt-oss é modelo de RACIOCÍNIO: maxTokens baixo demais faz o raciocínio comer tudo e
             // devolver VAZIO ("instabilidade"). Mantemos folga aqui; a brevidade é garantida pela

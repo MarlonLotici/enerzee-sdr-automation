@@ -167,3 +167,78 @@ test('resposta de gente continua contando (regressão): "sim"/"não"/frase curta
     ];
     assert.equal(faseDoCiclo(h, {}).perguntasRespondidas, 2);
 });
+
+// ── Teste da Sofia em 23/11: a solução saiu cedo demais (já em "tenho uma clínica") e uma solução ótima foi reprovada por
+//    conter a palavra "horário". Conversa real, mesmas falas do cliente.
+const { respostaCumpreFase: cumpre, textoFixoDaFase: fixo } = require('../lib/cicloVenda');
+const sofia = [
+    U('Oie'), A('Oie! Sou a Sofia, da Antix. O que te trouxe até aqui?'),
+    U('Legal, foi insta'), A('Que bom que veio do Instagram! E aí, o que te chamou atenção por lá?'),
+    U('gostei do atendimento fora de horário'), A('Boa! Atendimento fora de horário faz muita diferença, né?'),
+    U('ahm'), A('Me conta uma coisa: você tem um negócio próprio ou trabalha com vendas?'),
+    U('eu tenho negócio proprio, uma clinica'), A('E como é o atendimento na clínica hoje?'),
+    U('tenho uma funcionaria'), A('Ela cuida do atendimento sozinha ou vocês dividem?'),
+    U('ela faz sozinha'), A('E quando ela está ocupada ou fora do horário, como fica o atendimento?'),
+    U('as pessoas esperam e ela atende só quando volta ficar disponivel'), A('E quando a pessoa fica esperando, o que costuma acontecer?'),
+    U('nao acontece nada, raramente alguem desmarca'),
+];
+
+test('só descrever o negócio não basta: sem necessidade dita continua descoberta (mesmo com 3+ respostas)', () => {
+    const ateClinica = sofia.slice(0, 9);          // "eu tenho negócio proprio, uma clinica"
+    assert.equal(faseDoCiclo(ateClinica, { current_stage: 2 }).perguntasRespondidas, 3);
+    assert.equal(faseDoCiclo(ateClinica, { current_stage: 2 }).fase, 'descoberta');
+    assert.equal(faseDoCiclo(sofia.slice(0, 13), { current_stage: 2 }).fase, 'descoberta'); // "ela faz sozinha"
+});
+
+test('quando o cliente nomeia o que o incomoda ("as pessoas esperam"), a próxima fala é a solução', () => {
+    assert.equal(faseDoCiclo(sofia.slice(0, 15), { current_stage: 2 }).fase, 'solucao');
+    assert.equal(faseDoCiclo(sofia, { current_stage: 2 }).fase, 'solucao');
+});
+
+test('sem nenhuma necessidade dita, a solução entra mesmo assim depois de 6 respostas (não fica preso)', () => {
+    const conversaFiada = [U('oi'), A('Oi! O que te trouxe aqui?')];
+    for (let i = 0; i < 6; i++) conversaFiada.push(U('uhum ' + i), A('E ' + i + '? Me conta mais, o que mais?'));
+    conversaFiada.push(U('uhum final'));
+    const r = faseDoCiclo(conversaFiada, { current_stage: 2 });
+    assert.ok(r.perguntasRespondidas >= 6);
+    assert.equal(r.fase, 'solucao');
+});
+
+test('conferidor: a palavra "horário" na descrição do produto ou na dor do cliente NÃO reprova uma boa solução', () => {
+    const boa = 'Olha, faz todo sentido: experiência melhor e mais agendamentos é o que faz a clínica crescer. A Antix cria um agente de inteligência artificial sob medida pra atender no WhatsApp da clínica: ele responde na hora, 24 horas por dia, mesmo fora do horário, e já marca o horário direto na agenda. Isso resolveria o que vocês vivem hoje?';
+    assert.equal(cumpre('solucao', boa), true);
+    assert.equal(cumpre('solucao', fixo('solucao')), true);
+});
+
+test('conferidor: horário CONCRETO ou oferta de horários continua reprovando', () => {
+    const base = 'A Antix cria um agente de inteligência artificial que atende na hora, 24 horas por dia, e deixa tudo encaminhado pro seu time. ';
+    for (const cola of ['Tenho amanhã às 10h. Isso resolveria?', 'Posso ver os horários da semana? Isso resolveria?', 'Quinta-feira funciona? Isso resolveria?', 'Tenho horários disponíveis. Isso resolveria?']) {
+        assert.equal(cumpre('solucao', base + cola), false, cola);
+    }
+});
+
+test('texto fixo da solução não fala mais em "volume de leads" e fecha com pergunta de validação', () => {
+    assert.doesNotMatch(fixo('solucao'), /volume|gargalo/i);
+    assert.match(fixo('solucao'), /\?$/);
+});
+
+test('convite com outras formulações também vale ("e se a gente marcasse…")', () => {
+    assert.equal(cumpre('convite', 'Perfeito! E se a gente marcasse uma conversa de 30 minutos com um especialista pra ele entender melhor seu fluxo?'), true);
+    assert.equal(cumpre('convite', 'Que bom! Que tal agendarmos um papo de 30 minutos com o nosso especialista?'), true);
+    assert.equal(cumpre('convite', 'Que bom! E se a gente marcasse amanhã às 10h?'), false, 'horário concreto continua reprovando');
+});
+
+test('lembreteDaFase: só solução e convite têm lembrete; anexarLembrete copia e só cola na fala do cliente', () => {
+    const { lembreteDaFase, anexarLembrete } = require('../lib/cicloVenda');
+    assert.equal(lembreteDaFase({ fase: 'descoberta' }), '');
+    assert.equal(lembreteDaFase({ fase: 'agendamento' }), '');
+    assert.match(lembreteDaFase({ fase: 'solucao' }), /SOLUÇÃO[\s\S]*ESTAGIO:3/);
+    assert.match(lembreteDaFase({ fase: 'convite' }), /CONVITE[\s\S]*ESTAGIO:4/);
+    const h = [U('oi'), A('olá'), U('quero melhorar')];
+    const novo = anexarLembrete(h, 'LEMBRETE');
+    assert.equal(novo[2].content, 'quero melhorar\n\nLEMBRETE');
+    assert.equal(h[2].content, 'quero melhorar', 'não altera o histórico original');
+    assert.equal(anexarLembrete([U('a'), A('b')], 'LEMBRETE')[1].content, 'b', 'última fala da IA: não cola nada');
+    assert.equal(anexarLembrete(h, ''), h);
+    assert.deepEqual(anexarLembrete([], 'X'), []);
+});
