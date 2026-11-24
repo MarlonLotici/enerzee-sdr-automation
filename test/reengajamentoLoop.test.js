@@ -132,3 +132,17 @@ test('despedida ~22h depois, com texto de despedida', async () => {
     assert.equal(enviados[0].tipo, 'despedida');
     assert.match(enviados[0].texto, /^Ana, respeito seu tempo e decisão/);
 });
+
+test('lead do widget do site (@web) é ignorado: não tenta enviar pela Meta, e o lead de telefone continua sendo atendido', async () => {
+    const supabase = bancoFalso({
+        leads: [lead('web1', 'web_abc123@web'), lead('l1', '554899990000@s.whatsapp.net')],
+        mensagensPorWa: { 'web_abc123@web': convSilenciosa(50), '554899990000@s.whatsapp.net': convSilenciosa(50) },
+    });
+    const enviados = [];
+    const r = await varrerReengajamentos({
+        supabase, redis: redisFalso(), enviar: async (x) => enviados.push(x.lead.whatsapp_id), instancias: [inst], agora: AGORA,
+        pausaEntreEnviosMs: 0, log: { log() {}, warn() {} }, nomeDe: (l) => l.dono,
+    });
+    assert.deepEqual(enviados, ['554899990000@s.whatsapp.net']);
+    assert.equal(r.ignorados.canal_sem_telefone, 1);
+});

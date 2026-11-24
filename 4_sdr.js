@@ -100,14 +100,15 @@ function identificarArtigo(nome) {
 // subir Redis/BullMQ. Mesma lógica, só mudou de arquivo.
 const { extrairNomeHumano, saudacaoPrimeiroNome, extrairNomeDeclarado, empresaConfiavelDoLead } = require('./lib/textPuros');
 const { cortarPerguntasEmpilhadas } = require('./lib/umaPergunta');
-const { removerMarcadoresInternos } = require('./lib/marcadoresInternos');
+const { removerMarcadoresInternos, regexTagsInternas } = require('./lib/marcadoresInternos');
 const { pareceRespostaAutomatica } = require('./lib/respostaAutomatica');
 const { avaliarPausa, montarSecaoRetomadaHumana, PAUSA_HUMANA_MIN } = require('./lib/pausaHumana');
 const { montarPromptSinalAgendamento, interpretarSinalAgendamento } = require('./lib/sinalAgendamento');
 const { normalizarNumeroAviso, ehNumeroDoDono, dentroDaJanela24h, montarAvisoNovoLead, montarAvisoReuniao } = require('./lib/avisoDono');
 const { varrerReengajamentos } = require('./lib/reengajamentoLoop');
 const { ehEncerramento, jaSeDespediu, montarDespedida, agradeceu: leadAgradeceu, repeteUltimaDaIA } = require('./lib/posAgendamento');
-const { dividirEmBaloes } = require('./lib/baloes');
+const { dividirEmBaloes, limitarBaloes } = require('./lib/baloes');
+const _esclarecSeguidos = new Map(); // leadId → esclarecimentos seguidos (em memória; zera no restart)
 const { semTravessao } = require('./lib/semTravessao');
 // 📅 Confirmação diária de reuniões via Google Agenda (feature opt-in por tenant).
 const { extrairTelefoneDescricao, eventoEhReuniao, digitosParaJids } = require('./lib/gcalParse');
@@ -253,7 +254,7 @@ const { precisaReprocessar } = require('./lib/reprocesso');
 const { ANTIX_USER_ID, webhookDoTenant, postarDiscord, avisarTenant } = require('./lib/discordTenant');
 const { promptBriefing, promptProposta, cabecalhoBriefing, reuniaoTerminouAgora, OFERTA_ANTIX_PADRAO } = require('./lib/briefing');
 const { rodarProspeccao, ehDiaUtilBRT, horaBRT, dataBRT, linkWhatsApp } = require('./lib/prospeccao');
-const { faseDoCiclo, estagioDaFase, respostaCumpreFase, forcarEstagio, textoFixoDaFase, leadRecusou, tenantComCiclo } = require('./lib/cicloVenda');
+const { faseDoCiclo, estagioDaFase, respostaCumpreFase, forcarEstagio, textoFixoDaFase, leadRecusou, tenantComCiclo, ehEsclarecimento, tirarEsclarecimento } = require('./lib/cicloVenda');
 const { deveProporAgendamento, aceitouConviteDeReuniao, convidouReuniaoAntes, pediuHorarioDireto, prometeuVerAgenda, prometeHorarios, cicloLiberaHorarios, ehSaudacaoPura, querAgendar: querAgendarDecisao } = require('./lib/agendaDecisao');
 // 🧠 Triagem inteligente (escuta ativa): lê o momento da conversa e decide o modo (tira-dúvida,
 // objeção, qualificar, propor reunião, agendar) — lib/triagem.js. Só libera agenda quando faz sentido.
@@ -2064,7 +2065,7 @@ async function filtrarEEnviarResposta(sock, remoteJid, resposta, historico, lead
     }
 
     // ── 1. LIMPEZA TOTAL DE TAGS (À PROVA DE ALUCINAÇÃO) ──
-    const regexTags = /\[\s*(ESTAGIO|ESTÁGIO|CLIMA|RAIO-X|PERFIL|ROBO|CONTADOR|ENGANO|GATEKEEPER|AGENDAMENTO_MANUAL|PAUSA\s*PARA\s*RESPOSTA|REVERSAO_TENTADA|FOLLOW_UP|AGUARDANDO_RETORNO|CONVERTIDO)[^\]]*\]/gi;
+    const regexTags = regexTagsInternas();
     // 📣 Campanha: a IA sinaliza que o cliente confirmou o objetivo (fechou/voltou/comprou).
     if (/\[\s*CONVERTIDO\s*\]/i.test(resposta) && lead?.id) {
         motorCampanhas.marcarConvertido(lead.id)
@@ -2235,7 +2236,7 @@ if (matchClima) updates.sentiment = matchClima[1].toLowerCase();
         if (temLink) {
             mensagensSplit = mensagensSplit.slice(0, 3); // confirma + link + fechamento, na ordem
         } else {
-            mensagensSplit = [mensagensSplit[0], mensagensSplit[mensagensSplit.length - 1]];
+            mensagensSplit = limitarBaloes(mensagensSplit, 2); // junta o meio ao 1º balão: não perde a explicação
         }
     }
     console.log(`📤 [FILTRO] Enviando ${mensagensSplit.length} balão(ões) para ${lead.name}...`);
@@ -5696,7 +5697,19 @@ if (!resposta) {
 if (typeof resposta === 'string' && (intencao === 'DUVIDA' || intencao === 'CONTINUAR' || intencao === 'LIXO')
     && !primeiroContato && tenantComCiclo(lead.user_id) && !String(lead.whatsapp_id || '').includes('@web')) {
     const faseC = faseDoCiclo(historico, lead);
-    const estagioC = estagioDaFase(faseC.fase);
+    // O próprio modelo avisa (por contexto, sem palavra-chave) quando a fala do lead era uma pergunta/pedido de explicação e
+    // ele a respondeu: aí o código NÃO exige a fase nem avança o estágio (bug 2026-11-23: "Explica melhor" → convite).
+    // No máximo 2 esclarecimentos SEGUIDOS por lead: depois disso a fase volta a ser cobrada (o funil não pode ficar só tirando dúvida).
+    const _chaveEsc = String(lead.id || lead.whatsapp_id);
+    const _marcouEsc = ehEsclarecimento(resposta);
+    const _esclarecendo = _marcouEsc && (_esclarecSeguidos.get(_chaveEsc) || 0) < 2;
+    _esclarecSeguidos.set(_chaveEsc, _esclarecendo ? (_esclarecSeguidos.get(_chaveEsc) || 0) + 1 : 0);
+    if (_marcouEsc && !_esclarecendo) resposta = tirarEsclarecimento(resposta);
+    if (_esclarecendo) {
+        resposta = tirarEsclarecimento(resposta);
+        console.log(`💬 [CICLO-FASE] ${lead.name}: a IA respondeu uma dúvida do lead — fase "${faseC.fase}" não é exigida nem avançada nesta resposta.`);
+    }
+    const estagioC = _esclarecendo ? null : estagioDaFase(faseC.fase);
     // Saudação pura ("OI" de quem volta depois de dias) não é resposta à fase: a IA retoma a conversa em vez de
     // o código trocar a fala pelo texto fixo da solução (bug 2026-11-18, Lucas/ANSI).
     if (estagioC && !leadRecusou(ultimaMsg) && !ehSaudacaoPura(ultimaMsg)) {

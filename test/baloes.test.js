@@ -54,3 +54,26 @@ test('entradas inválidas não quebram', () => {
     assert.deepEqual(dividirEmBaloes(null), []);
     assert.deepEqual(dividirEmBaloes(undefined), []);
 });
+
+test('limitarBaloes: 3 balões viram 2 sem perder o do meio, e o último (pergunta) fica sozinho', () => {
+    const { limitarBaloes } = require('../lib/baloes');
+    const r = limitarBaloes(['Então o que pega é a espera.', 'Aqui a gente cria uma IA que responde na hora.', 'Isso resolveria o que você vive hoje?'], 2);
+    assert.equal(r.length, 2);
+    assert.match(r[0], /espera/);
+    assert.match(r[0], /responde na hora/);
+    assert.equal(r[1], 'Isso resolveria o que você vive hoje?');
+});
+
+test('limitarBaloes: até o limite não mexe em nada', () => {
+    const { limitarBaloes } = require('../lib/baloes');
+    assert.deepEqual(limitarBaloes(['a', 'b'], 2), ['a', 'b']);
+    assert.deepEqual(limitarBaloes([], 2), []);
+});
+
+test('etiquetas internas: lista única limpa [ESCLARECENDO] no WhatsApp e no site', () => {
+    const { regexTagsInternas } = require('../lib/marcadoresInternos');
+    const { stripWeb } = require('../lib/webGuardrails');
+    assert.equal('Ficou claro? [ESCLARECENDO] [ESTAGIO:3]'.replace(regexTagsInternas(), '').trim(), 'Ficou claro?');
+    assert.equal(stripWeb('Ficou claro? [ESCLARECENDO]'), 'Ficou claro?');
+    assert.equal(stripWeb('Veja [este aviso] normal'), 'Veja [este aviso] normal');
+});

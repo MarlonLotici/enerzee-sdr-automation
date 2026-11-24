@@ -5,7 +5,7 @@ Atendente de IA feminina, receptiva, que conversa e agenda. Conta da Enerzee no 
 
 ## 0. Confirmar antes de começar
 
-- [x] **Número:** (48) 9 9820-4961 → `5548998204961`.
+- [x] **Número:** +55 48 8824-5113 (Phone Number ID 1400458459825400, WABA 2148464835774402). O 4961 original foi descartado.
 - [x] **O número sai do app do WhatsApp** antes do cadastro na Meta (conversas antigas do celular não vêm junto). Confirmado.
 - [x] **Atendente:** Carla. Falta o **nome de exibição** na Meta (ex.: "Enerzee Consultoria"; nomes genéricos são recusados).
 - [x] **Foco:** energia por assinatura + mercado livre (`product_type = 'generico'`). Os demais produtos só são citados.

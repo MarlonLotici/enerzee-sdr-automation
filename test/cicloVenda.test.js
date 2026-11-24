@@ -242,3 +242,22 @@ test('lembreteDaFase: só solução e convite têm lembrete; anexarLembrete copi
     assert.equal(anexarLembrete(h, ''), h);
     assert.deepEqual(anexarLembrete([], 'X'), []);
 });
+
+test('esclarecimento: a IA marca [ESCLARECENDO] e o código reconhece e limpa a etiqueta (sem palavra-chave do lead)', () => {
+    const { ehEsclarecimento, tirarEsclarecimento } = require('../lib/cicloVenda');
+    const r = 'A gente cria um agente de IA que responde o paciente na hora, de madrugada também. Ficou claro? [ESCLARECENDO]';
+    assert.equal(ehEsclarecimento(r), true);
+    assert.equal(ehEsclarecimento('Faz sentido agendar um papo? [ESTAGIO:4]'), false);
+    assert.equal(tirarEsclarecimento(r + ' [ESTAGIO:3]'), 'A gente cria um agente de IA que responde o paciente na hora, de madrugada também. Ficou claro?');
+});
+
+test('lembrete da fase põe o cliente primeiro: manda responder a dúvida com verdade e usar [ESCLARECENDO]', () => {
+    const { lembreteDaFase, blocoDaFase } = require('../lib/cicloVenda');
+    for (const fase of ['solucao', 'convite']) {
+        const l = lembreteDaFase({ fase });
+        assert.match(l, /ESCLARECENDO/);
+        assert.match(l, /nunca invente/i);
+        assert.match(l, /NO MÁXIMO 2 frases/);
+        assert.match(blocoDaFase({ fase, perguntasRespondidas: 4 }), /ESCLARECENDO/);
+    }
+});
