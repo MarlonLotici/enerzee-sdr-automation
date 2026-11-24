@@ -130,4 +130,18 @@ ${instrucoes}`;
     }
 }
 
-module.exports = { revisar, corrigir };
+// Problemas de FUNIL (roteiro SPIN da Antix). Num chip com prompt próprio o funil é o do PRÓPRIO prompt: o Supervisor não pode
+// reescrever a resposta pedindo "explore a necessidade" ou "peça o nome" (na Carla isso a fazia repetir a pergunta de dor:
+// 8 das 11 correções no log real de 2026-11-24). Ficam só os problemas de segurança/qualidade.
+// agendou_cedo entra aqui porque a correção dele manda 'voltar a qualificar com UMA pergunta aberta' (SPIN): na simulação da Carla isso
+// trazia a pergunta de dor de volta mesmo quando o cliente já pedia a reunião. Quem segura agenda cedo demais é o prompt do chip + o
+// bloco de agendamento do Closer + o orquestrador de agenda.
+const PROBLEMAS_DE_FUNIL = ['nao_explora_necessidade', 'pulou_etapa', 'pulou_acolhida', 'nao_pediu_nome', 'contexto_incoerente', 'robotico', 'agendou_cedo'];
+
+/** Devolve os problemas que o Supervisor deve corrigir. Fora do chip autônomo devolve a lista intacta. Função PURA. */
+function filtrarProblemas(problemas = [], { chipAutonomo = false } = {}) {
+    const lista = Array.isArray(problemas) ? problemas : [];
+    return chipAutonomo === true ? lista.filter(p => !PROBLEMAS_DE_FUNIL.includes(p)) : lista;
+}
+
+module.exports = { revisar, corrigir, filtrarProblemas };

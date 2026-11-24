@@ -108,6 +108,8 @@ const { normalizarNumeroAviso, ehNumeroDoDono, dentroDaJanela24h, montarAvisoNov
 const { varrerReengajamentos } = require('./lib/reengajamentoLoop');
 const { ehEncerramento, jaSeDespediu, montarDespedida, agradeceu: leadAgradeceu, repeteUltimaDaIA } = require('./lib/posAgendamento');
 const { dividirEmBaloes, limitarBaloes } = require('./lib/baloes');
+const { secoesFixas } = require('./lib/promptSecoes');
+const { termoEspecialista } = require('./lib/termoEspecialista');
 const _esclarecSeguidos = new Map(); // leadId → esclarecimentos seguidos (em memória; zera no restart)
 const { semTravessao } = require('./lib/semTravessao');
 // 📅 Confirmação diária de reuniões via Google Agenda (feature opt-in por tenant).
@@ -1091,7 +1093,9 @@ async function resolverPromptCompleto(promptBase, contextoLead, instanceData, hi
         : (instanceData?.calendly_link ||
             (instanceData?.owner_phone
                 ? `https://wa.me/55${(instanceData.owner_phone || '').replace(/\D/g, '')}`
-                : 'https://antix.com.br/agendar'));
+                : (String(contextoLead?.user_id || instanceData?.user_id || '') === ANTIX_USER_ID
+                    ? 'https://antix.com.br/agendar'
+                    : 'NÃO envie nenhum link — diga que o consultor vai chamar pra combinar o horário')));
 
     // --- Constituição do agente (regras customizadas do cliente, com variáveis resolvidas) ---
     let constituicaoResolvida = promptBase
@@ -1152,14 +1156,7 @@ PROIBIDO dizer de novo "vou ver os horários" / "deixa eu ver os horários" — 
     // 🚫 REGRA INEGOCIÁVEL — vale pra TODOS os tenants (Antix, Foz, etc.), inclusive quando o
     // tenant desliga as seções modulares. Mata a alucinação (a IA inventando preço/política/
     // certificação/desconto/link) que derruba a credibilidade. Sempre incluída no final.
-    const REGRA_ANTI_INVENCAO = `
-
-[REGRA INEGOCIÁVEL — NUNCA INVENTE]
-- Se uma informação (preço, desconto, política de reembolso/garantia, certificação, prazo, integração, condição comercial) NÃO estiver EXPLÍCITA nas suas instruções acima, você NÃO sabe. Diga com naturalidade que o time confirma isso na conversa/reunião (ex.: "essa parte quem fecha certinho é o time na call"). É melhor dizer "confirmo pra você" do que inventar.
-- LINK de reunião: NUNCA invente um. Use APENAS um link que esteja escrito nas suas instruções. Se não houver, só conduza o lead pro agendamento — o sistema cria o horário e o link REAIS. Nunca afirme que uma reunião está confirmada por conta própria.
-- NUNCA ofereça prospecção ativa / disparo em massa. Nosso foco é atender e qualificar quem chega.
-- NUNCA use travessão (—) na resposta. Prefira vírgula, ponto ou quebra de frase.
-- Responda SEMPRE no MESMO idioma em que o lead escreveu.`;
+    // REGRA_ANTI_INVENCAO: texto movido para lib/promptSecoes.js (secoesFixas).
 
     // 🧑 NOME DO CONTATO: quando nomeLead='vc' (pushName vazio OU nome de EMPRESA, filtrado por
     // extrairNomeHumano), peça o nome da PESSOA com leveza — mas só se a IA ainda não perguntou
@@ -1178,26 +1175,14 @@ Você não tem o nome da PESSOA (o perfil do WhatsApp veio vazio ou é nome de e
     // 🧭 ESPINHA DORSAL DO SDR — ordem fixa da conversa (boas-vindas→SPIN→solução→convite→horário).
     // Vale pra todos os tenants: evita o rushing (pular rapport/qualificação e já propor horário) e
     // reforça que CADA resposta tem que ter a ver com o que o lead acabou de dizer (coerência).
-    const REGRA_ROTEIRO = `
-
-[ROTEIRO — ESPINHA DORSAL DA CONVERSA (siga nesta ordem, NÃO pule etapas)]
-1. BOAS-VINDAS + RAPPORT: cumprimente, seja humano, crie conexão. Se não souber o nome da pessoa, pergunte.
-2. SPIN — DESCOBRIR A NECESSIDADE REAL: uma pergunta por vez, entenda a situação e principalmente a DOR/necessidade de verdade do lead hoje. Não avance sem entender o que ele realmente precisa.
-3. EXPLICAR A SOLUÇÃO para AQUELA dor específica (conecte o que você faz ao que ELE disse — nada genérico).
-4. CONVIDAR: pergunte se faz sentido uma conversa/reunião rápida pra mostrar na prática.
-5. PROPOR HORÁRIO: APENAS depois que ele topar o convite (ou pedir explicitamente pra marcar). NUNCA proponha horário porque o lead só respondeu uma pergunta de qualificação.
-REGRA DE OURO: cada resposta sua PRECISA ter a ver com o que o lead ACABOU de dizer. Se ele perguntar algo ou mudar de assunto, responda AQUILO primeiro, depois retome o roteiro. Entenda a real intenção dele antes de conduzir.
-
-[LEAD QUE JÁ TE CONHECE E VOLTOU — JOGO DE CINTURA]
-Quando já existe histórico e o lead te chama de novo, ele quase nunca quer "começar o roteiro". Na maioria das vezes é pra: (a) TIRAR UMA DÚVIDA (ex.: "como funciona a reunião?", "é online?", "quanto tempo dura?") → RESPONDA a dúvida de verdade, com clareza, SEM despejar horário por cima; (b) CONFIRMAR o horário já marcado → confirme com segurança (dia/hora), sem reofertar; (c) REMARCAR → aí sim ajude a achar outro horário; (d) DESMARCAR/CANCELAR → acolha, NÃO insista em marcar; pergunte se prefere cancelar de vez ou remarcar. NUNCA empurre reunião por cima de uma pergunta — primeiro resolve o que ele trouxe; só volte a falar de horário se fizer sentido e, de preferência, deixando ELE puxar.
-
-[NÃO SEJA INTERROGATÓRIO — textura humana]
-Não faça pergunta atrás de pergunta seca. Em cerca de 1 a cada 3 respostas, ANTES de perguntar, reaja ao que ele disse: um comentário genuíno, uma validação ("faz todo sentido, muita gente trava nisso"), um elogio contextual ("legal que vocês já usam o Instagram pra isso") ou um micro-insight — e SÓ ENTÃO faça a pergunta. Nas outras vezes, pode ir mais direto (não force elogio toda hora, senão soa falso). O objetivo é parecer uma conversa humana, não um formulário.`;
+    // REGRA_ROTEIRO: texto movido para lib/promptSecoes.js (secoesFixas).
 
     const secaoCampanha = await montarSecaoCampanha(contextoLead).catch(() => '');
+    // Roteiro e regra anti-invenção: texto padrão (Antix/demais) ou versão neutra do chip autônomo.
+    const _secoes = secoesFixas({ chipAutonomo: extras.chipAutonomo === true });
 
     // Fixo primeiro (cache do prompt); o que muda por conversa/turno vai no fim.
-    return constituicaoResolvida + REGRA_ROTEIRO + REGRA_ANTI_INVENCAO + secaoAcolhidaInbound + montarSecaoRetomadaHumana(historico, { retomandoAgora: contextoLead?._retomadaHumana === true }) + secaoPerguntarNome + secaoCampanha + secaoEstadoAgenda;
+    return constituicaoResolvida + _secoes.roteiro + _secoes.antiInvencao + secaoAcolhidaInbound + montarSecaoRetomadaHumana(historico, { retomandoAgora: contextoLead?._retomadaHumana === true }) + secaoPerguntarNome + secaoCampanha + secaoEstadoAgenda;
 }
 
 // 📣 Lead da BASE que recebeu campanha: injeta o contexto (DADOS) da campanha + os dados do
@@ -4604,7 +4589,7 @@ function enviarBriefingReuniao({ lead, historico, instanceData, quando, meetLink
         const { data: tp } = await supabase.from('tenant_prompts').select('system_prompt').eq('user_id', userId).maybeSingle();
         const nomeLead = lead.dono || lead.name || 'Lead';
         const corpo = await chamarLLM({
-            messages: [{ role: 'user', content: promptBriefing({ historico, nomeLead, empresaCliente: instanceData?.company_name || 'a empresa', contextoNegocio: tp?.system_prompt || '', quando }) }],
+            messages: [{ role: 'user', content: promptBriefing({ historico, nomeLead, empresaCliente: instanceData?.company_name || 'a empresa', contextoNegocio: ((instanceData?.system_prompt || '').trim().length >= 100 ? instanceData.system_prompt : tp?.system_prompt) || '', quando }) }],
             model: MODELOS.conversa, maxTokens: Number(process.env.LLM_MAXTOKENS_CLOSER) || 1500,
         });
         const cab = cabecalhoBriefing({ nomeLead, telefone: String(lead.whatsapp_id || '').includes('@web') ? lead.phone : String(lead.whatsapp_id || '').split('@')[0], email: lead.email, quando, meetLink });
@@ -4849,7 +4834,7 @@ async function orquestrarAgendamento(lead, ultimaMsg, instanceData, userId, inte
             ev = await gcal.criarEvento(userId, calId, {
                 inicioISO: slot.inicioISO, fimISO: slot.fimISO,
                 titulo:    `Reunião — ${lead.name || 'Lead'}`,
-                descricao: `Agendado pela SDR IA (Antix). Lead: ${lead.name || ''} · ${lead.phone || lead.whatsapp_id}${lead.email ? ' · ' + lead.email : ''}`,
+                descricao: `Agendado pela SDR IA (${instanceData?.company_name || 'Antix'}). Lead: ${lead.name || ''} · ${lead.phone || lead.whatsapp_id}${lead.email ? ' · ' + lead.email : ''}`,
                 emailConvidado: lead.email || undefined,   // convida a pessoa → ela recebe convite + lembretes da Google no e-mail dela
             });
         }
@@ -4914,7 +4899,7 @@ async function orquestrarAgendamento(lead, ultimaMsg, instanceData, userId, inte
             enviarAlerta(`⚠️ Agenda não pôde ser lida — ${lead.name}`, `${e.message}. Provável escopo OAuth — RECONECTE a Google Agenda.`, 15158332).catch(() => {});
             // Não prometer que a IA volta sozinha (ela não volta — o fluxo é reativo). Direciona
             // pra um humano, que também recebe o alerta acima, evitando a promessa vazia.
-            return ok('Deu uma travadinha aqui pra puxar os horários 😅 Já pedi pra um especialista te chamar com as opções, tá?');
+            return ok(`Deu uma travadinha aqui pra puxar os horários 😅 Já pedi pra um ${termoEspecialista(instanceData)} te chamar com as opções, tá?`);
         }
         if (!slots.length) {
             // Pediu um dia específico sem vaga: avisa e JÁ oferece os próximos livres (não empurra calado).
@@ -4924,17 +4909,17 @@ async function orquestrarAgendamento(lead, ultimaMsg, instanceData, userId, inte
                     await supabase.from('leads').update({ slots_propostos: outros, slot_calendar_id: calId, current_stage: 4 }).eq('id', lead.id);
                     return ok(`Em ${diaAlvo.label} eu não tenho horário livre 😕 Mas consigo ${labels(outros)}. Algum desses te atende?`);
                 }
-                return ok(`Em ${diaAlvo.label} minha agenda tá fechada e os próximos dias também estão concorridos 😕 Um especialista vai te chamar pra achar o melhor horário, tá?`);
+                return ok(`Em ${diaAlvo.label} minha agenda tá fechada e os próximos dias também estão concorridos 😕 Um ${termoEspecialista(instanceData)} vai te chamar pra achar o melhor horário, tá?`);
             }
             enviarAlerta(`📅 Agenda cheia — ${lead.name}`, 'Sem horário livre nos próximos dias.', 15158332).catch(() => {});
-            return ok('Que bom que faz sentido pra você! A agenda está bem cheia nos próximos dias, então um especialista vai te chamar pra achar o melhor horário.');
+            return ok(`Que bom que faz sentido pra você! A agenda está bem cheia nos próximos dias, então um ${termoEspecialista(instanceData)} vai te chamar pra achar o melhor horário.`);
         }
         await supabase.from('leads').update({ slots_propostos: slots, slot_calendar_id: calId, current_stage: 4 }).eq('id', lead.id);
         console.log(`📅 [AGENDAMENTO] ${lead.name}: propondo ${labels(slots)}`);
         const abre = ocupadoAntes
             ? _variar(['Esse já tá tomado 😕 mas sem problema! ', 'Nesse eu já tenho um compromisso, mas relaxa que a gente encaixa. ', 'Esse eu não consigo, mas tenho outras ótimas opções! ', 'Puxa, esse já foi preenchido — mas achei outros horários. '])
             : _variar(['Que bom! ', 'Ótimo! ', 'Perfeito! ']);
-        return ok(`${abre}${_variar(['Consigo te encaixar', 'Tenho livre', 'Dá pra marcar'])} ${labels(slots)} pra ${_variar(['uma conversa rápida com nosso especialista', 'um papo de 30 minutos com nosso especialista', 'uma call com nosso time pra te mostrar na prática'])}. ${_variar(['Qual fica melhor?', 'Qual prefere?', 'Qual encaixa melhor aí?'])} 😊`);
+        return ok(`${abre}${_variar(['Consigo te encaixar', 'Tenho livre', 'Dá pra marcar'])} ${labels(slots)} pra ${_variar([`uma conversa rápida com nosso ${termoEspecialista(instanceData)}`, `um papo de 30 minutos com nosso ${termoEspecialista(instanceData)}`, 'uma call com nosso time pra te mostrar na prática'])}. ${_variar(['Qual fica melhor?', 'Qual prefere?', 'Qual encaixa melhor aí?'])} 😊`);
     };
 
     // ── JÁ AGENDADO e o lead volta ──────────────────────────────────────────
@@ -5173,7 +5158,7 @@ async function orquestrarAgendamento(lead, ultimaMsg, instanceData, userId, inte
         && !pediuHorarioDireto(ultimaMsg) && !convidouReuniaoAntes(historico);
     if (precisaConvite) {
         console.log(`💬 [AGENDAMENTO] ${lead.name}: convite antes dos horários (aguardando o aceite).`);
-        return ok(`${_variar(['Legal', 'Que bom', 'Show'])}, pra te ajudar eu consigo agendar pra você um papo de ${duracaoMin} minutos com nosso especialista, pode ser?`);
+        return ok(`${_variar(['Legal', 'Que bom', 'Show'])}, pra te ajudar eu consigo agendar pra você um papo de ${duracaoMin} minutos com nosso ${termoEspecialista(instanceData)}, pode ser?`);
     }
     return await ofertar(false, diaInicial);
 }
@@ -5440,6 +5425,9 @@ let promptBase;
 // Override POR CHIP tem precedência total: chip com system_prompt próprio (ex.: anúncio/
 // inbound) usa ele em TODAS as intenções, ignorando o roteamento da conta.
 const overrideChipWorker = instanceData?.system_prompt?.trim();
+// 🤖 CHIP AUTÔNOMO: chip com prompt próprio segue o funil DO PRÓPRIO prompt. Os blocos fixos de funil da Antix (roteiro SPIN,
+// ciclo 'explorar a dificuldade', 'decisor', 'mude o ângulo') ficam de fora e o Supervisor só cuida de segurança (2026-11-24, Carla).
+const chipAutonomo = !!(overrideChipWorker && overrideChipWorker.length >= 100);
 if (overrideChipWorker && overrideChipWorker.length >= 100) {
     promptBase = overrideChipWorker;
     console.log(`🎯 [PROMPT-CHIP] Chip ${instanceId.slice(0,8)} usa system_prompt próprio (override) — ignora roteamento da conta.`);
@@ -5466,7 +5454,7 @@ const promptResolvido = await resolverPromptCompleto(
     lead,
     instanceData,
     historico,
-    { raioXDoLead, perfilEmocional }
+    { raioXDoLead, perfilEmocional, chipAutonomo }
 );
 
 if (!promptResolvido) {
@@ -5543,7 +5531,7 @@ if (!promptResolvido) {
 
 } else if (intencao === 'AGENDA_RETORNO') {
     console.log(`📅 [WORKER-IA] Lead ${lead.name} pediu retorno em horário específico. Gerando confirmação...`);
-    resposta = await closerAgent.gerarRespostaCloser(historico, lead, promptResolvido, 'COMPRA', {
+    resposta = await closerAgent.gerarRespostaCloser(historico, lead, promptResolvido, 'COMPRA', { chipAutonomo,
         calendlyLink: instanceData?.calendly_link,
         instanceType: instanceData?.product_type || 'generico',
         bookingAtivo, agendaConectada
@@ -5575,11 +5563,11 @@ if (!promptResolvido) {
 } else if (intencao === 'COMPRA') {
     // ... resto do código igual
     console.log(`💰 [WORKER-IA] Sinal de COMPRA! Acionando Closer em modo fechamento para ${lead.name}...`);
-    resposta = await closerAgent.gerarRespostaCloser(historico, lead, promptResolvido, 'COMPRA', { calendlyLink: instanceData?.calendly_link, instanceType: instanceData?.product_type || 'generico', bookingAtivo, agendaConectada });
+    resposta = await closerAgent.gerarRespostaCloser(historico, lead, promptResolvido, 'COMPRA', { chipAutonomo, calendlyLink: instanceData?.calendly_link, instanceType: instanceData?.product_type || 'generico', bookingAtivo, agendaConectada });
 
 } else if (intencao === 'DUVIDA' || intencao === 'CONTINUAR') {
     console.log(`🔍 [WORKER-IA] Fluxo de CONTINUIDADE/DÚVIDA. Acionando Closer para ${lead.name}...`);
-    resposta = await closerAgent.gerarRespostaCloser(historico, lead, promptResolvido, 'DUVIDA', { calendlyLink: instanceData?.calendly_link, instanceType: instanceData?.product_type || 'generico', primeiroContato, bookingAtivo, agendaConectada });
+    resposta = await closerAgent.gerarRespostaCloser(historico, lead, promptResolvido, 'DUVIDA', { chipAutonomo, calendlyLink: instanceData?.calendly_link, instanceType: instanceData?.product_type || 'generico', primeiroContato, bookingAtivo, agendaConectada });
 
 } else if (intencao === 'OBJECAO') {
     console.log(`🛡️ [WORKER-IA] OBJEÇÃO detectada! Acionando The Tank para ${lead.name}...`);
@@ -5616,7 +5604,7 @@ if (!promptResolvido) {
             console.log(`✅ [REPASSE] Email de repasse enviado para ${emailDetectado}`);
         } else {
             console.error(`❌ [REPASSE] Falha ao enviar email de repasse:`, resultadoEmailRepasse.error);
-            resposta = await closerAgent.gerarRespostaCloser(historico, lead, promptResolvido, 'REPASSE', { calendlyLink: instanceData?.calendly_link, instanceType: instanceData?.product_type || 'generico', bookingAtivo, agendaConectada });
+            resposta = await closerAgent.gerarRespostaCloser(historico, lead, promptResolvido, 'REPASSE', { chipAutonomo, calendlyLink: instanceData?.calendly_link, instanceType: instanceData?.product_type || 'generico', bookingAtivo, agendaConectada });
         }
     } else {
         const { nomeDecisor, telefoneDecisor } = await handoffAgent.extrairDadosDecisor(ultimaMsg, historico);
@@ -5643,7 +5631,7 @@ if (!promptResolvido) {
             } catch (erroRepasse) {
                 console.error(`❌ [REPASSE] Falha ao atualizar lead ${lead.id}:`, erroRepasse.message);
                 // Fallback: closer tenta extrair o contato via conversa
-                resposta = await closerAgent.gerarRespostaCloser(historico, lead, promptResolvido, 'REPASSE', { calendlyLink: instanceData?.calendly_link, instanceType: instanceData?.product_type || 'generico', bookingAtivo, agendaConectada });
+                resposta = await closerAgent.gerarRespostaCloser(historico, lead, promptResolvido, 'REPASSE', { chipAutonomo, calendlyLink: instanceData?.calendly_link, instanceType: instanceData?.product_type || 'generico', bookingAtivo, agendaConectada });
             }
         } else if (lead.backup_whatsapp_id) {
             // 🚪 GATEKEEPER SEM REPASSE: lead confirmou que não é quem decide mas não passou
@@ -5662,12 +5650,12 @@ if (!promptResolvido) {
                 console.log(`✅ [GATEKEEPER] Lead ${lead.id} migrado para backup_whatsapp_id automaticamente.`);
             } catch (erroBackup) {
                 console.error(`❌ [GATEKEEPER] Falha ao migrar para backup_whatsapp_id:`, erroBackup.message);
-                resposta = await closerAgent.gerarRespostaCloser(historico, lead, promptResolvido, 'REPASSE', { calendlyLink: instanceData?.calendly_link, instanceType: instanceData?.product_type || 'generico', bookingAtivo, agendaConectada });
+                resposta = await closerAgent.gerarRespostaCloser(historico, lead, promptResolvido, 'REPASSE', { chipAutonomo, calendlyLink: instanceData?.calendly_link, instanceType: instanceData?.product_type || 'generico', bookingAtivo, agendaConectada });
             }
         } else {
             // Nenhum telefone na mensagem — closer pergunta pelo contato do decisor
             console.log(`⚠️ [REPASSE] Nenhum telefone extraído para ${lead.name}. Closer assumindo para solicitar o contato...`);
-            resposta = await closerAgent.gerarRespostaCloser(historico, lead, promptResolvido, 'REPASSE', { calendlyLink: instanceData?.calendly_link, instanceType: instanceData?.product_type || 'generico', bookingAtivo, agendaConectada });
+            resposta = await closerAgent.gerarRespostaCloser(historico, lead, promptResolvido, 'REPASSE', { chipAutonomo, calendlyLink: instanceData?.calendly_link, instanceType: instanceData?.product_type || 'generico', bookingAtivo, agendaConectada });
             // Pausa o lead para evitar loop: mesmo email chegando de novo não dispara nova resposta
             await supabase.from('leads').update({
                 is_paused: true,
@@ -5680,7 +5668,7 @@ if (!promptResolvido) {
 
 } else {
     console.log(`🧹 [WORKER-IA] Mensagem LIXO. Closer seguirá estágio atual da Constituição...`);
-    resposta = await closerAgent.gerarRespostaCloser(historico, lead, promptResolvido, 'LIXO', { calendlyLink: instanceData?.calendly_link, instanceType: instanceData?.product_type || 'generico', primeiroContato, bookingAtivo, agendaConectada });
+    resposta = await closerAgent.gerarRespostaCloser(historico, lead, promptResolvido, 'LIXO', { chipAutonomo, calendlyLink: instanceData?.calendly_link, instanceType: instanceData?.product_type || 'generico', primeiroContato, bookingAtivo, agendaConectada });
 }
 
 // 🛡️ Blindagem final: se todos os agentes falharam, avisa o log
@@ -5717,7 +5705,7 @@ if (typeof resposta === 'string' && (intencao === 'DUVIDA' || intencao === 'CONT
             console.log(`🎯 [CICLO-FASE] ${lead.name}: fase=${faseC.fase} (${faseC.perguntasRespondidas} perguntas respondidas) mas a IA não cumpriu — refazendo.`);
             console.log(`🎯 [CICLO-FASE] rascunho recusado: "${String(resposta).replace(/\s+/g, ' ').slice(0, 160)}"`);
             const avisoFase = `\n\n⛔ CORREÇÃO OBRIGATÓRIA: sua resposta anterior NÃO cumpriu a fase "${faseC.fase}". Escreva APENAS a mensagem da fase, exatamente como a ordem acima descreve, sem pergunta de descoberta e sem horário.`;
-            const refeitaFase = await closerAgent.gerarRespostaCloser(historico, lead, promptResolvido, 'DUVIDA', { avisoFinal: avisoFase,
+            const refeitaFase = await closerAgent.gerarRespostaCloser(historico, lead, promptResolvido, 'DUVIDA', { chipAutonomo, avisoFinal: avisoFase,
                 calendlyLink: instanceData?.calendly_link, instanceType: instanceData?.product_type || 'generico', bookingAtivo, agendaConectada,
             }).catch(() => null);
             if (refeitaFase && respostaCumpreFase(faseC.fase, refeitaFase)) {
@@ -5745,8 +5733,8 @@ const cicloOk = cicloLiberaHorarios({
 });
 if (bookingAtivo && !cicloOk && typeof resposta === 'string' && prometeHorarios(resposta)) {
     console.log(`🔁 [CICLO] ${lead.name}: closer prometeu horários antes do ciclo — refazendo a resposta.`);
-    const avisoCiclo = `\n\n⛔ CORREÇÃO OBRIGATÓRIA: sua resposta anterior falou em ver/puxar horários, mas o lead AINDA NÃO aceitou reunião. NÃO fale de horário, agenda nem reunião agora. Siga o ciclo: se ainda não explorou a dificuldade dele com o que ele disse, pergunte sobre essa dificuldade (como faz hoje, o que trava). Se já explorou, mostre como a gente resolve essa dor.`;
-    const refeita = await closerAgent.gerarRespostaCloser(historico, lead, promptResolvido, 'DUVIDA', { avisoFinal: avisoCiclo,
+    const avisoCiclo = `\n\n⛔ CORREÇÃO OBRIGATÓRIA: sua resposta anterior falou em ver/puxar horários, mas o lead AINDA NÃO aceitou reunião. NÃO fale de horário, agenda nem reunião agora. ${chipAutonomo ? 'Siga as etapas do seu prompt: se ainda não apresentou a solução, apresente agora; se já apresentou, pergunte se faz sentido uma conversa com o consultor.' : 'Siga o ciclo: se ainda não explorou a dificuldade dele com o que ele disse, pergunte sobre essa dificuldade (como faz hoje, o que trava). Se já explorou, mostre como a gente resolve essa dor.'}`;
+    const refeita = await closerAgent.gerarRespostaCloser(historico, lead, promptResolvido, 'DUVIDA', { chipAutonomo, avisoFinal: avisoCiclo,
         calendlyLink: instanceData?.calendly_link, instanceType: instanceData?.product_type || 'generico', bookingAtivo, agendaConectada,
     }).catch(() => null);
     resposta = (refeita && !prometeHorarios(refeita))
@@ -5790,14 +5778,16 @@ if (bookingAtivo && cicloOk && typeof resposta === 'string') {
                 console.log(`🧑‍⚖️ [SUPERVISOR] Revisando rascunho de ${lead.name}...`);
                 const _crit = await supervisorAgent.revisar({ historico, lead, draft: resposta, primeiroContato })
                     .catch(() => ({ ok: true, problemas: [] }));
-                if (!_crit.ok && _crit.problemas.length) {
-                    const _corr = await supervisorAgent.corrigir({ draft: resposta, problemas: _crit.problemas, historico, promptBase: promptResolvido })
+                const _probsUteis = supervisorAgent.filtrarProblemas(_crit.problemas || [], { chipAutonomo });
+                if (chipAutonomo && _crit.problemas?.length && !_probsUteis.length) console.log(`🧑‍⚖️ [SUPERVISOR] Ignorado no chip autônomo: [${_crit.problemas.join(', ')}]`);
+                if (!_crit.ok && _probsUteis.length) {
+                    const _corr = await supervisorAgent.corrigir({ draft: resposta, problemas: _probsUteis, historico, promptBase: promptResolvido })
                         .catch(() => null);
                     if (_corr) {
-                        console.log(`🧑‍⚖️ [SUPERVISOR] Corrigiu [${_crit.problemas.join(', ')}] para ${lead.name}.`);
+                        console.log(`🧑‍⚖️ [SUPERVISOR] Corrigiu [${_probsUteis.join(', ')}] para ${lead.name}.`);
                         resposta = _corr;
                     } else {
-                        console.log(`🧑‍⚖️ [SUPERVISOR] Apontou [${_crit.problemas.join(', ')}] mas não conseguiu reescrever — mantendo rascunho.`);
+                        console.log(`🧑‍⚖️ [SUPERVISOR] Apontou [${_probsUteis.join(', ')}] mas não conseguiu reescrever — mantendo rascunho.`);
                     }
                 }
             }

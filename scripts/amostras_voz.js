@@ -22,11 +22,20 @@ const MODELO = process.env.ELEVENLABS_MODEL_ID || 'eleven_multilingual_v2';
 const FRASE = process.env.FRASE ||
     'Oi! Aqui é a Sofia, da Antix. Entendi o que você precisa: responder seus clientes na hora, até fora do horário. Faz sentido a gente marcar uma conversa rápida de trinta minutos?';
 
+// Ajustes opcionais por env (VOZ_STABILITY, VOZ_STYLE, VOZ_SPEED) sobre o preset 'neutro' de produção; SUFIXO evita sobrescrever arquivos.
+function ajustesDaVoz() {
+    const base = configVozParaTom('neutro', MODELO);
+    const n = (v) => (v !== undefined && v !== '' && !Number.isNaN(Number(v)) ? Number(v) : undefined);
+    const o = { stability: n(process.env.VOZ_STABILITY), style: n(process.env.VOZ_STYLE), speed: n(process.env.VOZ_SPEED) };
+    for (const k of Object.keys(o)) if (o[k] !== undefined) base[k] = o[k];
+    return base;
+}
+
 async function amostra(voiceId, pasta) {
     const resp = await fetch(`https://api.elevenlabs.io/v1/text-to-speech/${encodeURIComponent(voiceId)}?output_format=mp3_44100_128`, {
         method: 'POST',
         headers: { 'xi-api-key': KEY, 'Content-Type': 'application/json', Accept: 'audio/mpeg' },
-        body: JSON.stringify({ text: FRASE, model_id: MODELO, voice_settings: configVozParaTom('neutro', MODELO) }),
+        body: JSON.stringify({ text: FRASE, model_id: MODELO, voice_settings: ajustesDaVoz() }),
         signal: AbortSignal.timeout(30000),
     });
     if (!resp.ok) {
@@ -34,7 +43,7 @@ async function amostra(voiceId, pasta) {
         const msg = (() => { try { return JSON.parse(corpo).detail?.message || corpo; } catch { return corpo; } })();
         throw new Error(`${resp.status} ${String(msg).slice(0, 180)}`);
     }
-    const arquivo = path.join(pasta, `${voiceId}.mp3`);
+    const arquivo = path.join(pasta, `${voiceId}${process.env.SUFIXO ? '_' + process.env.SUFIXO : ''}.mp3`);
     fs.writeFileSync(arquivo, Buffer.from(await resp.arrayBuffer()));
     return arquivo;
 }
