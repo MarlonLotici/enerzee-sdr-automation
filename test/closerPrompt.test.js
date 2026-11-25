@@ -24,7 +24,8 @@ test('chip autônomo + DUVIDA: sem ciclo SPIN, sem "decisor", sem tom de closer 
     assert.doesNotMatch(p, /de 30 a 40%/);
     assert.doesNotMatch(p, /REVEAL ANTIX|VOCÊ É UM CLOSER/);
     assert.match(p, /Siga a progressão de etapas definida no SEU prompt/);
-    assert.match(p, /AGENDAMENTO: siga as etapas do seu prompt/);
+    assert.match(p, /🔁 Siga as etapas do seu prompt\./);
+    assert.doesNotMatch(p, /Só convide para a reunião depois/); // regra de etapa saiu do código: é do prompt
     assert.match(p, /ESTILO DE CONVERSA/);
     assert.match(p, /UMA ÚNICA PERGUNTA por mensagem/); // as travas de segurança continuam
     assert.match(p, /^PROMPT DO TENANT/); // prompt do tenant continua no começo (cache do prompt)
@@ -46,4 +47,26 @@ test('sem a flag (Sofia/demais): funil da Antix continua exatamente como antes',
     assert.doesNotMatch(d, /de 30 a 40%/); // o exemplo neutro vale pra todos
     const l = await montar('LIXO', {});
     assert.match(l, /Mude o ângulo/);
+});
+
+test('chip autônomo + COMPRA com agenda ativa: nenhum modo operacional fixo, só a ferramenta [AGENDAR] e a trava anti-fake', async () => {
+    const p = await montar('COMPRA', { chipAutonomo: true, bookingAtivo: true, agendaConectada: true });
+    assert.doesNotMatch(p, /MODO OPERACIONAL: SINAL DE COMPRA/);
+    assert.doesNotMatch(p, /manhã\/tarde|Pergunte qual o melhor período/);
+    assert.doesNotMatch(p, /AGENDAMENTO AUTOMÁTICO ATIVO/); // bloco com regras de funil da Antix fica de fora
+    assert.match(p, /FERRAMENTA DE AGENDA/);
+    assert.match(p, /\[AGENDAR\]/);
+    assert.match(p, /nunca diz que agendou/);
+});
+
+test('chip autônomo sem agenda: COMPRA também não injeta modo operacional (o prompt manda o link)', async () => {
+    const p = await montar('COMPRA', { chipAutonomo: true });
+    assert.doesNotMatch(p, /MODO OPERACIONAL/);
+    assert.doesNotMatch(p, /FERRAMENTA DE AGENDA/);
+});
+
+test('sem a flag (Sofia/demais) + COMPRA com agenda: comportamento de antes', async () => {
+    const p = await montar('COMPRA', { bookingAtivo: true, agendaConectada: true });
+    assert.match(p, /AGENDAMENTO AUTOMÁTICO ATIVO/);
+    assert.doesNotMatch(p, /FERRAMENTA DE AGENDA/);
 });

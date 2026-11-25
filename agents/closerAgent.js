@@ -15,7 +15,8 @@ PROIBIDO antes de completar os passos 1 e 2: falar de horário, de agenda, dizer
 ÚNICA EXCEÇÃO: o PRÓPRIO lead pedir pra marcar ("quero marcar", "tem horário?") — aí pode ir direto ao passo 3 ou 4.`;
 
 // Versão neutra para chip autônomo: as etapas são as do prompt do chip; aqui só a regra de agenda.
-const BLOCO_AGENDAMENTO_AUTONOMO = `🔁 AGENDAMENTO: siga as etapas do seu prompt. Só convide para a reunião depois de apresentar a solução, e só fale de horário depois que a pessoa aceitar o convite (o sistema mostra os horários reais; você nunca lista horário). Exceção: se a própria pessoa pedir para marcar, pode ir direto ao convite.`;
+// Só reforça que o funil é o do prompt: nenhuma regra de etapa aqui (o prompt do chip é a fonte única).
+const BLOCO_AGENDAMENTO_AUTONOMO = `🔁 Siga as etapas do seu prompt.`;
 
 /**
  * @param {Array}  historico          - Mensagens formatadas [{role, content}]
@@ -80,7 +81,10 @@ REGRAS ABSOLUTAS DE RETORNO:
     // MODO COMPRA
     // ─────────────────────────────────────────────────────────────────────────
     if (intencao === 'COMPRA') {
-        if (isAntix && calendlyLink) {
+        if (chipAutonomo) {
+            // Chip autônomo: sem 'modo operacional' fixo. O que dizer depois do aceite é o prompt do chip que define
+            // (bug 2026-11-24: o bloco 'SEM AGENDA' abaixo fez a Carla perguntar manhã/tarde e prometer ligação).
+        } else if (isAntix && calendlyLink) {
             // Antix SEM booking (usa Calendly): envia o link + REVEAL simultâneos p/ efeito UAU.
             // Com booking ativo, calendlyLink vem vazio → NÃO cai aqui: quem agenda é o
             // orquestrador (propõe horários reais da Google Agenda) e o REVEAL vai na confirmação.
@@ -271,7 +275,14 @@ REGRAS DE VOZ (SOBRESCREVEM instruções de formato de chat acima):
     // AGENDAMENTO AUTOMÁTICO (Google Agenda) — override DURO anti-agendamento-fake.
     // Vem DEPOIS do overrideTatico pra vencer qualquer instrução de fechamento acima.
     // ─────────────────────────────────────────────────────────────────────────
-    const blocoBookingAuto = bookingAtivo ? `
+    // Chip autônomo: só a DESCRIÇÃO da ferramenta (como pedir os horários) e a trava anti-agendamento-fake. QUANDO pedir é o prompt.
+    const blocoBookingAuto = (bookingAtivo && chipAutonomo) ? `
+=======================================================
+📅 FERRAMENTA DE AGENDA (automática)
+=======================================================
+Quando o seu prompt disser que é hora de mostrar os horários, escreva só uma frase curta dizendo que vai ver os horários e termine com [AGENDAR]. O sistema troca essa mensagem pelos horários reais da agenda.
+Você nunca cita horário, nunca manda link e nunca diz que agendou ou confirmou: quem marca é o sistema.
+` : bookingAtivo ? `
 =======================================================
 📅 AGENDAMENTO AUTOMÁTICO ATIVO — LEIA E OBEDEÇA
 =======================================================

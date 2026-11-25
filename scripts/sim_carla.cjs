@@ -62,10 +62,12 @@ async function rodar(p, turnos = 9) {
     }
     const est = /EST[AÁ]GIO\s*:?\s*(\d)/i.exec(resp);
     if (est) lead.current_stage = Number(est[1]);
+    const pediuAgenda = /\[\s*AGENDAR\s*\]/i.test(resp); // em produção o sistema troca a frase pelos horários reais
     let texto = limpa(resp);
     if (cortar) { const k = cortar(texto); if (k && k.cortado) texto = k.texto; }
     hist.push({ role: 'assistant', content: texto });
-    falas.push({ quem: 'CARLA', txt: texto, est: lead.current_stage, nota });
+    falas.push({ quem: 'CARLA', txt: texto + (pediuAgenda ? ' {[AGENDAR] → horários reais}' : ''), est: lead.current_stage, nota });
+    if (pediuAgenda) { agendou = true; break; }
     // Em produção o orquestrador de agenda assume quando a pessoa aceita o convite: aqui a conversa termina quando a Carla aciona a agenda.
     if (/(ver|puxar|verificar|buscar)[^.?!]{0,30}hor[áa]rios|hor[áa]rios[^.?!]{0,25}(dispon[ií]ve|aparec)/i.test(texto)) { agendou = true; break; }
     if (lead.current_stage >= 4 && /\b(sim|pode|bora|claro|ok|vamos|fechado|topo|combinado)\b/i.test(c)) break;

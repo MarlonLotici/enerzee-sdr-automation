@@ -100,7 +100,7 @@ function identificarArtigo(nome) {
 // subir Redis/BullMQ. Mesma lógica, só mudou de arquivo.
 const { extrairNomeHumano, saudacaoPrimeiroNome, extrairNomeDeclarado, empresaConfiavelDoLead } = require('./lib/textPuros');
 const { cortarPerguntasEmpilhadas } = require('./lib/umaPergunta');
-const { removerMarcadoresInternos, regexTagsInternas } = require('./lib/marcadoresInternos');
+const { removerMarcadoresInternos, regexTagsInternas, temTagAgendar, tirarTagAgendar } = require('./lib/marcadoresInternos');
 const { pareceRespostaAutomatica } = require('./lib/respostaAutomatica');
 const { avaliarPausa, montarSecaoRetomadaHumana, PAUSA_HUMANA_MIN } = require('./lib/pausaHumana');
 const { montarPromptSinalAgendamento, interpretarSinalAgendamento } = require('./lib/sinalAgendamento');
@@ -4788,9 +4788,12 @@ async function orquestrarAgendamento(lead, ultimaMsg, instanceData, userId, inte
     // em vez de deixar o closer ecoar horários antigos do histórico (bug da inconsistência).
     const aceitouConvite = aceitouConviteDeReuniao(historico, ultimaMsg);
     const prometeuAgenda = prometeuVerAgenda(historico);
+    // Chip autônomo: quem decide a hora de mostrar horários é o PROMPT (via [AGENDAR] na resposta do Closer). Aqui só segue sozinho
+    // a conversa de agenda já em curso (horários propostos / reunião marcada); nada de regex de aceite.
+    const chipAutonomoAg = (instanceData?.system_prompt || '').trim().length >= 100; // mesmo critério do worker (chipAutonomo)
     // forcarOferta: trava anti-stall — quando o closer tentou "prometer e parar" (deixa eu ver os
     // horários), o chamador re-invoca forçando a proposta de slots REAIS, pulando o gate.
-    if (!jaAgendado && !opts.forcarOferta && !deveProporAgendamento({ texto: ultimaMsg, intencao, currentStage: lead.current_stage, temSlots, aceitouConvite, prometeuAgenda }))
+    if (!jaAgendado && !opts.forcarOferta && (chipAutonomoAg ? !temSlots : !deveProporAgendamento({ texto: ultimaMsg, intencao, currentStage: lead.current_stage, temSlots, aceitouConvite, prometeuAgenda })))
         return { tratado: false, bookingAtivo: true, agendaConectada };
 
     const calId = cfg.booking_calendar_id || cfg.calendar_id || 'primary';
@@ -5726,7 +5729,8 @@ if (typeof resposta === 'string' && (intencao === 'DUVIDA' || intencao === 'CONT
 // solicito ao sistema os horários". Horário só depois de explorar a dor → mostrar a solução → convite →
 // "sim". Se o closer prometer horário antes disso, refaz a resposta UMA vez mandando seguir o ciclo; se
 // insistir, troca por uma pergunta de exploração da dificuldade (nunca deixa sair promessa de horário).
-const cicloOk = cicloLiberaHorarios({
+// Chip autônomo: o ciclo é o do prompt, sem barreira de código.
+const cicloOk = chipAutonomo || cicloLiberaHorarios({
     texto: ultimaMsg, historico,
     temSlots: Array.isArray(lead.slots_propostos) && lead.slots_propostos.length > 0,
     jaAgendado: lead.status === 'booked',
@@ -5742,6 +5746,20 @@ if (bookingAtivo && !cicloOk && typeof resposta === 'string' && prometeHorarios(
         : 'Entendi! E hoje, qual é a maior dificuldade que vocês têm com isso? [ESTAGIO:2] [CLIMA:NEUTRO]';
 }
 
+// 📅 [AGENDAR]: o modelo, seguindo o PROMPT do chip, pede os horários com a tag; o sistema só executa (busca na Google Agenda e
+// troca a frase pelos horários reais). Sem agenda ativa ou sem horário livre, a tag só some e a frase do modelo segue.
+if (typeof resposta === 'string' && temTagAgendar(resposta)) {
+    if (bookingAtivo && lead.status !== 'booked' && !(Array.isArray(lead.slots_propostos) && lead.slots_propostos.length)) {
+        const _agTag = await orquestrarAgendamento(lead, ultimaMsg, instanceData, userId, 'COMPRA', historico, { forcarOferta: true, semChecagemContexto: true })
+            .catch(e => { console.error(`❌ [AGENDAR] ${e.message}`); return null; });
+        if (_agTag?.tratado && _agTag.resposta) {
+            console.log(`📅 [AGENDAR] ${lead.name}: o modelo pediu os horários — enviando os horários reais da agenda.`);
+            resposta = _agTag.resposta;
+        }
+    }
+    if (typeof resposta === 'string') resposta = tirarTagAgendar(resposta);
+}
+
 // 🩹 STALL DE AGENDA SEM PROPOSTA: o closer pode dizer "deixa eu ver os horários" (quer agendar),
 // mas o orquestrador rodou ANTES dele e não propôs → beco sem saída ("vou ver" que nunca volta).
 // Quando isso acontece, força a proposta REAL agora, no mesmo turno, trocando o stall pelos
@@ -5752,7 +5770,7 @@ if (bookingAtivo && cicloOk && typeof resposta === 'string') {
     const semSlots  = !(Array.isArray(lead.slots_propostos) && lead.slots_propostos.length);
     const naoBooked = lead.status !== 'booked';
     if (deuStallDeAgenda && semSlots && naoBooked) {
-        const _ag = await orquestrarAgendamento(lead, ultimaMsg, instanceData, userId, 'COMPRA', historico, { semChecagemContexto: true })
+        const _ag = await orquestrarAgendamento(lead, ultimaMsg, instanceData, userId, 'COMPRA', historico, { semChecagemContexto: true, forcarOferta: chipAutonomo })
             .catch(e => { console.error(`❌ [AGENDA-STALL-FIX] ${e.message}`); return null; });
         if (_ag?.tratado && _ag.resposta) {
             console.log(`🩹 [AGENDA-STALL-FIX] Closer deu stall sem proposta — substituindo pelos horários reais.`);
