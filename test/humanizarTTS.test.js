@@ -55,3 +55,29 @@ test('sigla IA soletrada; verbo "ia" e palavras com "ia" intactos', () => {
 test('emoji e link não vão pra voz', () => {
     assert.equal(humanizarParaTTS('Perfeito 🚀 veja https://antix-ia.com agora'), 'Perfeito veja o link agora.');
 });
+
+// Caso real Carla (2026-11-24): o emoji era a única separação entre as frases e sumia, emendando "Enerzee Trabalho" no áudio.
+test('humanizarParaTTS: emoji entre duas frases vira pausa (ponto), não palavras emendadas', () => {
+    assert.equal(
+        humanizarParaTTS('Oi! Aqui é a Carla, da Enerzee 😊 Trabalho com soluções pra reduzir a conta de luz.'),
+        'Oii! Aqui é a Carla, da Enerzee. Trabalho com soluções pra reduzir a conta de luz.');
+    assert.equal(humanizarParaTTS('Combinado 🙌 Te espero lá'), 'Combinado. Te espero lá.');
+});
+test('humanizarParaTTS: emoji no fim, depois de pontuação ou antes de minúscula não cria ponto extra', () => {
+    assert.equal(humanizarParaTTS('Perfeito! 😊 Vou ver os horários'), 'Perfeito! Vou ver os horários.');
+    assert.equal(humanizarParaTTS('Show 😊'), 'Show.');
+    assert.equal(humanizarParaTTS('vou ver 😊 os horários'), 'vou ver os horários.');
+});
+
+// Escolha do Marlon (2026-11-24): "Boaa!" tem a melhor entonação. Só a abertura do áudio, só interjeição curta seguida de "!".
+test('humanizarParaTTS: interjeição de abertura com "!" ganha a vogal esticada', () => {
+    assert.equal(humanizarParaTTS('Boa! Que tal uma conversa rápida?'), 'Boaa! Que tal uma conversa rápida?');
+    assert.equal(humanizarParaTTS('Oi! Aqui é a Carla.'), 'Oii! Aqui é a Carla.');
+    assert.equal(humanizarParaTTS('Opa! Tudo bem?'), 'Opaa! Tudo bem?');
+});
+test('humanizarParaTTS: não estica no meio do texto, sem "!" nem outras palavras', () => {
+    assert.equal(humanizarParaTTS('Isso é muito boa! Vamos.'), 'Isso é muito boa! Vamos.');
+    assert.equal(humanizarParaTTS('Boa tarde! Tudo bem?'), 'Boa tarde! Tudo bem?');
+    assert.equal(humanizarParaTTS('Boas notícias! Vamos.'), 'Boas notícias! Vamos.');
+    assert.equal(humanizarParaTTS('Perfeito! Vou ver os horários.'), 'Perfeito! Vou ver os horários.');
+});
