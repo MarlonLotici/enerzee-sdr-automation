@@ -109,3 +109,22 @@ test('calcularSlotsLivres com diaAlvo em fim de semana → vazio (nesse dia não
     const slots = calcularSlotsLivres({ agora: SAB_10, ocupados: [], diaAlvo: domingo, maxSlots: 2 });
     assert.equal(slots.length, 0);
 });
+
+// Caso real Carla (2026-11-25, quarta): "Ah esqueci não posso amanhã, só sexta feira de manhã" virava "amanhã" e marcou no dia errado.
+test('extrairDiaPedido: dia citado só para recusar (negação) não é o dia pedido', () => {
+    const QUA = Date.parse('2026-11-25T15:00:00-03:00');
+    const dia = (t) => { const r = extrairDiaPedido(t, QUA); return r && r.label; };
+    assert.equal(dia('Ah esqueci não posso amanhã, só sexta feira de manhã que consigo'), 'sexta');
+    assert.equal(dia('amanhã não dá, pode ser sexta?'), 'sexta');
+    assert.equal(dia('nem amanhã nem quinta, só sexta'), 'sexta');
+    assert.equal(dia('não posso amanhã'), null);
+});
+test('extrairDiaPedido: sem negação continua igual (amanhã, dia da semana, hora solta)', () => {
+    const QUA = Date.parse('2026-11-25T15:00:00-03:00');
+    const dia = (t) => { const r = extrairDiaPedido(t, QUA); return r && r.label; };
+    assert.equal(dia('pode ser amanhã'), 'amanhã');
+    assert.equal(dia('amanhã de manhã'), 'amanhã');
+    assert.equal(dia('hoje não consigo, amanhã sim'), 'amanhã');
+    assert.equal(dia('quinta às 10'), 'quinta');
+    assert.equal(dia('as 9 por gentileza'), null);
+});
