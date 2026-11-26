@@ -2252,12 +2252,29 @@ if (matchClima) updates.sentiment = matchClima[1].toLowerCase();
         : 'neutro';
     console.log(`🎙️ [TTS-DECISAO] usarTTS=${usarTTS} | tom=${tomVoz} | audiosJá=${audiosJaEnviados} | calendly=${temCalendly} | leadAudio=${leadEnviouAudio} | emocional=${estagioEmocional} | estágio=${estagioNaResposta}`);
 
+    // 🧵 MENSAGENS CRUZADAS: o lead mandou outra msg enquanto a IA "digitava" o 1º balão (o anti-dup do worker roda ANTES
+    // desse atraso). Enviar agora gerava 2 respostas seguidas, a 2ª pulando a pergunta da 1ª (bug 2026-11-26, Carla).
+    // Não envia: o worker reprocessa no fim com a conversa inteira. lead._tsUserInicial vem do worker.
+    const _chegouMsgNova = async () => {
+        if (!lead?._tsUserInicial) return false;
+        try {
+            let q = supabase.from('messages').select('created_at').eq('whatsapp_id', lead.whatsapp_id).eq('role', 'user');
+            if (lead.user_id) q = q.eq('user_id', lead.user_id);
+            const { data } = await q.order('created_at', { ascending: false }).limit(1).maybeSingle();
+            return !!data?.created_at && new Date(data.created_at) > new Date(lead._tsUserInicial);
+        } catch (_) { return false; }
+    };
+
     for (let i = 0; i < mensagensSplit.length; i++) {
         const trecho = mensagensSplit[i];
         const isUltimoBalao = i === mensagensSplit.length - 1;
         try {
             // 🎙️ Último balão como áudio (quando aplicável)
             if (usarTTS && isUltimoBalao) {
+                if (i === 0 && await _chegouMsgNova()) {
+                    console.log(`🧵 [ANTI-DUP] ${lead.name} mandou msg nova antes do envio — resposta descartada, o worker reprocessa.`);
+                    return;
+                }
                 console.log(`🎙️ [TTS] Enviando último balão como áudio para ${lead.name}...`);
                 const audioOk = await enviarAudioTTS(sock, remoteJid, trecho, lead, instanceId, ttsVoz, tomVoz);
                 if (audioOk) continue;
@@ -2274,6 +2291,10 @@ if (matchClima) updates.sentiment = matchClima[1].toLowerCase();
             const tempoBase = Math.min(trecho.length * multiplicador + 1400, 6300);
 
             await delay(tempoBase);
+            if (i === 0 && await _chegouMsgNova()) {
+                console.log(`🧵 [ANTI-DUP] ${lead.name} mandou msg nova antes do envio — resposta descartada, o worker reprocessa.`);
+                return;
+            }
             // Salva no banco ANTES de enviar: se o job retentar, o anti-loop de 3 msgs bloqueia reenvio
             await db.saveMessage(lead.whatsapp_id, 'assistant', trecho, instanceId);
             const enviado = await enviarMensagemIA(sock, remoteJid, { text: trecho }, instanceId);
@@ -4993,15 +5014,19 @@ async function orquestrarAgendamento(lead, ultimaMsg, instanceData, userId, inte
         // Encerramento ("obrigado", "tá tudo certo", 👍) → despede curto, SEM pergunta. Se a IA já se
         // despediu e o lead manda outro "ok", silêncio (WhatsApp). Antes toda msg < 15 letras recebia a
         // mesma frase fixa com "Tem alguma dúvida?" → repetia igualzinha (bug 2026-11-05).
+        // Reunião que já passou: as frases fixas abaixo falam dela como futura ("tá tudo certo pra ter às 16h", bug 2026-11-26).
+        const _reuniaoPassou = !!lead.calendly_event_at && new Date(lead.calendly_event_at).getTime() < Date.now();
         if (ehEncerramento(ultimaMsg)) {
             if (jaSeDespediu(historico) && !String(lead.whatsapp_id || '').includes('@web')) {
                 console.log(`🤝 [CONCIERGE] ${lead.name} encerrou de novo após a despedida — sem resposta.`);
                 return ok(null);
             }
             const _nome = saudacaoPrimeiroNome(lead.dono, '');
-            const quando = lead.calendly_event_at ? rotularSlotBRT(new Date(lead.calendly_event_at)) : null;
+            const quando = lead.calendly_event_at && !_reuniaoPassou ? rotularSlotBRT(new Date(lead.calendly_event_at)) : null;
             return ok(montarDespedida({ nome: _nome, quando, agradeceu: leadAgradeceu(ultimaMsg) }));
         }
+        // "Oi" depois da reunião: o concierge (sabe a hora e que já passou) pergunta se deu certo ou se quer remarcar.
+        if (_reuniaoPassou) return { tratado: false, bookingAtivo: true, agendaConectada };
         if (ehSaudacaoPura(ultimaMsg)) {
             const _nome = saudacaoPrimeiroNome(lead.dono, '');
             const quando = lead.calendly_event_at ? rotularSlotBRT(new Date(lead.calendly_event_at)) : 'no horário combinado';
@@ -5159,7 +5184,9 @@ async function orquestrarAgendamento(lead, ultimaMsg, instanceData, userId, inte
     // 2 PASSOS: primeiro PERGUNTA se a pessoa topa o papo ("pode ser?"); os horários só entram depois do aceite.
     // (Antes: lead respondia "agendar mais e mais rápido" e já recebia "amanhã 11h30 ou 17h30" — seco demais.)
     // Pula o convite se: ele já aceitou/pediu horário direto, já convidamos na fala anterior, ou prometemos ver a agenda.
-    const precisaConvite = !aceitouConvite && !prometeuAgenda && !diaInicial
+    // pularConvite: o modelo já convidou e o lead aceitou ([AGENDAR] do prompt do chip). Convidar de novo aqui fazia a Carla
+    // perguntar duas vezes ("faz sentido?" → "aham" → "consigo agendar, pode ser?"), bug 2026-11-26.
+    const precisaConvite = !opts.pularConvite && !aceitouConvite && !prometeuAgenda && !diaInicial
         && !pediuHorarioDireto(ultimaMsg) && !convidouReuniaoAntes(historico);
     if (precisaConvite) {
         console.log(`💬 [AGENDAMENTO] ${lead.name}: convite antes dos horários (aguardando o aceite).`);
@@ -5236,6 +5263,7 @@ const workerIA = new Worker('FilaIA', async (job) => {
                 .order('created_at', { ascending: false }).limit(1).maybeSingle();
             _tsUserInicial = _u?.created_at || null;
         } catch (_) {}
+        lead._tsUserInicial = _tsUserInicial; // filtrarEEnviarResposta confere de novo logo antes do envio (msgs cruzadas)
 
         // ⏸️ PAUSA HUMANA (15 min): se uma pessoa da equipe respondeu este lead, a IA NÃO fala por cima.
         // Antes só o caminho Baileys respeitava a pausa; o chip oficial respondia sempre (bug 2026-11-05).
@@ -5761,7 +5789,7 @@ if (bookingAtivo && !cicloOk && typeof resposta === 'string' && prometeHorarios(
 // troca a frase pelos horários reais). Sem agenda ativa ou sem horário livre, a tag só some e a frase do modelo segue.
 if (typeof resposta === 'string' && temTagAgendar(resposta)) {
     if (bookingAtivo && lead.status !== 'booked' && !(Array.isArray(lead.slots_propostos) && lead.slots_propostos.length)) {
-        const _agTag = await orquestrarAgendamento(lead, ultimaMsg, instanceData, userId, 'COMPRA', historico, { forcarOferta: true, semChecagemContexto: true })
+        const _agTag = await orquestrarAgendamento(lead, ultimaMsg, instanceData, userId, 'COMPRA', historico, { forcarOferta: true, semChecagemContexto: true, pularConvite: true })
             .catch(e => { console.error(`❌ [AGENDAR] ${e.message}`); return null; });
         if (_agTag?.tratado && _agTag.resposta) {
             console.log(`📅 [AGENDAR] ${lead.name}: o modelo pediu os horários — enviando os horários reais da agenda.`);
@@ -5803,7 +5831,11 @@ if (bookingAtivo && cicloOk && typeof resposta === 'string') {
             const _faseCiclo = tenantComCiclo(lead.user_id) ? faseDoCiclo(historico, lead).fase : null;
             const _cicloManda = _faseCiclo === 'solucao' || _faseCiclo === 'convite';
             if (_cicloManda && !_trivial) console.log(`🧑‍⚖️ [SUPERVISOR] Pulado: a fase "${_faseCiclo}" é do ciclo de venda.`);
-            if (!_trivial && !_cicloManda) {
+            // Lead JÁ agendado = concierge, não venda. O supervisor julga pelo roteiro de venda e trocava o acolhimento por
+            // "e o que te fez não fechar agora?" (bug 2026-11-26, Sofia). Aqui ele fica de fora.
+            const _concierge = lead.status === 'booked';
+            if (_concierge && !_trivial) console.log(`🧑‍⚖️ [SUPERVISOR] Pulado: lead já agendado (concierge).`);
+            if (!_trivial && !_cicloManda && !_concierge) {
                 console.log(`🧑‍⚖️ [SUPERVISOR] Revisando rascunho de ${lead.name}...`);
                 const _crit = await supervisorAgent.revisar({ historico, lead, draft: resposta, primeiroContato })
                     .catch(() => ({ ok: true, problemas: [] }));
