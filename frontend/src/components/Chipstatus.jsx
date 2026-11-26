@@ -44,8 +44,117 @@ function timeAgo(isoStr) {
     return `há ${Math.floor(diff / 86400)}d`
 }
 
+// ─── CONECTAR WHATSAPP OFICIAL (Cloud API) ────────────────────────────────────
+// Substitui o SQL manual: cola os 3 dados da Meta, o servidor confere na Meta, inscreve o webhook e liga o chip.
+async function chamarApi(url, opts = {}) {
+    const { data: { session } } = await supabase.auth.getSession()
+    const resp = await fetch(url, {
+        ...opts,
+        headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${session?.access_token}`, ...(opts.headers || {}) },
+    })
+    let json = {}
+    try { json = await resp.json() } catch { /* sem corpo */ }
+    return { ok: resp.ok && json.ok !== false, json }
+}
+
+function ConectarOficial({ instance, onConectado }) {
+    const isOficial = instance.whatsapp_provider === 'official'
+    const [aberto,   setAberto]   = useState(false)
+    const [phoneId,  setPhoneId]  = useState('')
+    const [wabaId,   setWabaId]   = useState(instance.waba_id || '')
+    const [token,    setToken]    = useState('')
+    const [pin,      setPin]      = useState('')
+    const [enviando, setEnviando] = useState(false)
+    const [testando, setTestando] = useState(false)
+    const [aviso,    setAviso]    = useState(null) // { ok, texto }
+
+    const inputStyle = { width: '100%', boxSizing: 'border-box', background: 'rgba(0,0,0,0.3)', border: '1px solid rgba(255,255,255,0.1)', borderRadius: '0.5rem', padding: '7px 10px', color: '#fff', fontSize: 11, fontFamily: 'inherit', outline: 'none' }
+    const label = (txt) => <span style={{ fontSize: 8, fontWeight: 800, color: 'rgba(255,255,255,0.4)', textTransform: 'uppercase', letterSpacing: '0.1em' }}>{txt}</span>
+    const botao = (cor, ativo) => ({ flex: 1, display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 5, padding: '7px 0', background: `${cor}14`, border: `1px solid ${cor}40`, borderRadius: '0.5rem', cursor: ativo ? 'pointer' : 'not-allowed', opacity: ativo ? 1 : 0.5, color: cor, fontSize: 9, fontWeight: 900, textTransform: 'uppercase', letterSpacing: '0.1em' })
+    const descreve = (j) => [j.nome && `"${j.nome}"`, j.numero, j.qualidade && `qualidade ${j.qualidade}`].filter(Boolean).join(' · ')
+
+    const conectar = async () => {
+        if (!isOficial && !window.confirm('Este chip vai deixar de usar o WhatsApp Web (QR) e passa a responder pela API oficial da Meta, só no modo receptivo. Continuar?')) return
+        setEnviando(true); setAviso(null)
+        try {
+            const { ok, json } = await chamarApi(`/api/instance/${instance.id}/conectar-oficial`, {
+                method: 'POST', body: JSON.stringify({ phoneNumberId: phoneId, wabaId, token, pin }),
+            })
+            if (ok) {
+                setAviso({ ok: true, texto: `Conectado: ${descreve(json)}. Mande um "oi" de outro celular para testar.` })
+                setToken(''); setPin('')
+                onConectado?.()
+            } else {
+                setAviso({ ok: false, texto: json.error || 'Não foi possível conectar.' })
+            }
+        } catch (e) {
+            setAviso({ ok: false, texto: e.message })
+        }
+        setEnviando(false)
+    }
+
+    const testar = async () => {
+        setTestando(true); setAviso(null)
+        try {
+            const { ok, json } = await chamarApi(`/api/instance/${instance.id}/conectar-oficial`)
+            setAviso(ok
+                ? { ok: true, texto: `Tudo certo: ${descreve(json)}. Webhook inscrito.` }
+                : { ok: false, texto: json.erro || json.error || 'Falha no teste.' })
+        } catch (e) {
+            setAviso({ ok: false, texto: e.message })
+        }
+        setTestando(false)
+    }
+
+    const podeConectar = phoneId.trim() && wabaId.trim() && token.trim() && !enviando
+    const META = '#1877F2'
+
+    return (
+        <div style={{ display: 'flex', flexDirection: 'column', gap: 6, borderTop: '1px solid rgba(255,255,255,0.05)', paddingTop: 10 }}>
+            <div style={{ display: 'flex', gap: 6 }}>
+                {isOficial && (
+                    <button onClick={testar} disabled={testando} style={botao(META, !testando)}>
+                        {testando ? <Loader2 size={11} style={{ animation: 'spin 1s linear infinite' }} /> : <Wifi size={11} />}
+                        {testando ? 'Testando...' : 'Testar conexão'}
+                    </button>
+                )}
+                <button onClick={() => setAberto(a => !a)} style={botao(META, true)}>
+                    <KeyRound size={11} />
+                    {aberto ? 'Fechar' : isOficial ? 'Trocar credenciais' : 'Conectar WhatsApp oficial'}
+                </button>
+            </div>
+
+            {aberto && (
+                <div style={{ display: 'flex', flexDirection: 'column', gap: 6, background: 'rgba(24,119,242,0.05)', border: `1px solid ${META}30`, borderRadius: '0.75rem', padding: 10 }}>
+                    <div style={{ fontSize: 9, color: 'rgba(255,255,255,0.5)', lineHeight: 1.5 }}>
+                        Os 3 dados ficam no Gerenciador do WhatsApp da Meta (WhatsApp Manager → Números de telefone) e no usuário do sistema do Business Manager. O token não aparece de novo depois de salvo.
+                    </div>
+                    {label('ID do número (Identificação do número de telefone)')}
+                    <input value={phoneId} onChange={e => setPhoneId(e.target.value)} placeholder="Ex: 1400458459825400 (não é o telefone)" inputMode="numeric" style={inputStyle} />
+                    {label('ID da conta do WhatsApp (WABA)')}
+                    <input value={wabaId} onChange={e => setWabaId(e.target.value)} placeholder="Ex: 2148464835774402" inputMode="numeric" style={inputStyle} />
+                    {label('Token permanente do usuário do sistema')}
+                    <input type="password" value={token} onChange={e => setToken(e.target.value)} placeholder="EAA..." autoComplete="off" style={inputStyle} />
+                    {label('PIN de 6 dígitos (só se o número ainda não foi registrado)')}
+                    <input value={pin} onChange={e => setPin(e.target.value)} placeholder="Deixe vazio se já foi registrado" inputMode="numeric" maxLength={6} style={inputStyle} />
+                    <button onClick={conectar} disabled={!podeConectar} style={{ ...botao(META, !!podeConectar), flex: 'none', marginTop: 2 }}>
+                        {enviando ? <Loader2 size={11} style={{ animation: 'spin 1s linear infinite' }} /> : <Check size={11} />}
+                        {enviando ? 'Conferindo na Meta...' : 'Conferir e conectar'}
+                    </button>
+                </div>
+            )}
+
+            {aviso && (
+                <div style={{ fontSize: 10, lineHeight: 1.45, color: aviso.ok ? C.connected : C.disconnected, background: aviso.ok ? 'rgba(16,185,129,0.08)' : 'rgba(244,63,94,0.08)', border: `1px solid ${aviso.ok ? C.connected : C.disconnected}35`, borderRadius: '0.5rem', padding: '7px 9px' }}>
+                    {aviso.ok ? '✓ ' : '⚠️ '}{aviso.texto}
+                </div>
+            )}
+        </div>
+    )
+}
+
 // ─── CHIP CARD ────────────────────────────────────────────────────────────────
-function ChipCard({ instance, dailyCount, statusInfo, onReconnect, onResetSession, qrCode, onLimitChange, onTogglePause, onToggleFlag, onSaveCampaignFields, onSavePersona }) {
+function ChipCard({ instance, dailyCount, statusInfo, onReconnect, onResetSession, qrCode, onLimitChange, onTogglePause, onToggleFlag, onSaveCampaignFields, onSavePersona, onOficialConectado }) {
     // Chip oficial (Cloud API) não usa sessão Baileys — esconde controles que só fazem sentido no
     // Baileys (resetar sessão / QR / reconectar). O status e o reconnect já são tratados em resolveStatus.
     const isOficial = instance.whatsapp_provider === 'official'
@@ -681,6 +790,9 @@ function ChipCard({ instance, dailyCount, statusInfo, onReconnect, onResetSessio
                 )
             })()}
 
+            {/* ── WhatsApp oficial: conectar pelo painel (sem SQL) / testar ── */}
+            <ConectarOficial instance={instance} onConectado={onOficialConectado} />
+
             {/* ── Resetar Sessão (só Baileys — oficial não tem sessão/chaves pra resetar) ── */}
             {!isOficial && (
             <div style={{ position: 'relative', display: 'flex', alignItems: 'center', gap: 6 }}>
@@ -1016,6 +1128,7 @@ export default function ChipStatus({ instances = [], socket }) {
                             onToggleFlag={handleToggleFlag}
                             onSaveCampaignFields={handleSaveCampaignFields}
                             onSavePersona={handleSavePersona}
+                            onOficialConectado={() => socket?.emit('get_instances')}
                             qrCode={qrMap[inst.id] || null}
                         />
                     ))}

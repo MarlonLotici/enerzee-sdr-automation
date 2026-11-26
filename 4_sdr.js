@@ -194,6 +194,8 @@ const filaMensagensIA = new Queue('FilaIA', { connection: redisConnection });
 // --- TRAVA DE SEGURANÇA (MEMÓRIA VIVA) ---
 const leadsEmProcessamento = new Set();
 const mensagensEnviadasPelaIA = new Set(); // 🛡️ PASSO 1: A Memória Anti-Eco do Robô
+// Chave = lead.id (a conversa de UM tenant), nunca o whatsapp_id: o mesmo celular é lead em contas diferentes
+// (ex.: o Marlon falando com a Sofia e com a Carla) e a trava por número descartava a msg da outra conta (2026-11-26).
 const iaRespondendo = new Set();
 const inboundAtivo = new Map(); // instanceId → nº de jobs inbound em fila/processamento (fast-lane guard)
 const tentativasReconexao = new Map(); // instanceId → contador de tentativas automáticas (Phase 4)
@@ -2827,13 +2829,13 @@ if (fromMe) {
     }
 
     // 👇 INÍCIO DA TRAVA DE RACIOCÍNIO 👇
-    if (iaRespondendo.has(lead.whatsapp_id)) {
+    if (iaRespondendo.has(lead.id)) {
         console.log(`🛑 [TRAVA DE RACIOCÍNIO] A IA já está formulando uma resposta para ${lead.name}. Guardando a nova mensagem e ignorando disparo duplo.`);
         if (messageType !== 'audioMessage') await db.saveMessage(lead.whatsapp_id, 'user', texto, instanceId);
         return; 
     }
 
-    iaRespondendo.add(lead.whatsapp_id); // 🔒 TRANCA A PORTA
+    iaRespondendo.add(lead.id); // 🔒 TRANCA A PORTA
 
     try {
         console.log(`📦 [FILA] Enviando lead ${lead.name} para a fila industrial de IA.`);
@@ -2866,7 +2868,7 @@ if (fromMe) {
 
     } catch (erroFila) {
         console.error(`❌ [ERRO FILA] Falha ao enfileirar ${lead.name}:`, erroFila);
-        iaRespondendo.delete(lead.whatsapp_id); // Solta a trava apenas se falhar ao enfileirar
+        iaRespondendo.delete(lead.id); // Solta a trava apenas se falhar ao enfileirar
     }
     // OBS: O `finally` com iaRespondendo.delete foi removido daqui!
     // A trava agora só será liberada quando o WORKER terminar de responder.
@@ -3833,7 +3835,7 @@ async function loopRecuperacaoConversas() {
                     if (mensagens && mensagens.length > 0) {
                         const ultimaMsg = mensagens[0];
                         if (ultimaMsg.role === 'user' && !ultimaMsg.content?.startsWith('[AUTORESPOSTA]')) {
-                            if (iaRespondendo.has(l.whatsapp_id)) continue; 
+                            if (iaRespondendo.has(l.id)) continue; 
                             
                            console.log(`⚠️ [SALVAMENTO] Lead ${l.name} aguardando resposta. Reativando IA...`);
                             const instancia = sessions.get(l.instance_id);
@@ -4021,7 +4023,7 @@ await delay(jitterAntiBan);
             for (const ll of leadsLink) {
                 try {
                     const instancia = sessions.get(ll.instance_id);
-                    if (!instancia || !instancia.ready || iaRespondendo.has(ll.whatsapp_id)) continue;
+                    if (!instancia || !instancia.ready || iaRespondendo.has(ll.id)) continue;
 
                     // Honesto e não-acusatório: "não vi cair aqui" coloca a checagem do NOSSO lado
                     // (calendly_booked=false), cobrindo tanto quem não reservou quanto quem reservou
@@ -4082,7 +4084,7 @@ await delay(jitterAntiBan);
                 const diff = agora - ultimaInteracao;
 
                 if (diff > vinteMinutosEmMs) {
-                    if (iaRespondendo.has(lp.whatsapp_id)) continue;
+                    if (iaRespondendo.has(lp.id)) continue;
                     
                     console.log(`🔄 [RETOMADA] Tempo de humano esgotado para ${lp.name}. Voltando para IA.`);
                     await supabase.from('leads').update({ is_paused: false }).eq('id', lp.id);
@@ -4425,11 +4427,11 @@ if (!histRaw || histRaw.length === 0) return;
     }
 
     // 🔒 TRAVA DE RACIOCÍNIO
-    if (iaRespondendo.has(lead.whatsapp_id)) {
+    if (iaRespondendo.has(lead.id)) {
         console.log(`🛑 [TRAVA RECUPERAÇÃO] IA já está respondendo para ${lead.name}. Abortando duplicata.`);
         return;
     }
-    iaRespondendo.add(lead.whatsapp_id);
+    iaRespondendo.add(lead.id);
 
     try {
         console.log(`🧠 [IA] Gerando resposta de recuperação para ${lead.name}...`);
@@ -4445,7 +4447,7 @@ if (!histRaw || histRaw.length === 0) return;
     } catch (erroRecuperacao) {
         console.error(`❌ [ERRO RECUPERAÇÃO] Falha para ${lead.name}:`, erroRecuperacao.message);
     } finally {
-        iaRespondendo.delete(lead.whatsapp_id); // 🔓 SEMPRE libera a trava
+        iaRespondendo.delete(lead.id); // 🔓 SEMPRE libera a trava
         console.log(`🔓 [TRAVA RECUPERAÇÃO LIBERADA] ${lead.name} livre novamente.`);
     }
 }
@@ -5201,15 +5203,16 @@ const workerIA = new Worker('FilaIA', async (job) => {
     // 🔒 ANTI-DUPLICAÇÃO (concorrência): o worker roda com concurrency:5 e dois jobs do MESMO
     // lead podiam rodar juntos → 2 respostas iguais/parecidas. Se já há um job processando esta
     // conversa, ignora este (o job em curso lê o histórico fresco e cobre as msgs picadas).
-    if (iaRespondendo.has(whatsappId)) {
+    if (iaRespondendo.has(leadId)) {
         // O job em curso confere, ao terminar, se ficou mensagem do lead sem resposta e enfileira um job novo
         // (lib/reprocesso.js). Antes a mensagem nova era descartada aqui E a resposta velha era descartada pelo
         // ANTI-DUP: ninguém respondia (bug 2026-11-14).
         console.log(`🔒 [WORKER] ${whatsappId} já em processamento — job duplicado ignorado; o job em curso reprocessa ao terminar se ficar mensagem pendente.`);
         return;
     }
-    iaRespondendo.add(whatsappId);
+    iaRespondendo.add(leadId);
     const _inicioJobMs = Date.now();
+    let _userIdLead = null; // tenant do lead: as checagens de "msg nova" abaixo só olham a conversa DESTA conta
 
     try {
         // Job de retomada (agendado após pausa humana) não passou pela gaveta: balanceia o contador do finally.
@@ -5218,14 +5221,18 @@ const workerIA = new Worker('FilaIA', async (job) => {
         // 1. Recupera os dados frescos do lead
         const { data: lead } = await supabase.from('leads').select('*').eq('id', leadId).single();
         if (!lead) throw new Error("Lead não encontrado no banco.");
+        _userIdLead = lead.user_id || null;
+        const _msgsDoLead = () => {
+            let q = supabase.from('messages').select('role, created_at').eq('whatsapp_id', whatsappId);
+            return _userIdLead ? q.eq('user_id', _userIdLead) : q;
+        };
 
         // 🧵 ANTI-DUPLICAÇÃO (contexto defasado): guarda o horário da última msg do lead AGORA.
         // Se chegar msg mais nova enquanto processamos, abortamos o envio no fim (um job novo
         // responde com o contexto completo) — mata o "respondeu algo que o lead já tinha dito".
         let _tsUserInicial = null;
         try {
-            const { data: _u } = await supabase.from('messages').select('created_at')
-                .eq('whatsapp_id', whatsappId).eq('role', 'user')
+            const { data: _u } = await _msgsDoLead().eq('role', 'user')
                 .order('created_at', { ascending: false }).limit(1).maybeSingle();
             _tsUserInicial = _u?.created_at || null;
         } catch (_) {}
@@ -5527,8 +5534,12 @@ if (!promptResolvido) {
     // dúvida/conversa solta → responde SEM vender (não reabre funil, não empurra reunião).
     console.log(`🤝 [CONCIERGE] ${lead.name} já agendado — modo pós-venda (sem conversão).`);
     const _quando = lead.calendly_event_at ? rotularSlotBRT(new Date(lead.calendly_event_at)) : null;
+    // Reunião que já passou (bug 2026-11-26: às 14h a Carla perguntou "tá tudo certo pra hoje às 9h?").
+    const _jaPassou = !!lead.calendly_event_at && new Date(lead.calendly_event_at).getTime() < Date.now();
     resposta = await conciergeAgent.gerarRespostaConcierge(historico, lead, promptResolvido, {
         quando: _quando,
+        jaPassou: _jaPassou,
+        agora: new Date().toLocaleString('pt-BR', { timeZone: 'America/Sao_Paulo', weekday: 'long', hour: '2-digit', minute: '2-digit' }),
         instanceType: instanceData?.product_type || 'generico',
     });
 
@@ -5815,8 +5826,7 @@ if (bookingAtivo && cicloOk && typeof resposta === 'string') {
         // processamento, esta resposta ficou velha → NÃO envia. O job da msg nova responde com o
         // contexto completo. Mata o "respondeu pergunta que o lead já tinha respondido".
         try {
-            const { data: _u2 } = await supabase.from('messages').select('created_at')
-                .eq('whatsapp_id', whatsappId).eq('role', 'user')
+            const { data: _u2 } = await _msgsDoLead().eq('role', 'user')
                 .order('created_at', { ascending: false }).limit(1).maybeSingle();
             if (_u2?.created_at && _tsUserInicial && new Date(_u2.created_at) > new Date(_tsUserInicial)) {
                 console.log(`🧵 [ANTI-DUP] Chegou msg nova de ${lead.name} durante o processamento — abortando resposta defasada.`);
@@ -5856,15 +5866,16 @@ if (bookingAtivo && cicloOk && typeof resposta === 'string') {
         enviarAlerta("⚠️ ERRO NA IA (WORKER)", `Falha ao responder o lead.\nErro: ${error.message}`, 15158332);
         throw error; // Força o BullMQ a tentar de novo (Retry)
     } finally {
-        iaRespondendo.delete(whatsappId);
+        iaRespondendo.delete(leadId);
         const _restantes = (inboundAtivo.get(instanceId) || 1) - 1;
         if (_restantes <= 0) inboundAtivo.delete(instanceId); else inboundAtivo.set(instanceId, _restantes);
         console.log(`🔓 [WORKER-TRAVA] IA pronta para ${whatsappId} novamente.`);
         // 🔁 MENSAGEM PERDIDA: se o lead mandou algo ENQUANTO este job rodava e ninguém respondeu (o job dele foi
         // descartado pela trava, e/ou o ANTI-DUP abortou a resposta velha), enfileira um job novo agora.
         try {
-            const { data: _ultMsg } = await supabase.from('messages').select('role, created_at')
-                .eq('whatsapp_id', whatsappId).order('created_at', { ascending: false }).limit(1).maybeSingle();
+            let _qUlt = supabase.from('messages').select('role, created_at').eq('whatsapp_id', whatsappId);
+            if (_userIdLead) _qUlt = _qUlt.eq('user_id', _userIdLead);
+            const { data: _ultMsg } = await _qUlt.order('created_at', { ascending: false }).limit(1).maybeSingle();
             if (precisaReprocessar(_ultMsg, _inicioJobMs)) {
                 console.log(`🔁 [REPROCESSO] ${whatsappId}: lead mandou mensagem durante o processamento e ficou sem resposta — enfileirando job novo.`);
                 inboundAtivo.set(instanceId, (inboundAtivo.get(instanceId) || 0) + 1);
@@ -6572,6 +6583,16 @@ module.exports = {
     // toggles de inbound_only/use_email_outbound/use_sms_outbound sejam lidos no próximo ciclo.
     invalidateInstanceCache: (instanceId) => {
         cacheRegrasInstancia.delete(instanceId);
+    },
+
+    // 🔌 Chip acabou de ser ligado à API oficial pelo painel (POST /api/instance/:id/conectar-oficial).
+    // O startInstance relê o whatsapp_provider='official' do banco, fecha o socket Baileys que existir (evita
+    // guerra de sessão com o número que agora está na Cloud API) e marca CONNECTED, sem precisar de redeploy.
+    ativarOficial: async (instanceId) => {
+        cacheRegrasInstancia.delete(instanceId);
+        instanciasDeletadas.delete(instanceId);
+        const regras = await getRegrasEmCache(instanceId);
+        await startInstance(instanceId, regras?.name || instanceId, regras?.user_id || null);
     },
 
     // ▶️ Dispara a varredura do auditor QA sob demanda (botão "rodar agora" no painel). O loop já roda

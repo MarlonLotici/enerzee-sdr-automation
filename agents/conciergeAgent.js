@@ -16,19 +16,28 @@ const { alertaDegradacaoIA } = require('../notifier');
  */
 async function gerarRespostaConcierge(historico, lead, promptPersonalidade, opcoes = {}) {
     const quando = opcoes.quando || 'no horário combinado';
+    // jaPassou: o horário marcado já ficou no passado. Confirmar "tá tudo certo pra hoje às 9h" às 14h soa robótico.
+    const jaPassou = opcoes.jaPassou === true;
+    const agora = opcoes.agora ? ` Agora é ${opcoes.agora}.` : '';
+    const situacao = jaPassou
+        ? `A reunião estava marcada para ${quando}, e esse horário JÁ PASSOU.${agora} Você não sabe se ela aconteceu.`
+        : `A reunião está marcada para: ${quando}.${agora}`;
+    const comoConfirmar = jaPassou
+        ? `- Se ele der um "oi", NÃO trate a reunião como futura. Pergunte com leveza se conseguiram conversar com o consultor ou se ele quer remarcar.`
+        : `- Se ele der um "oi" ou perguntar do horário, CONFIRME com segurança: tá tudo certo pra ${quando}.`;
 
     const blocoConcierge = `
 =======================================================
 🤝 MODO CONCIERGE — PÓS-AGENDAMENTO (LEIA E OBEDEÇA)
 =======================================================
-O lead JÁ AGENDOU a reunião — ele está CONVERTIDO. A reunião está marcada para: ${quando}.
+O lead JÁ AGENDOU a reunião — ele está CONVERTIDO. ${situacao}
 Seu papel MUDOU: você NÃO é mais vendedora. Agora é a recepção/concierge que cuida de quem já marcou.
 
 O QUE FAZER:
 - Responder dúvidas (sobre a reunião ou o produto) de forma breve, clara e calorosa.
-- Se ele der um "oi" ou perguntar do horário, CONFIRME com segurança: tá tudo certo pra ${quando}.
+${comoConfirmar}
 - Se ele quiser REMARCAR ou CANCELAR, apenas acolha — o sistema cuida do resto (não proponha horário você mesma).
-- Deixe a porta aberta: "qualquer dúvida até lá, é só me chamar".
+- Deixe a porta aberta: "qualquer dúvida, é só me chamar".
 
 PROIBIDO (CRÍTICO — quebrar isto irrita um cliente já conquistado):
 - Tentar vender, qualificar (SPIN), reabrir o funil ou criar urgência.
@@ -46,6 +55,9 @@ TOM: leve, prestativo, sem pressão nenhuma. Como uma boa recepcionista que já 
 
     const promptFinal = `${promptPersonalidade}
 ${blocoConcierge}`;
+    const fallback = jaPassou
+        ? 'Oi! 😊 Conseguiu conversar com o consultor? Se quiser remarcar, é só me falar!'
+        : `Oi! 😊 Tá tudo certo pra nossa conversa ${quando}. Qualquer dúvida até lá, é só me chamar!`;
 
     try {
         const resposta = await chamarLLM({
@@ -56,13 +68,13 @@ ${blocoConcierge}`;
         });
         if (!resposta || resposta.trim().length < 3) {
             console.warn(`⚠️ [CONCIERGE] LLM devolveu resposta vazia para ${lead?.name}.`);
-            return `Oi! 😊 Tá tudo certo pra nossa conversa ${quando}. Qualquer dúvida até lá, é só me chamar!`;
+            return fallback;
         }
         return resposta;
     } catch (error) {
         console.error(`❌ Erro no Concierge Agent:`, error.message);
         alertaDegradacaoIA('conciergeAgent', error).catch(() => {});
-        return `Oi! 😊 Tá tudo certo pra nossa conversa ${quando}. Qualquer dúvida até lá, é só me chamar!`;
+        return fallback;
     }
 }
 

@@ -1053,6 +1053,63 @@ app.post('/api/instance/:instanceId/waba', autenticarMiddleware, async (req, res
     res.json({ ok: true });
 });
 
+// 🔌 CONECTAR WHATSAPP OFICIAL pelo painel: confere token + IDs direto na Meta, inscreve o app na WABA e só
+// então grava no chip (substitui o UPDATE manual de db/*_api_oficial.sql). O token nunca volta na resposta.
+const conectarOficial = require('./lib/conectarOficial');
+app.post('/api/instance/:instanceId/conectar-oficial', autenticarMiddleware, async (req, res) => {
+    const { instanceId } = req.params;
+    if (!(await ehDonoDaInstancia(instanceId, req.user.id))) return res.status(403).json({ error: 'Acesso negado.' });
+    const limpo = conectarOficial.limparCredenciais(req.body || {});
+    if (!limpo.ok) return res.status(400).json({ error: limpo.erro });
+    const { phoneNumberId, wabaId, token, pin } = limpo.dados;
+    try {
+        // O mesmo número em dois chips faz o webhook cair no chip errado.
+        const { data: candidatos } = await supabase.from('instances').select('id, name, cloud_base_url')
+            .eq('whatsapp_provider', 'official').like('cloud_base_url', `%${phoneNumberId}%`).neq('id', instanceId);
+        const outro = (candidatos || []).find(i => phoneNumberIdDaBaseUrl(i.cloud_base_url) === phoneNumberId);
+        if (outro) return res.status(409).json({ error: `Esse número já está ligado ao chip "${outro.name}". Desligue lá antes.` });
+
+        const r = await conectarOficial.validarEInscrever({ phoneNumberId, wabaId, token, pin });
+        if (!r.ok) return res.status(400).json({ error: r.erro, etapa: r.etapa });
+
+        // Número oficial é só receptivo: disparo frio na Cloud API = risco de ban da conta do cliente.
+        const { error } = await supabase.from('instances').update({
+            whatsapp_provider: 'official',
+            cloud_api_key: token,
+            cloud_base_url: conectarOficial.montarBaseUrl(phoneNumberId),
+            waba_id: wabaId,
+            inbound_only: true,
+            firing_paused: true,
+        }).eq('id', instanceId).eq('user_id', req.user.id);
+        if (error) throw new Error(error.message);
+
+        _cachePhoneId.delete(phoneNumberId); // um "não achei" de antes não pode segurar o webhook por 2 min
+        if (sdr?.ativarOficial) await sdr.ativarOficial(instanceId).catch(e => console.warn(`⚠️ [OFICIAL] ativarOficial: ${e.message}`));
+        console.log(`🔌 [OFICIAL] Chip ${instanceId.slice(0, 8)} conectado à Cloud API pelo painel (${r.numero || phoneNumberId}, "${r.nome || '?'}").`);
+        res.json({ ok: true, numero: r.numero, nome: r.nome, qualidade: r.qualidade, registrado: r.registrado });
+    } catch (err) {
+        res.status(500).json({ error: err.message });
+    }
+});
+
+// Botão "Testar conexão" de um chip oficial: token ainda vale e o app segue inscrito na WABA.
+app.get('/api/instance/:instanceId/conectar-oficial', autenticarMiddleware, async (req, res) => {
+    const { instanceId } = req.params;
+    if (!(await ehDonoDaInstancia(instanceId, req.user.id))) return res.status(403).json({ error: 'Acesso negado.' });
+    try {
+        const { data: inst } = await supabase.from('instances')
+            .select('whatsapp_provider, cloud_api_key, cloud_base_url, waba_id').eq('id', instanceId).maybeSingle();
+        if (inst?.whatsapp_provider !== 'official') return res.json({ ok: false, conectado: false });
+        const phoneNumberId = phoneNumberIdDaBaseUrl(inst.cloud_base_url);
+        if (!phoneNumberId || !inst.cloud_api_key)
+            return res.json({ ok: false, conectado: true, erro: 'Chip marcado como oficial, mas sem ID do número ou token salvos. Conecte de novo.' });
+        const r = await conectarOficial.testarConexao({ phoneNumberId, wabaId: inst.waba_id, token: inst.cloud_api_key });
+        res.json({ ...r, conectado: true, phoneNumberId, wabaId: inst.waba_id || null });
+    } catch (err) {
+        res.status(502).json({ error: err.message });
+    }
+});
+
 // Templates APROVADOS da WABA deste chip.
 app.get('/api/instance/:instanceId/templates', autenticarMiddleware, async (req, res) => {
     const { instanceId } = req.params;
